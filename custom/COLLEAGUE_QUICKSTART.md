@@ -14,7 +14,7 @@ run `nvm install` in this repository. Confirm `node --version` and `python3.11 -
 ```sh
 git clone https://github.com/Zaklamp02/StenoAI.git
 cd StenoAI
-# Select the colleague-testing branch/tag supplied with the invitation.
+git checkout test-2026-10-17   # the current colleague test release
 custom/setup-signing.sh
 custom/bootstrap.sh
 custom/install.sh
