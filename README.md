@@ -1,3 +1,5 @@
+> **Personal fork.** This is a customised build of [StenoAI](https://github.com/stenolabs/stenoai) by Steno Labs, based on the official v0.8.0 release and shared under the original [MIT license](LICENSE). All credit for the app goes to the StenoAI authors and contributors. This fork's changes are listed in [custom/README.md](custom/README.md). For the official app, downloads and support, use the [original repository](https://github.com/stenolabs/stenoai). This fork is not affiliated with or endorsed by Steno Labs.
+
 <div align="center">
   <img src="website/public/dragonfly-logo-512.png" alt="StenographAI Logo" width="120" height="120">
 
