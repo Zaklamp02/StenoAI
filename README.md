@@ -1,4 +1,6 @@
 > **Personal fork.** This is a customised build of [StenoAI](https://github.com/stenolabs/stenoai) by Steno Labs, based on the official v0.8.0 release and shared under the original [MIT license](LICENSE). All credit for the app goes to the StenoAI authors and contributors. This fork's changes are listed in [custom/README.md](custom/README.md). For the official app, downloads and support, use the [original repository](https://github.com/stenolabs/stenoai). This fork is not affiliated with or endorsed by Steno Labs.
+>
+> **Try the test release:** download `StenoAI-test-2026-10-17-arm64.dmg` from [Releases](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-10-17) and follow [the install steps](custom/COLLEAGUE_QUICKSTART.md#download-the-app). Apple Silicon, macOS 14.4 or later.
 
 <div align="center">
   <img src="website/public/dragonfly-logo-512.png" alt="StenographAI Logo" width="120" height="120">
@@ -251,7 +253,7 @@ Issues + feedback welcome on the GitHub issues tracker.
 
 ## Local Development/Use Locally
 
-For this Apple Silicon fork, follow [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
+For this Apple Silicon fork, either download the test release DMG or build from source; both are in [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
 It contains the supported runtimes, verified native-helper setup, local signing,
 permissions, model choices and testing commands.
 

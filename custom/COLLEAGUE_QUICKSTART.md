@@ -1,10 +1,34 @@
 # Build and test on an Apple Silicon Mac
 
-This fork is for a small source-building pilot. It supports Apple Silicon and
-macOS 14.4 or later. Keep the upstream MIT license and credits when sharing it.
-Each tester builds and signs their own app; no distributed DMG is required.
+This fork is for a small testing pilot. It supports Apple Silicon and macOS
+14.4 or later. Keep the upstream MIT license and credits when sharing it.
+Most testers can download the app; build from source only if you want to debug
+or change the code.
 
-## First build
+## Download the app
+
+1. Download `StenoAI-test-2026-10-17-arm64.dmg` from the
+   [test-2026-10-17 release](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-10-17).
+   Optionally check it: `shasum -a 256 StenoAI-test-2026-10-17-arm64.dmg` must match
+   the `.sha256` file on the release page.
+2. Open the DMG and drag StenoAI onto Applications.
+3. Open StenoAI. macOS says it cannot verify the app: click **Done**. Then go to
+   **System Settings → Privacy & Security**, find "StenoAI was blocked" and click
+   **Open Anyway**. Alternatively run
+   `xattr -dr com.apple.quarantine /Applications/StenoAI.app` in Terminal.
+
+The warning appears because the app is signed by this fork's maintainer but not
+notarized by Apple (no Apple Developer ID yet). Every release uses the same
+signature, so macOS keeps your permissions across updates. Managed work Macs may
+block apps that are not notarized; build from source or ask IT in that case.
+Then continue with **First run** below.
+
+Maintainers create the DMG with `custom/release.sh <tag>`, which builds the tag
+from a clean checkout, refuses to package anything containing the builder's
+username, and writes the DMG and checksum to `.local/release/` for upload to
+the GitHub Release (never commit them).
+
+## Build from source
 
 Install Git, Xcode Command Line Tools (`xcode-select --install`), Python **3.11**
 and Node **24 LTS** (minimum 22.12). With Homebrew, `brew install python@3.11 node@24`
