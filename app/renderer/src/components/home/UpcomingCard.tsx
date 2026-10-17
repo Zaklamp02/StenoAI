@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import { Video } from 'lucide-react';
 import type { CalendarEvent } from '@/lib/ipc';
@@ -5,12 +6,15 @@ import { ipc } from '@/lib/ipc';
 import { cn } from '@/lib/utils';
 import { useRecording } from '@/hooks/useRecording';
 import { UI_LOCALE } from '@/lib/locale';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 
 interface UpcomingCardProps {
   event: CalendarEvent;
 }
 
 export function UpcomingCard({ event }: UpcomingCardProps) {
+  const [detailsOpen, setDetailsOpen] = React.useState(false);
   const isAllDay = event.is_all_day === true;
   const relative = isAllDay
     ? ({ prefix: null, value: 'All day', urgent: false, state: 'later' } as const)
@@ -37,6 +41,7 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
   const onStartAndJoin = (e: React.MouseEvent) => {
     e.stopPropagation();
     onStart();
+    setDetailsOpen(false);
     if (meetingUrl) void ipc().shell.openExternal(meetingUrl);
   };
 
@@ -44,6 +49,7 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
   const color = event.color || '#3B82F6';
 
   return (
+    <>
     <div
       className={cn(
         'group relative flex min-h-[44px] cursor-pointer items-center justify-between py-2 transition-colors hover:bg-[color:var(--surface-hover)] -mx-3 px-3 rounded-lg',
@@ -52,12 +58,13 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
       )}
       role="button"
       tabIndex={0}
-      onClick={onStart}
+      aria-label={event.title || t('upcomingCard.untitled_meeting')}
+      onClick={() => setDetailsOpen(true)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onStart();
+          setDetailsOpen(true);
         }
       }}
     >
@@ -74,7 +81,7 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
             className="truncate text-[13.5px] font-medium tracking-[-0.005em]"
             style={{ color: 'var(--fg-1)' }}
           >
-            {event.title || 'Untitled meeting'}
+            {event.title || t('upcomingCard.untitled_meeting')}
           </div>
           {(isLive && !!meetingUrl) && (
             <span 
@@ -111,26 +118,38 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
                 color: 'var(--fg-1)',
               }}
             >
-              <Video className="size-3" />
-              Join
-            </button>
+              <Video className="size-3" />{t('upcomingCard.join')}</button>
             {/* Opens the meeting (Teams links go straight to the Teams app) and
                 starts a note named after it in one click. */}
             <button
               type="button"
               onClick={onStartAndJoin}
+              disabled={recording.status === 'recording' || recording.status === 'paused'}
               className="inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-transform hover:scale-105 active:scale-95"
               style={{
                 background: 'var(--fg-1)',
                 color: 'var(--primary-fg)',
               }}
-            >
-              Join &amp; take notes
-            </button>
+            >{t('upcomingCard.join_take_notes')}</button>
           </>
         ) : null}
       </div>
     </div>
+    <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+      <DialogContent>
+        <DialogTitle>{event.title || t('upcomingCard.untitled_meeting')}</DialogTitle>
+        <DialogDescription>{new Date(event.start).toLocaleDateString(UI_LOCALE)} · {meta.timeRange || meta.primary}</DialogDescription>
+        {!!event.attendees?.length && <p className="text-sm text-muted-foreground">{event.attendees.map(a => a.name || a.email).filter(Boolean).join(', ')}</p>}
+        {event.description && <p className="max-h-64 overflow-auto whitespace-pre-wrap text-sm">{event.description}</p>}
+        <div className="flex justify-end gap-2">
+          {meetingUrl && <Button variant="outline" onClick={onJoin}>{t('upcomingCard.join')}</Button>}
+          <Button disabled={recording.status === 'recording' || recording.status === 'paused'} onClick={onStartAndJoin}>
+            {meetingUrl ? t('upcomingCard.join_take_notes') : t('upcomingCard.take_notes')}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
 

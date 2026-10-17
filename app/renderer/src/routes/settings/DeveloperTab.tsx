@@ -75,6 +75,7 @@ export function DeveloperTab() {
       '# stenoai diagnostics',
       '# Paths, URLs and meeting titles are redacted. No account/telemetry id.',
       `app version: ${version.data?.version ?? '(unknown)'}`,
+      `build: ${version.data?.build ?? '(unknown)'}`,
       `platform: ${platform}`,
       `os version: ${osVersion}`,
       `transcription engine: ${engine.data ?? '(unknown)'}`,

@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import { CalendarDays, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -347,13 +348,13 @@ export function GeneralTab() {
       </SettingRow>
 
       <SettingRow
-        label="Apple Calendar"
+        label={t('generalTab.apple_calendar')}
         description={
           apple.connect.isError
             ? (apple.connect.error as Error).message
             : apple.status.data?.enabled
-              ? 'Connected. Uses every calendar in Calendar.app, with attendees; takes precedence over Google/Outlook.'
-              : 'Use the calendars in Calendar.app (iCloud, Exchange, Google accounts added to your Mac).'
+              ? t('generalTab.connected_uses_every_calendar_in_calendar_app')
+              : t('generalTab.use_the_calendars_in_calendar_app_icloud')
         }
         noBorder
       >
@@ -364,9 +365,7 @@ export function GeneralTab() {
             className={COMPACT_BTN}
             onClick={() => apple.disconnect.mutate()}
           >
-            <CalendarDays className="size-[13px]" />
-            Disconnect
-          </Button>
+            <CalendarDays className="size-[13px]" />{t('generalTab.disconnect')}</Button>
         ) : (
           <Button
             variant="outline"
@@ -376,7 +375,7 @@ export function GeneralTab() {
             onClick={() => apple.connect.mutate()}
           >
             <CalendarDays className="size-[13px]" />
-            {apple.connect.isPending ? 'Waiting for permission…' : 'Connect'}
+            {apple.connect.isPending ? t('calendar.waiting_for_permission') : t('generalTab.connect')}
           </Button>
         )}
       </SettingRow>

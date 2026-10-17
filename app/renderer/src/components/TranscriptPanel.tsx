@@ -3,6 +3,9 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { Search as SearchIcon } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { t } from '@/i18n';
+import type { Meeting } from '@/lib/ipc';
+import { LANGUAGES_WHISPER } from '@/routes/settings/languages';
 import { useMeeting } from '@/hooks/useMeetings';
 import { parseTranscript, type Segment } from '@/lib/transcriptSegments';
 
@@ -25,7 +28,51 @@ export function TranscriptPanelContent({
   const m = meeting.data;
   const isDiarised = !!(m.is_diarised && m.diarised_text);
   const text = isDiarised ? (m.diarised_text ?? '') : (m.transcript ?? '');
-  return <TranscriptBody text={text} isDiarised={isDiarised} />;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <TranscriptLanguageInfo meeting={m} />
+      <TranscriptBody text={text} isDiarised={isDiarised} />
+    </div>
+  );
+}
+
+/** Preserve provenance: notes language is not an audio-language detection.
+ * Some engines echo a pinned language in detected_language; label that as reported. */
+function TranscriptLanguageInfo({ meeting }: { meeting: Meeting }) {
+  const info = meeting.session_info;
+  const pinned = !!info.configured_language && info.configured_language !== 'auto';
+  const languageName = (code: string | null | undefined, fallback: string) =>
+    code ? (LANGUAGES_WHISPER.find((l) => l.value === code)?.label ?? code) : fallback;
+  const rows = [
+    [pinned ? t('transcript.reportedLanguage') : t('transcript.detectedLanguage'),
+      languageName(info.detected_language, t('transcript.languageUnknown'))],
+    [t('transcript.languageSetting'), languageName(info.configured_language, t('transcript.languageUnavailable'))],
+    [t('transcript.notesLanguage'), languageName(info.output_language, t('transcript.languageUnavailable'))],
+  ];
+  return (
+    <details className="max-h-[150px] shrink-0 overflow-y-auto border-b border-border px-4 py-2 text-xs" data-testid="transcript-language-info">
+      <summary className="cursor-pointer leading-5">
+        <span className="text-muted-foreground">{rows[0][0]}: </span>
+        <span className="font-medium">{rows[0][1]}</span>
+      </summary>
+      <dl className="mt-2 space-y-1">
+        {rows.slice(1).map(([label, value]) => (
+          <div key={label} className="flex flex-wrap justify-between gap-x-3 gap-y-0.5">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="font-medium">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {(pinned || !info.detected_language) && (
+        <p className="mt-2 leading-relaxed text-muted-foreground">
+          {pinned ? t('transcript.selectedLanguageHint') : t('transcript.unknownLanguageHint')}
+        </p>
+      )}
+      <p className="mt-2 leading-relaxed text-muted-foreground">
+        {t('transcript.retryLanguageHint')}
+      </p>
+    </details>
+  );
 }
 
 /** Org-meeting wrapper — transcript already in memory (came from the

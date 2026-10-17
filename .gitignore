@@ -207,3 +207,9 @@ ollama.pid
 # regenerates this; only diarize-sidecar/{Package.swift,Package.resolved,Sources/} are tracked.
 diarize-sidecar/.build/
 config.json.lock
+
+# Local-only build inputs: the official app (helpers) and the previous install (rollback)
+.local/
+bin-custom/
+custom/HANDOVER.md
+app/build-info.json

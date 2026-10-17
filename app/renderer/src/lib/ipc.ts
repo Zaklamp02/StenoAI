@@ -15,6 +15,8 @@ export type VaultSyncStatus =
   | { status: 'waiting'; lastRun: string | null; reason: string }
   | { status: 'error'; lastRun: string | null; message: string };
 
+export type KeychainState = 'closed' | 'waiting' | 'open';
+
 export type Result<T> = ({ success: true } & T) | {
   success: false;
   error: string;
@@ -30,6 +32,9 @@ export interface SessionInfo {
   processed_at?: string;
   updated_at?: string;
   duration_seconds?: number;
+  configured_language?: string | null;
+  detected_language?: string | null;
+  output_language?: string | null;
   folders?: string[];
   /** Set when transcription crashed (e.g. an OOM): the recording was
    *  preserved instead of deleted and no real summary exists. The detail
@@ -344,7 +349,7 @@ export type AiProvider = 'local' | 'remote' | 'cloud' | 'adapter';
 export type CloudProvider = 'openai' | 'anthropic' | 'bedrock' | 'custom';
 
 // ---------- response envelopes ----------
-export type AppVersionResponse = Result<{ version: string; name: string }>;
+export type AppVersionResponse = Result<{ version: string; name: string; build?: string }>;
 export type StatusResponse = Result<{ status: string; details?: unknown }>;
 export type SetupCheckStatus = 'pass' | 'fail' | 'warn';
 export interface SetupCheckItem {
@@ -1109,6 +1114,9 @@ export interface StenoaiBridge {
   };
 
   recording: {
+    recoverable: RequestFn<[], Result<{ recordings: { id: string; name: string; updatedAt: string; bytes: number }[] }>>;
+    recover: RequestFn<[id: string], Result<Record<string, never>>>;
+    dismissRecovery: RequestFn<[id: string], Result<Record<string, never>>>;
     /** trigger: analytics source (manual/hotkey/tray/…). appendTo: path of an
      *  existing note to append this recording's transcript to
      *  (continue-recording) instead of creating a new note. */
@@ -1354,6 +1362,12 @@ export interface StenoaiBridge {
     /** Disk cap for kept recordings; null = no limit. Oldest audio goes first. */
     getAudioStorage: RequestFn<[], Result<{ limitMb: number | null; usedBytes: number }>>;
     setAudioStorage: RequestFn<[limitMb: number | null], Result<{ limitMb: number | null; usedBytes: number }>>;
+    /** Startup Keychain gate: 'closed' until the window shows, 'waiting'
+     *  while the first Keychain access runs, then 'open'. */
+    getKeychainState: RequestFn<[], Result<{ state: KeychainState }>>;
+    /** Cloud transcription requests in flight at once (1-12, default 6). */
+    getCloudConcurrency: RequestFn<[], Result<{ concurrency: number }>>;
+    setCloudConcurrency: RequestFn<[concurrency: number], Result<{ concurrency: number }>>;
     setKeepRecordings: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getAutoSummarize: RequestFn<[], GetAutoSummarizeResponse>;
     setAutoSummarize: RequestFn<[v: boolean], Result<Record<string, never>>>;
@@ -1417,6 +1431,7 @@ export interface StenoaiBridge {
     setObsidianVaultPath: RequestFn<[p: string], Result<Record<string, never>>>;
     pickObsidianVaultFolder: RequestFn<[], PickStorageFolderResponse>;
     getObsidianConflicts: RequestFn<[], GetObsidianConflictsResponse>;
+    retryObsidianSync: RequestFn<[], Result<Record<string, never>>>;
     getAiPrompts: RequestFn<[], GetAiPromptsResponse>;
     saveDiagnostics: RequestFn<
       [defaultFilename: string, content: string],
@@ -1460,6 +1475,8 @@ export interface StenoaiBridge {
     /** The calendar event a note's meeting belongs to (looked up once by
      *  recording start and saved next to the note). */
     meetingEvent: RequestFn<[summaryFile: string], Result<{ event: CalendarEvent | null }>>;
+    meetingOptions: RequestFn<[summaryFile: string], Result<{ events: CalendarEvent[] }>>;
+    updateMeeting: RequestFn<[summaryFile: string, change: { action: 'refresh' | 'unlink' | 'match'; eventId?: string; eventStart?: string }], Result<{ event: CalendarEvent | null }>>;
     getEvents: RequestFn<[], GetCalendarEventsResponse>;
   };
 
@@ -1517,6 +1534,7 @@ export interface StenoaiBridge {
     autoRecordRequested: Subscribe<{ sessionName?: string; appName?: string }>;
     autoPauseRequested: Subscribe<void>;
     autoResumeRequested: Subscribe<void>;
+    keychainState: Subscribe<{ state: KeychainState }>;
     autoSummariseRequested: Subscribe<void>;
     /** Main asks the renderer to generate notes for a transcript-only note in
      *  the background (from the "Generate notes" action on the transcript-ready

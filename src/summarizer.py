@@ -12,6 +12,7 @@ import time
 from typing import Optional, Dict, Any
 from .models import MeetingTranscript, ActionItem, Decision
 from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
+from .meeting_context import MeetingContext
 from . import ollama_manager
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,46 @@ CHARS_PER_TOKEN = 4               # English baseline; used for the reduce-fits s
                                   # needs_chunking gate uses the conservative floor below.
 _CHUNK_SAFETY_CHARS_PER_TOKEN = 2 # used for chunk budget: worst-case German/BPE (2.0 c/t floor)
 _OVERLAP_RATIO = 0.05             # last 5% of previous chunk prepended to next
+
+# Meeting context (calendar title, invitation text, invitees, confirmed
+# speakers — see src/meeting_context.py) is rendered to a char budget so it can
+# never crowd the transcript out. Cloud/adapter models get the fixed maximum; a
+# local/remote Ollama model gets a share of its num_ctx (counted at the
+# worst-case chars/token floor), clamped to [MIN, LOCAL_MAX].
+MEETING_CONTEXT_MAX_CHARS = 6000
+MEETING_CONTEXT_LOCAL_MAX_CHARS = 4000
+MEETING_CONTEXT_MIN_CHARS = 800
+_MEETING_CONTEXT_CTX_SHARE = 0.08
+# The map step of a chunked summary only gets one names/date line, reserved
+# out of each chunk's budget.
+MAP_CONTEXT_MAX_CHARS = 400
+
+
+def _action_item_rules(meeting_date: Optional[str] = None) -> str:
+    """Owner/due-date format for action items. Both are added only when the
+    transcript states them; simple_recorder._action_items_as_tasks turns each
+    line into a ``- [ ]`` task afterwards."""
+    if meeting_date:
+        dates = (
+            f"Resolve a relative deadline (\"Friday\", \"next week Tuesday\", \"end of the month\") "
+            f"against the meeting date {meeting_date}. "
+        )
+    else:
+        dates = "Only use a deadline that is stated as a full calendar date. "
+    return (
+        "ACTION ITEM FORMAT: write each action item on one line as "
+        "\"- Name: task (due YYYY-MM-DD)\". "
+        "Add \"Name: \" only when the transcript makes clear who will do it (someone "
+        "volunteers, or is asked and agrees); use the name as spoken or as listed in the "
+        "meeting context, and for [You] the recorder's name when it is known, otherwise "
+        "\"You\". "
+        "Add \" (due YYYY-MM-DD)\" only when a specific deadline is stated. "
+        f"{dates}"
+        "Keep vague timing (\"soon\", \"after the release\") in the task wording instead. "
+        "When no owner or deadline is stated, write just \"- task\". Never guess an owner "
+        "or a date, and never write placeholders such as Unassigned, TBD or Unknown. "
+        "Keep the word \"due\" and the YYYY-MM-DD format whatever the output language."
+    )
 
 
 def resolve_num_ctx(model_name: str) -> int:
@@ -277,15 +318,37 @@ class OllamaSummarizer:
         """
         return {"num_ctx": resolve_num_ctx(self.model_name)}
 
-    def _chunk_budget_chars(self) -> int:
-        """Total chars per chunk: content + overlap prefix, sized for the model."""
+    def _chunk_budget_chars(self, reserve_chars: int = 0) -> int:
+        """Total chars per chunk: content + overlap prefix, sized for the model.
+        ``reserve_chars`` is extra map-prompt text (the meeting-context line)."""
         num_ctx = resolve_num_ctx(self.model_name)
         content_tokens = num_ctx - MAP_PROMPT_OVERHEAD_TOKENS - MAP_OUTPUT_MAX_TOKENS
-        return int(content_tokens * _CHUNK_SAFETY_CHARS_PER_TOKEN)
+        return int(content_tokens * _CHUNK_SAFETY_CHARS_PER_TOKEN) - reserve_chars
 
-    def _split_into_chunks(self, transcript: str) -> list[str]:
+    def _meeting_context_budget_chars(self) -> int:
+        """Char budget for the rendered meeting-context block."""
+        if self.ai_provider not in ("local", "remote"):
+            return MEETING_CONTEXT_MAX_CHARS
+        num_ctx = resolve_num_ctx(self.model_name)
+        share = int(num_ctx * _MEETING_CONTEXT_CTX_SHARE * _CHUNK_SAFETY_CHARS_PER_TOKEN)
+        return max(MEETING_CONTEXT_MIN_CHARS, min(share, MEETING_CONTEXT_LOCAL_MAX_CHARS))
+
+    def _meeting_context_block(self, meeting_context: Optional[MeetingContext]) -> str:
+        """Rendered meeting context plus a blank line, or "" when there is none."""
+        if not meeting_context:
+            return ""
+        block = meeting_context.render(self._meeting_context_budget_chars())
+        return f"{block}\n\n" if block else ""
+
+    @staticmethod
+    def _map_context_line(meeting_context: Optional[MeetingContext]) -> str:
+        if not meeting_context:
+            return ""
+        return meeting_context.names_line(MAP_CONTEXT_MAX_CHARS)
+
+    def _split_into_chunks(self, transcript: str, reserve_chars: int = 0) -> list[str]:
         """Split transcript into overlapping chunks that each fit within the model context."""
-        budget = self._chunk_budget_chars()
+        budget = self._chunk_budget_chars(reserve_chars)
         overlap_chars = int(budget * _OVERLAP_RATIO)
         content_budget = budget - overlap_chars
 
@@ -322,14 +385,20 @@ class OllamaSummarizer:
                 result.append(overlap + raw)
         return result
 
-    def _create_map_prompt(self, chunk: str, chunk_num: int, total_chunks: int) -> str:
-        """Compact extraction prompt for one transcript chunk (map step)."""
+    def _create_map_prompt(self, chunk: str, chunk_num: int, total_chunks: int,
+                           context_line: str = "") -> str:
+        """Compact extraction prompt for one transcript chunk (map step).
+        ``context_line`` (names + meeting date) lets owners and due dates
+        survive extraction; it is reserved out of the chunk budget."""
+        context = f"{context_line}\n" if context_line else ""
         return (
             f"This is part {chunk_num} of {total_chunks} of a meeting transcript.\n"
+            f"{context}"
             "Extract only what is explicitly stated. Be concise.\n\n"
             "KEY POINTS\n- ...\n\n"
             "DECISIONS\n- ...\n\n"
-            "ACTION ITEMS\n- [owner] action (deadline if mentioned)\n\n"
+            "ACTION ITEMS\n- Name: action (due YYYY-MM-DD)\n"
+            "(name and due date only when stated; otherwise just \"- action\")\n\n"
             "OPEN QUESTIONS\n- ...\n\n"
             f"TRANSCRIPT SEGMENT:\n{chunk}"
         )
@@ -383,10 +452,11 @@ class OllamaSummarizer:
         yield first
         yield from stream
 
-    def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int, _retry: bool = True) -> str:
+    def _summarize_chunk(self, chunk: str, chunk_num: int, total_chunks: int, _retry: bool = True,
+                         context_line: str = "") -> str:
         """Non-streaming Ollama call for one map chunk. Returns stripped text or raises."""
         import time
-        prompt = self._create_map_prompt(chunk, chunk_num, total_chunks)
+        prompt = self._create_map_prompt(chunk, chunk_num, total_chunks, context_line)
         if self.ai_provider != "remote":
             self._ensure_ollama_ready()
         options = {**self._ollama_options(), "num_predict": MAP_OUTPUT_MAX_TOKENS}
@@ -412,14 +482,16 @@ class OllamaSummarizer:
                     f"Chunk {chunk_num}/{total_chunks} returned empty result, retrying once…"
                 )
                 time.sleep(2)
-                return self._summarize_chunk(chunk, chunk_num, total_chunks, _retry=False)
+                return self._summarize_chunk(chunk, chunk_num, total_chunks, _retry=False,
+                                             context_line=context_line)
             raise ValueError(
                 f"Chunk {chunk_num}/{total_chunks} returned an empty result after retry — "
                 "Ollama may have run out of context or memory."
             )
         return result
 
-    def _create_reduce_prompt(self, map_results: list[str], language: str = "en", notes: str = None) -> str:
+    def _create_reduce_prompt(self, map_results: list[str], language: str = "en", notes: str = None,
+                              meeting_context: Optional[MeetingContext] = None) -> str:
         """Reduce prompt: merge N map-extracted summaries into a single coherent note."""
         n = len(map_results)
 
@@ -449,6 +521,7 @@ class OllamaSummarizer:
         )
 
         return (
+            f"{self._meeting_context_block(meeting_context)}"
             f"{notes_context}"
             f"The following are structured extracts from {n} segments of a long meeting.\n"
             "Merge and deduplicate into a single coherent summary. "
@@ -466,13 +539,14 @@ class OllamaSummarizer:
             "- [Key point 1]\n"
             "- [Key point 2]\n\n"
             "## Action Items\n"
-            "- [Action item 1]\n"
-            "- [Action item 2]\n\n"
+            "- Name: action (due YYYY-MM-DD)\n"
+            "- action\n\n"
+            f"{_action_item_rules(meeting_context.meeting_date if meeting_context else None)}\n\n"
             f"Only include information explicitly discussed. Do not infer or assume.{language_instruction}\n\n"
             f"EXTRACTS:\n{combined}"
         )
 
-    def _needs_chunking(self, transcript: str, notes: str = None) -> bool:
+    def _needs_chunking(self, transcript: str, notes: str = None, extra_chars: int = 0) -> bool:
         """True iff transcript is too long for a single Ollama call on the configured model.
 
         Uses the same conservative chars/token floor as the chunk budget
@@ -484,10 +558,11 @@ class OllamaSummarizer:
         if self.ai_provider not in ("local", "remote"):
             return False
         num_ctx = resolve_num_ctx(self.model_name)
-        estimated_tokens = (len(transcript) + len(notes or "")) / _CHUNK_SAFETY_CHARS_PER_TOKEN
+        estimated_tokens = (len(transcript) + len(notes or "") + extra_chars) / _CHUNK_SAFETY_CHARS_PER_TOKEN
         return estimated_tokens > num_ctx * 0.8
 
-    def _hierarchical_reduce(self, map_results: list[str], depth: int, progress_callback=None) -> list[str]:
+    def _hierarchical_reduce(self, map_results: list[str], depth: int, progress_callback=None,
+                             context_line: str = "", reduce_extra_chars: int = 0) -> list[str]:
         """Re-chunk map results that are too large for a single reduce call (max depth 2)."""
         if depth > 2:
             raise ValueError(
@@ -495,7 +570,7 @@ class OllamaSummarizer:
                 "try a model with a larger context window."
             )
         combined_text = "\n\n".join(map_results)
-        chunks = self._split_into_chunks(combined_text)
+        chunks = self._split_into_chunks(combined_text, reserve_chars=len(context_line))
         n = len(chunks)
         # Emit progress for each intermediate-reduce chunk: this round is another
         # batch of map-style calls, so without ticks the UI sits on "reducing"
@@ -505,11 +580,12 @@ class OllamaSummarizer:
         for i, chunk in enumerate(chunks):
             if progress_callback:
                 progress_callback(i + 1, n)
-            new_results.append(self._summarize_chunk(chunk, i + 1, n))
+            new_results.append(self._summarize_chunk(chunk, i + 1, n, context_line=context_line))
         num_ctx = resolve_num_ctx(self.model_name)
-        combined_tokens = len("\n\n".join(new_results)) / CHARS_PER_TOKEN
+        combined_tokens = (len("\n\n".join(new_results)) + reduce_extra_chars) / CHARS_PER_TOKEN
         if combined_tokens > num_ctx * 0.7:
-            return self._hierarchical_reduce(new_results, depth + 1, progress_callback)
+            return self._hierarchical_reduce(new_results, depth + 1, progress_callback,
+                                             context_line, reduce_extra_chars)
         return new_results
 
     def _map_reduce_streaming(
@@ -518,28 +594,35 @@ class OllamaSummarizer:
         language: str = "en",
         notes: str = None,
         progress_callback=None,
+        meeting_context: Optional[MeetingContext] = None,
     ):
         """Map-reduce generator: chunks → parallel map → streaming reduce."""
-        chunks = self._split_into_chunks(transcript)
+        context_line = self._map_context_line(meeting_context)
+        chunks = self._split_into_chunks(transcript, reserve_chars=len(context_line))
         n = len(chunks)
         map_results = []
 
         for i, chunk in enumerate(chunks):
             if progress_callback:
                 progress_callback(i + 1, n)
-            map_results.append(self._summarize_chunk(chunk, i + 1, n))
+            map_results.append(self._summarize_chunk(chunk, i + 1, n, context_line=context_line))
 
         # Signal: now entering the reduce step (step > total is unambiguous)
         if progress_callback:
             progress_callback(n + 1, n)
 
-        # Check if combined map output fits in a single reduce call
+        # Check if combined map output fits in a single reduce call. The
+        # meeting-context block also lands in the reduce prompt, so count it.
+        context_block = self._meeting_context_block(meeting_context)
         num_ctx = resolve_num_ctx(self.model_name)
-        combined_tokens = len("\n\n".join(map_results)) / CHARS_PER_TOKEN
+        combined_tokens = (len("\n\n".join(map_results)) + len(context_block)) / CHARS_PER_TOKEN
         if combined_tokens > num_ctx * 0.7:
-            map_results = self._hierarchical_reduce(map_results, depth=1, progress_callback=progress_callback)
+            map_results = self._hierarchical_reduce(
+                map_results, depth=1, progress_callback=progress_callback,
+                context_line=context_line, reduce_extra_chars=len(context_block),
+            )
 
-        reduce_prompt = self._create_reduce_prompt(map_results, language, notes)
+        reduce_prompt = self._create_reduce_prompt(map_results, language, notes, meeting_context)
         if self.ai_provider != "remote":
             self._ensure_ollama_ready()
         # No try/except here: a reduce failure must propagate to the outer
@@ -1039,7 +1122,8 @@ class OllamaSummarizer:
                     raise
         raise RuntimeError("Bedrock chat failed after all retries")
 
-    def _create_permissive_prompt(self, transcript: str, language: str = "en", notes: str = None) -> str:
+    def _create_permissive_prompt(self, transcript: str, language: str = "en", notes: str = None,
+                                  meeting_context: Optional[MeetingContext] = None) -> str:
         """
         Create an enhanced prompt with discussion_areas and improved extraction.
         Uses more examples in schema to permit more detailed summaries.
@@ -1075,7 +1159,8 @@ names, jargon, or context that helps interpret the transcript more accurately.
 
 """
 
-        return f"""{diarisation_note}{notes_context}You are a helpful meeting assistant. Summarise this meeting transcript into discussion areas, key points and any next steps mentioned. Only base your summary on what was explicitly discussed in the transcript.
+        context_block = self._meeting_context_block(meeting_context)
+        return f"""{context_block}{diarisation_note}{notes_context}You are a helpful meeting assistant. Summarise this meeting transcript into discussion areas, key points and any next steps mentioned. Only base your summary on what was explicitly discussed in the transcript.
 
 IMPORTANT: Do not infer or assume information that wasn't directly mentioned.
 
@@ -1093,6 +1178,7 @@ IMPORTANT - VARIABLE NUMBER OF ITEMS:
 - Discussion areas: Include as many as needed to organize the topics (1-2 for short meetings, 4-5 for complex discussions)
 - Key points: Extract as many as were actually discussed (2-3 for short meetings, 6-8 for detailed discussions)
 - Next steps: Include only action items that were clearly mentioned (could be 1, could be 6+)
+- assignee and deadline: only when the transcript states them, never guessed; write a deadline as YYYY-MM-DD when it can be pinned to a date
 - The examples below are illustrative - do not feel obligated to match the exact number shown
 
 CORRECT FORMAT EXAMPLE:
@@ -1156,7 +1242,8 @@ Return ONLY the response in this exact JSON format:
   ]
 }}"""
 
-    def summarize_transcript(self, transcript: str, duration_minutes: int, language: str = "en", notes: str = None) -> Optional[MeetingTranscript]:
+    def summarize_transcript(self, transcript: str, duration_minutes: int, language: str = "en", notes: str = None,
+                             meeting_context: Optional[MeetingContext] = None) -> Optional[MeetingTranscript]:
         """
         Summarize a meeting transcript using Ollama.
 
@@ -1181,7 +1268,8 @@ Return ONLY the response in this exact JSON format:
                     duration_minutes=duration_minutes
                 )
             
-            prompt = self._create_permissive_prompt(transcript, language, notes=notes)
+            prompt = self._create_permissive_prompt(transcript, language, notes=notes,
+                                                    meeting_context=meeting_context)
             logger.info(f"Sending transcript to {self.ai_provider} model: {self.model_name}")
             logger.info(f"Transcript length: {len(transcript)} characters")
 
@@ -1360,7 +1448,8 @@ Return ONLY the response in this exact JSON format:
                 )
             return None
     
-    def _create_markdown_prompt(self, transcript: str, language: str = "en", notes: str = None) -> str:
+    def _create_markdown_prompt(self, transcript: str, language: str = "en", notes: str = None,
+                                meeting_context: Optional[MeetingContext] = None) -> str:
         """Create a prompt that asks the LLM to output markdown directly."""
         # Language instruction. The four ## section headers must stay in English
         # because simple_recorder._parse_streamed_markdown matches on them
@@ -1391,7 +1480,10 @@ Return ONLY the response in this exact JSON format:
         if notes and notes.strip():
             notes_context = f"USER NOTES (written during the meeting):\n{notes.strip()}\n\n"
 
-        return f"""{diarisation_note}{notes_context}Summarise this meeting transcript as markdown. Output ONLY the markdown below with no preamble, commentary, or explanation. Start directly with ## Summary.
+        context_block = self._meeting_context_block(meeting_context)
+        action_rules = _action_item_rules(meeting_context.meeting_date if meeting_context else None)
+
+        return f"""{context_block}{diarisation_note}{notes_context}Summarise this meeting transcript as markdown. Output ONLY the markdown below with no preamble, commentary, or explanation. Start directly with ## Summary.
 
 ## Summary
 A 1-3 sentence overview of the main topics and outcomes, written directly. Do not refer to "the transcript", "the meeting", or "the recording", and do not open with phrases like "The transcript discusses" or "In this meeting".
@@ -1407,8 +1499,10 @@ Brief analysis of what was discussed about this topic.
 - [Key point 2]
 
 ## Action Items
-- [Action item 1]
-- [Action item 2]
+- Name: action (due YYYY-MM-DD)
+- action
+
+{action_rules}
 
 Only include information explicitly discussed. Do not infer or assume.{language_instruction}
 
@@ -1416,7 +1510,8 @@ TRANSCRIPT:
 {transcript}"""
 
     def _create_template_report_prompt(self, transcript: str, template_prompt: str,
-                                       language: str = "en", notes: str = None) -> str:
+                                       language: str = "en", notes: str = None,
+                                       meeting_context: Optional[MeetingContext] = None) -> str:
         """Free-form report prompt: the user's template instructions over the
         transcript. Unlike _create_markdown_prompt there is NO fixed section
         schema — the template decides the shape. Output is raw markdown."""
@@ -1435,10 +1530,13 @@ TRANSCRIPT:
         diarisation_note = ""
         if "[You]" in transcript and "[Others]" in transcript:
             diarisation_note = "NOTE: [You] is the recorder, [Others] are remote participants.\n\n"
+        context_block = self._meeting_context_block(meeting_context)
+        action_rules = _action_item_rules(meeting_context.meeting_date if meeting_context else None)
         return (
-            f"{diarisation_note}{notes_context}{template_prompt.strip()}\n\n"
+            f"{context_block}{diarisation_note}{notes_context}{template_prompt.strip()}\n\n"
             "Base the report only on what was explicitly discussed; do not infer. "
-            "Output the report as markdown with no preamble."
+            "Output the report as markdown with no preamble.\n\n"
+            f"If the report lists action items or next steps: {action_rules}"
             f"{language_instruction}\n\nTRANSCRIPT:\n{transcript}"
         )
 
@@ -1540,7 +1638,8 @@ TRANSCRIPT:
             logger.error(f"Ollama streaming failed: {e}")
             raise
 
-    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None):
+    def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None,
+                                       meeting_context: Optional[MeetingContext] = None):
         """Generator that yields markdown chunks from the LLM.
 
         Args:
@@ -1553,6 +1652,9 @@ TRANSCRIPT:
                 the report streams through the active provider without chunking or
                 map-reduce (those prompts are summary-schema specific and don't
                 apply to a free-form template).
+            meeting_context: Optional calendar/speaker context
+                (src.meeting_context.MeetingContext), rendered within the
+                model's context budget.
 
         Yields:
             str: Text chunks as they arrive from the LLM
@@ -1563,14 +1665,16 @@ TRANSCRIPT:
             # summary-schema specific and don't apply here). Stream through the
             # ACTIVE provider — not straight to Ollama, which has no client and
             # would crash in cloud/adapter mode.
-            prompt = self._create_template_report_prompt(transcript, template_prompt, language, notes)
+            prompt = self._create_template_report_prompt(transcript, template_prompt, language, notes,
+                                                         meeting_context)
             inner = self._stream_completion(prompt)
             empty_message = "Model returned an empty report"
-        elif self._needs_chunking(transcript, notes):
-            inner = self._map_reduce_streaming(transcript, language, notes, progress_callback)
+        elif self._needs_chunking(transcript, notes, len(self._meeting_context_block(meeting_context))):
+            inner = self._map_reduce_streaming(transcript, language, notes, progress_callback,
+                                               meeting_context)
             empty_message = "Model returned an empty summary"
         else:
-            prompt = self._create_markdown_prompt(transcript, language, notes)
+            prompt = self._create_markdown_prompt(transcript, language, notes, meeting_context)
             inner = self._stream_completion(prompt)
             empty_message = "Model returned an empty summary"
 

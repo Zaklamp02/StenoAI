@@ -64,8 +64,8 @@ test('upgrader sees the consent modal; acknowledging marks it seen and it does n
   // The backend migration flipped the absent marker to false on first load.
   expect(readUserConfig(userDataDir).privacy_notice_seen).toBe(false);
 
-  // Both disclosed toggles reflect the persisted default (ON).
-  await expect(page.locator(TELEMETRY_SWITCH)).toHaveAttribute('data-state', 'checked');
+  // Analytics is off until explicitly enabled; login launch is independent.
+  await expect(page.locator(TELEMETRY_SWITCH)).toHaveAttribute('data-state', 'unchecked');
   await expect(page.locator(LAUNCH_SWITCH)).toHaveAttribute('data-state', 'checked');
 
   // Acknowledge via the primary button.
@@ -148,14 +148,15 @@ test('consent modal toggles persist telemetry_enabled and launch_on_login', asyn
   const { page } = await launchApp();
   await waitForConsentModal(page);
 
-  // Both default ON; a single click flips each off — flipping the default gives
-  // the assertions teeth (a no-op toggle would leave them unset/true).
+  // Analytics requires an explicit opt-in; launch on login is independent.
+  await expect(page.locator(TELEMETRY_SWITCH)).toHaveAttribute('aria-checked', 'false');
   await page.locator(TELEMETRY_SWITCH).click();
   await expect
     .poll(() => readUserConfig(userDataDir).telemetry_enabled, {
       message: 'telemetry toggle -> config.telemetry_enabled',
     })
-    .toBe(false);
+    .toBe(true);
+  expect(readUserConfig(userDataDir).telemetry_consent_given).toBe(true);
 
   await page.locator(LAUNCH_SWITCH).click();
   await expect

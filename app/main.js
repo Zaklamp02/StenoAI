@@ -73,7 +73,7 @@ const { registerMeetingTransferIpc, copyRegularFile } = require('./meeting-trans
 const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
-const { registerObsidianSync } = require('./obsidian-sync');
+const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
 const { isSafeToAutoInstall } = require('./update-idle-gate');
@@ -92,6 +92,7 @@ const {
 const { makeLineReader } = require('./backend-stream');
 const { classifyReprocessError } = require('./reprocess-error');
 const noteLanguages = require('./note-language').createNoteLanguages(getUserDataDir);
+const recordingJournal = require('./recording-journal').createRecordingJournal({ getUserDataDir });
 // Optional disk cap for kept recordings (Settings → Keep recordings).
 const audioStorage = require('./audio-storage').createAudioStorage({
   getUserDataDir,
@@ -100,11 +101,47 @@ const audioStorage = require('./audio-storage').createAudioStorage({
   isProtected: (filePath) => {
     const { noteStem } = require('./note-language');
     const stem = noteStem(filePath);
-    const busy = [currentProcessingJob?.audioFile, ...processingQueue.map((job) => job.audioFile),
+    if (recordingJournal.isProtected(filePath)) return true;
+    const busy = [activeSysAudioFilePath, currentProcessingJob?.audioFile, ...processingQueue.map((job) => job.audioFile),
       ...activeReprocessJobs.keys()].filter(Boolean);
     return busy.some((p) => noteStem(p) === stem);
   },
 });
+
+// First Keychain access waits until the window is visible (or a job needs its
+// keys); see keychain-gate.js. Encrypted-key loaders check isOpen().
+const keychainGate = require('./keychain-gate').createKeychainGate({
+  findEncryptedFile: () => [
+    getCloudKeyPath(), getOpenAiAsrKeyPath(), getOrgSessionPath(), getTokenFilePath(), getOutlookTokenFilePath(),
+  ].find((p) => fs.existsSync(p)) || null,
+  decryptFile: (p) => { getSafeStorage().decryptString(fs.readFileSync(p)); },
+  notify: (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('keychain-state', { state });
+  },
+  onLog: (message) => sendDebugLog(message),
+});
+
+// Cloud transcription request concurrency (Settings → AI); default 6, 1-12.
+const cloudConcurrency = require('./cloud-concurrency').createCloudConcurrency({ getUserDataDir });
+
+// Loads the speaker models once while a recording runs so the first CoreML
+// compile does not delay processing (see speaker-model-warmup.js). Model jobs
+// await speakerModelWarmup.idle() before they start.
+const speakerModelWarmup = (() => {
+  const { createSpeakerModelWarmup, resolveSidecar } = require('./speaker-model-warmup');
+  return createSpeakerModelWarmup({
+    spawn: (...args) => spawn(...args),
+    resolveBinary: () => resolveSidecar({ backendPath: getBackendPath(), repoRoot: path.join(__dirname, '..') }),
+    getEnv: () => getBackendEnv(),
+    isBusy: () => {
+      if (isProcessing || processingQueue.length > 0) return 'a meeting is processing';
+      if (activeReprocessJobs.size > 0) return 'a note is being re-transcribed';
+      if (liveTranscribeProcess) return 'live transcription is running';
+      return null;
+    },
+    onLog: (message) => sendDebugLog(message),
+  });
+})();
 
 function enforceAudioStorage() {
   try {
@@ -871,9 +908,10 @@ function loadIdentitySuperProperties() {
     const cfgPath = path.join(getUserDataDir(), 'config.json');
     if (fs.existsSync(cfgPath)) cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
   } catch (_) {}
+  // File existence only: decrypting here would touch the Keychain at startup.
   let calendarConnected = false;
   try {
-    calendarConnected = Boolean(loadGoogleTokens()) || Boolean(loadOutlookTokens());
+    calendarConnected = fs.existsSync(getTokenFilePath()) || fs.existsSync(getOutlookTokenFilePath());
   } catch (_) {}
   return {
     ai_provider: cfg.ai_provider || 'local',
@@ -1114,9 +1152,16 @@ function getAllowedBaseDirs() {
 // config at startup. folders.json sits beside the output dir.
 const obsidianSync = registerObsidianSync({
   getUserDataDir,
-  getAllowedBaseDirs,
-  validateSafeFilePath,
-  resolveFoldersJsonPath: () => path.join(path.dirname(getOutputDir()), 'folders.json'),
+  runPythonScript,
+  prepareCalendar: async () => {
+    if (!appleCalendar.isEnabled()) return;
+    // A refresh also picks up invitee/RSVP changes while a note is closed.
+    let files = [];
+    try { files = fs.readdirSync(getOutputDir()).filter(f => f.endsWith('_summary.md')); } catch (_) {}
+    for (const file of files) {
+      try { await appleCalendar.ensureMeetingCalendar(path.join(getOutputDir(), file)); } catch (_) {}
+    }
+  },
   sendDebugLog,
 });
 
@@ -1728,6 +1773,11 @@ function createWindow(options = {}) {
 
   mainWindow = new BrowserWindow(windowOpts);
   hardenWindow(mainWindow, { allowExternalLinks: true });
+  // Encrypted keys load once the window is visible, so a locked Keychain can
+  // only ever delay them, never the window (keychain-gate.js).
+  mainWindow.on('show', () => {
+    setTimeout(() => { void keychainGate.open('window shown'); }, 300);
+  });
 
   const rendererDist = path.join(__dirname, 'renderer', 'dist', 'index.html');
   const hash = process.env.STENOAI_RENDERER_HASH;
@@ -2097,7 +2147,11 @@ if (!gotSingleInstanceLock) {
     // independent of the active engine or whether Settings is opened. The
     // helper encrypts, verifies a decrypt/readback, then asks the backend to
     // remove plaintext only after that succeeds.
-    void migrateLegacyOpenAiAsrApiKey();
+    // Encrypting the legacy key touches the Keychain, so it waits until the
+    // window is up (keychain-gate.js) instead of running before it.
+    keychainGate.onOpen(() => { void migrateLegacyOpenAiAsrApiKey(); });
+    // Test tiers read keys right away and may never show the window.
+    if (IS_E2E) void keychainGate.open('e2e');
     void runRequestedBenchmark(process.argv);
 
     // Application menu. macOS uses the global menu bar with mac-only roles
@@ -2911,6 +2965,8 @@ function parseMeetingMarkdown(content, mdPath) {
     duration_seconds: meta.duration_seconds ?? null,
     summary_file: mdPath,
     output_language: meta.language ?? null,
+    configured_language: meta.configured_language ?? null,
+    detected_language: meta.detected_language ?? null,
   };
   if (meta.transcription_failed) {
     sessionInfo.transcription_failed = true;
@@ -3136,12 +3192,16 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
     // stuck.
     activeReprocessJobs.set(summaryFile, { summaryFile, sessionName: sessionName || null, progressLine: retranscribe ? 'PROGRESS:audio:preparing' : 'PROGRESS:summarize:start' });
 
+    // A note can be reprocessed from a hidden (login) launch; its keys are needed now.
+    await keychainGate.whenOpen('reprocess');
     const reprocessSecrets = retranscribe
       ? { ...getAiEnv(), ...getTranscriptionEnv(),
         STENOAI_OAI_CACHE_DIR: path.join(getUserDataDir(), 'asr-checkpoints',
           require('crypto').createHash('sha256').update(realPath).digest('hex')) }
       : getAiEnv();
     const reprocessEnv = getBackendEnv({ ...reprocessSecrets, ...noteLanguages.env(realPath) });
+    // Never load the speaker models twice at once (see speaker-model-warmup.js).
+    await speakerModelWarmup.idle();
 
     await new Promise((resolve, reject) => {
       const proc = spawn(getBackendPath(), args, {
@@ -3232,6 +3292,9 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
         watchdog.clear();
         if (code === 0 && !streamFailed && !watchdog.timedOut) {
           console.log(`✅ Completed reprocessing: ${sessionName}`);
+          if (retranscribe) {
+            try { recordingJournal.completeForSummary(realPath); } catch (_) {}
+          }
           // Reprocess / generate-notes / re-transcribe rewrote the note — mirror
           // it into the vault (#413) if sync is on. Use the canonical realPath
           // (not the renderer alias) so it indexes under the true summary stem.
@@ -4122,6 +4185,10 @@ ipcMain.handle('save-meeting-notes', async (event, sessionName, notes) => {
     if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
     const notesFile = userNotesFilePath(outputDir, sessionName);
     fs.writeFileSync(notesFile, notes, 'utf-8');
+    if (activeSysAudioFilePath && sessionName === currentRecordingSessionName) {
+      const snapshot = saveRecoverySnapshot(activeSysAudioFilePath, 'notes', notes);
+      recordingJournal.update(activeSysAudioFilePath, 'recording', { notesFile: snapshot });
+    }
     return { success: true, path: notesFile };
   } catch (error) {
     console.error('Failed to save meeting notes:', error);
@@ -5746,6 +5813,13 @@ async function processNextInQueue() {
   isProcessing = true;
   currentProcessingJob = processingQueue.shift();
   currentProcessingStartedAtMs = Date.now();
+  // Never load the speaker models twice at once: let a running warm-up finish
+  // (it leaves them compiled, so this job's own load is quick).
+  if (speakerModelWarmup.isRunning()) sendDebugLog('Waiting for the speaker-model warm-up to finish');
+  await speakerModelWarmup.idle();
+  // Its keys are needed below; this is where a hidden (login) launch opens
+  // the Keychain gate.
+  await keychainGate.whenOpen('processing');
 
   console.log(`🔄 Processing queued job: ${currentProcessingJob.sessionName}`);
 
@@ -5776,6 +5850,10 @@ async function processNextInQueue() {
   let summarizationCompleted = false;
 
   try {
+    // The summary reads <stem>_calendar.json, so look the event up before the
+    // backend starts instead of only after the note is saved.
+    await prepareMeetingCalendar(currentProcessingJob);
+
     // process-streaming does BOTH transcription (needs the ASR key) and
     // summarization (needs the AI env), so merge both.
     const queueAiEnv = { ...getAiEnv(), ...getTranscriptionEnv() };
@@ -5881,6 +5959,8 @@ async function processNextInQueue() {
           } else if (line.startsWith('SAVED:')) {
             savedSummaryFile = line.slice(6).trim();
             sendDebugLog(`Summary saved: ${savedSummaryFile}`);
+          } else if (line.startsWith('TRANSCRIPTION_SOURCE:')) {
+            currentProcessingJob.transcriptionSource = line.slice('TRANSCRIPTION_SOURCE:'.length).trim();
           } else if (line.startsWith('TRANSCRIPTION_FAILED:')) {
             transcriptionFailedMsg = line.slice('TRANSCRIPTION_FAILED:'.length).trim();
             sendDebugLog(`Transcription failed (audio preserved): ${transcriptionFailedMsg}`);
@@ -5945,6 +6025,7 @@ async function processNextInQueue() {
         watchdog.clear();
         if (code === 0) {
           console.log(`✅ Completed streaming processing: ${currentProcessingJob.sessionName}`);
+          currentProcessingJob.audioCompleted = currentProcessingJob.transcriptionSource === 'batch' && !transcriptionFailedMsg;
           const sessionNameAtClose = currentProcessingJob.sessionName;
           // Mirror the finished note into an Obsidian vault when sync is on
           // (#413). Best-effort — a vault write must never affect processing.
@@ -6064,28 +6145,18 @@ async function processNextInQueue() {
       });
     }
   } finally {
-    // Remove the live-transcript snapshot temp file (#207) — it's consumed by
-    // the Python process and not needed once the job is done.
-    if (currentProcessingJob && currentProcessingJob.liveTranscriptFile) {
-      try {
-        if (fs.existsSync(currentProcessingJob.liveTranscriptFile)) {
-          fs.unlinkSync(currentProcessingJob.liveTranscriptFile);
+    // Failed/live-only jobs retain both audio and snapshots for a complete retry.
+    if (currentProcessingJob?.audioCompleted) {
+      for (const snapshot of [currentProcessingJob.notesFile, currentProcessingJob.liveTranscriptFile]) {
+        if (snapshot && path.dirname(snapshot) === path.join(getUserDataDir(), 'recovery')) {
+          try { fs.unlinkSync(snapshot); } catch (_) { /* already removed */ }
         }
-      } catch (_) { /* best-effort cleanup */ }
+      }
     }
-    // Remove the per-job notes snapshot temp (only temps under tmpdir reach the
-    // job now; the shared draft was already deleted at queue time).
-    if (
-      currentProcessingJob &&
-      currentProcessingJob.notesFile &&
-      currentProcessingJob.notesFile.startsWith(os.tmpdir())
-    ) {
-      try {
-        if (fs.existsSync(currentProcessingJob.notesFile)) {
-          fs.unlinkSync(currentProcessingJob.notesFile);
-        }
-      } catch (_) { /* best-effort cleanup */ }
-    }
+    try {
+      if (currentProcessingJob?.audioFile) recordingJournal.update(currentProcessingJob.audioFile,
+        currentProcessingJob.audioCompleted ? 'complete' : 'failed');
+    } catch (_) { sendDebugLog('Could not update recording recovery state; audio remains protected'); }
     isProcessing = false;
     currentProcessingJob = null;
     currentProcessingStartedAtMs = null;
@@ -6107,6 +6178,16 @@ async function processNextInQueue() {
 //
 // Returns the temp file path, or null when there's no usable live transcript
 // (different session, too short, or write failed — never blocks processing).
+function saveRecoverySnapshot(audioFile, kind, text) {
+  const dir = path.join(getUserDataDir(), 'recovery');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, `${recordingJournal.idFor(audioFile)}-${kind}.txt`);
+  const temp = `${dest}.tmp`;
+  fs.writeFileSync(temp, text, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temp, dest);
+  return dest;
+}
+
 const LIVE_TRANSCRIPT_FALLBACK_MIN_CHARS = 100;
 // Bound the fallback snapshot's wait for the sidecar to flush its FINAL
 // utterance. The drain primarily awaits the per-process `_drainPromise` (which
@@ -6149,7 +6230,7 @@ function waitForLiveTranscribeDrain() {
   });
 }
 
-async function snapshotLiveTranscriptForFallback(sessionName) {
+async function snapshotLiveTranscriptForFallback(sessionName, audioFile) {
   try {
     if (!liveTranscriptState || liveTranscriptState.sessionName !== sessionName) {
       return null;
@@ -6174,11 +6255,8 @@ async function snapshotLiveTranscriptForFallback(sessionName) {
     if (text.length < LIVE_TRANSCRIPT_FALLBACK_MIN_CHARS) {
       return null;
     }
-    // Write to the OS temp dir (cross-platform) with a unique name so
-    // overlapping recordings can't clobber each other's snapshot.
-    const fileName = `stenoai-live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
-    const filePath = path.join(os.tmpdir(), fileName);
-    fs.writeFileSync(filePath, text, 'utf-8');
+    const filePath = saveRecoverySnapshot(audioFile, 'live', text);
+    recordingJournal.update(audioFile, 'recording', { liveTranscriptFile: filePath });
     sendDebugLog(`Captured live transcript fallback (${text.length} chars): ${filePath}`);
     return filePath;
   } catch (e) {
@@ -6276,7 +6354,7 @@ function clearNoteProcessingFlag(summaryFile) {
     const tmp = `${summaryFile}.tmp-${Date.now()}`;
     fs.writeFileSync(tmp, out, 'utf8');
     fs.renameSync(tmp, summaryFile);
-    sendDebugLog(`[instant-stop] cleared stuck processing flag: ${path.basename(summaryFile)}`);
+    sendDebugLog('[instant-stop] cleared stuck processing flag');
   } catch (e) {
     sendDebugLog(`[instant-stop] failed to clear processing flag: ${e.message}`);
   }
@@ -6320,7 +6398,29 @@ function sweepStuckProcessingFlags() {
   }
 }
 
+// Save the calendar event for a queued recording before it is summarised.
+// Capped at 5 s: a slow or disconnected calendar must never delay processing,
+// and the note still gets its calendar details after saving as before.
+const MEETING_CALENDAR_PREP_TIMEOUT_MS = 5_000;
+async function prepareMeetingCalendar(job) {
+  if (!job?.appendTo && !job?.audioFile) return;
+  const summaryPath = job.appendTo
+    || path.join(getOutputDir(), `${path.parse(job.audioFile).name}_summary.md`);
+  let timer;
+  try {
+    await Promise.race([
+      appleCalendar.ensureMeetingCalendar(summaryPath),
+      new Promise((resolve) => { timer = setTimeout(resolve, MEETING_CALENDAR_PREP_TIMEOUT_MS); }),
+    ]);
+  } catch (e) {
+    sendDebugLog(`[apple-calendar] lookup before summary failed: ${e.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile) {
+  recordingJournal.update(audioFile, 'queued', { sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile: summaryFile || summaryFileForAudio(audioFile) });
   // A language picked on the recording screen belongs to this meeting only.
   if (pendingRecordingLanguage) {
     try { noteLanguages.set(appendTo || summaryFile || audioFile, pendingRecordingLanguage); }
@@ -6331,6 +6431,14 @@ function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptF
   console.log(`📋 Added to processing queue: ${sessionName} (Queue size: ${processingQueue.length})`);
   processNextInQueue();
 }
+
+require('./recording-recovery-ipc').registerRecordingRecovery({
+  ipcMain, journal: recordingJournal, resolveRecordingsDir, summaryFileForAudio,
+  validateSafeFilePath, getAllowedBaseDirs, enqueue: addToProcessingQueue,
+  isBusy: file => [activeSysAudioFilePath, currentProcessingJob?.audioFile,
+    ...processingQueue.map(job => job.audioFile)].includes(file)
+    || [...activeReprocessJobs.keys()].some(p => require('./note-language').noteStem(p) === require('./note-language').noteStem(file)),
+});
 
 // Continue-recording (append) target: set at start-recording-ui when the
 // renderer asked to record INTO an existing note, consumed (and cleared) when
@@ -6361,13 +6469,27 @@ ipcMain.handle('set-audio-storage', async (_event, limitMb) => {
   }
 });
 
+ipcMain.handle('get-keychain-state', async () => ({ success: true, state: keychainGate.getState() }));
+
+ipcMain.handle('get-cloud-concurrency', async () => ({ success: true, concurrency: cloudConcurrency.get() }));
+
+ipcMain.handle('set-cloud-concurrency', async (_event, concurrency) => {
+  try {
+    cloudConcurrency.set(Number(concurrency));
+    return { success: true, concurrency: cloudConcurrency.get() };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('vault-sync-status', async (_event, summaryFile) => {
   const validated = await validateMeetingFilePath(summaryFile);
   if (validated.error) return { success: false, error: validated.error };
   try {
     const { noteStem } = require('./note-language');
     const sourceMtimeMs = (await fs.promises.stat(validated.realPath)).mtimeMs;
-    return { success: true, sync: require('./vault-sync-status').vaultSyncStatus({ stem: noteStem(validated.realPath), sourceMtimeMs }) };
+    return { success: true, sync: require('./vault-sync-status').vaultSyncStatus({ stem: noteStem(validated.realPath), sourceMtimeMs,
+      ...(obsidianSync.getCachedConfig().enabled ? { configDir: obsidianSync.stateDir() } : {}) }) };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -6468,6 +6590,7 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     // success / clears it on failure.
     systemAudioRecordingActive = true;
     applyRecordingBackgroundThrottling();
+    speakerModelWarmup.schedule();
     // Reset the live transcript buffer before the sidecar starts emitting.
     // On a resume/continue into the SAME note, preserve the previous session's
     // finalised segments as display-only `priorSegments` so the live bar shows
@@ -6666,6 +6789,8 @@ ipcMain.handle('resume-recording-ui', async () => {
 ipcMain.handle('stop-recording-ui', async () => {
   // The call this recording was paired with no longer matters once it stops.
   clearAutoStartedSession();
+  // Processing loads the models itself; a running warm-up is awaited there.
+  speakerModelWarmup.cancelScheduled();
   try {
     // Stopping ends any sleep-pause state — don't prompt Resume on a
     // recording that no longer exists.
@@ -6700,7 +6825,7 @@ ipcMain.handle('stop-recording-ui', async () => {
             notesText,
           });
           instantSummaryFile = activeSysAudioSummaryFile;
-          sendDebugLog(`[instant-stop] wrote placeholder note: ${path.basename(activeSysAudioSummaryFile)}`);
+          sendDebugLog('[instant-stop] wrote placeholder note');
         }
       }
     } catch (e) {
@@ -6991,7 +7116,7 @@ ipcMain.handle('cancel-processing', async (_event, summaryFile) => {
   if (!target || !target.proc || target.proc.exitCode !== null) {
     return { success: false, error: 'Nothing is processing for this note' };
   }
-  sendDebugLog(`Processing cancelled by user: ${target.summaryFile || target.sessionName}`);
+  sendDebugLog('Processing cancelled by user');
   target.cancelled = true;
   target.proc.kill('SIGTERM');
   return { success: true };
@@ -8209,10 +8334,16 @@ ipcMain.handle('get-app-version', async () => {
   try {
     const packagePath = path.join(__dirname, 'package.json');
     const packageContent = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    let build = 'development';
+    try {
+      const info = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8'));
+      build = `${info.fork} ${info.commit}${info.dirty ? '-dirty' : ''} (${info.builtAt})`;
+    } catch (_) { /* an unpackaged checkout before its first build */ }
     return {
       success: true,
       version: packageContent.version,
-      name: packageContent.productName || packageContent.name
+      name: packageContent.productName || packageContent.name,
+      build,
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -9319,6 +9450,8 @@ function loadCloudApiKey() {
     const keyPath = getCloudKeyPath();
     migrateLegacyCredentialFile(keyPath, '.cloud-api-key');
     if (!fs.existsSync(keyPath)) return null;
+    // Not before the window is up: a locked Keychain would block startup.
+    if (!keychainGate.isOpen()) return null;
     const encrypted = fs.readFileSync(keyPath);
     return getSafeStorage().decryptString(encrypted);
   } catch (error) {
@@ -9389,6 +9522,7 @@ function loadOpenAiAsrCredential(origin) {
   try {
     if (isOpenAiAsrKeyCleared()) return null;
     if (!origin) return null;
+    if (!keychainGate.isOpen()) return null;
     const keyPath = getOpenAiAsrKeyPath();
     migrateLegacyCredentialFile(keyPath, '.openai-asr-api-key');
     const key = loadEncryptedKeyForOrigin({ fs, keyPath, origin, safeStorage: getSafeStorage() });
@@ -9418,6 +9552,8 @@ function readLegacyOpenAiAsrCredential() {
 
 function secureLegacyOpenAiAsrApiKey(legacy = readLegacyOpenAiAsrCredential()) {
   if (legacy === OPENAI_ASR_CONFIG_SNAPSHOT_UNREADABLE) return false;
+  // Encrypting touches the Keychain too; wait for the gate.
+  if (!keychainGate.isOpen()) return false;
   if (!legacy || !legacy.key || !legacy.origin) return false;
   const stored = loadOpenAiAsrKey(legacy.origin);
   const action = legacyKeyMigrationAction({
@@ -9437,6 +9573,8 @@ function secureLegacyOpenAiAsrApiKey(legacy = readLegacyOpenAiAsrCredential()) {
 
 async function migrateLegacyOpenAiAsrApiKey(legacy = readLegacyOpenAiAsrCredential()) {
   if (legacy === OPENAI_ASR_CONFIG_SNAPSHOT_UNREADABLE) return false;
+  // Reads and writes the encrypted copy; reruns once the gate opens (startup).
+  if (!keychainGate.isOpen()) return false;
   if (!legacy) return true;
   const removeLegacyKey = async () => {
     try {
@@ -9497,6 +9635,11 @@ function getAiEnv() {
 async function runRequestedBenchmark(argv) {
   if (!IS_CUSTOM_BUILD) return;
   try {
+    // Cloud benchmark jobs need their keys; only a benchmark launch opens the
+    // Keychain gate this early.
+    if (argv.some((arg) => String(arg).startsWith('--transcription-benchmark-plan'))) {
+      await keychainGate.whenOpen('benchmark');
+    }
     await require('./transcription-benchmark').launchBenchmark(argv, {
       backend: getBackendPath, cwd: getBackendCwd,
       getEnv: (extra) => getBackendEnv({ ...extra, STENOAI_DIARIZE_MODEL_DIR: path.join(getUserDataDir(), 'models', 'speaker-diarization') }),
@@ -9516,9 +9659,10 @@ function getBackendEnv(extra = {}) {
 function getTranscriptionEnv() {
   const env = {};
   if (loadTranscriptionEngine() !== 'openai-asr') return env;
-  // Custom batch scheduler: short, overlapped windows; at most six requests
-  // across both channels. Python retains finite deadlines and ordered merging.
-  env.STENOAI_OAI_PARALLELISM = '6';
+  // Custom batch scheduler: short, overlapped windows; the configured number
+  // of requests (default six) shared across both channels. Python retains
+  // finite deadlines and ordered merging.
+  env.STENOAI_OAI_PARALLELISM = cloudConcurrency.env();
   env.STENOAI_OAI_CHUNK_SECONDS = '180';
   // A legacy plaintext key must be secured before this first cloud job. The
   // deletion itself is async (via the locked Python config writer), but this
@@ -10053,7 +10197,8 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     // its partial file on disk under recordings/ — abandoned rather than
     // processed, since no clean stop handed it to the queue.
     if (activeSysAudioWriteStream) {
-      sendDebugLog(`[sysaudio] abandoning unclosed prior recording ${path.basename(activeSysAudioFilePath || '')}`);
+      sendDebugLog('[sysaudio] abandoning unclosed prior recording');
+      try { recordingJournal.update(activeSysAudioFilePath, 'failed'); } catch (_) {}
       try { activeSysAudioWriteStream.end(); } catch (_) { /* already ended */ }
       activeSysAudioWriteStream = null;
       activeSysAudioFilePath = null;
@@ -10063,6 +10208,7 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     const safeName = String(sessionName || 'Note').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
     const filename = `sysaudio-${Date.now()}-${safeName}.webm`;
     const filePath = path.join(dir, filename);
+    recordingJournal.update(filePath, 'recording', { sessionName: String(sessionName || 'Note'), summaryFile: summaryFileForAudio(filePath), appendTo: currentRecordingAppendTarget });
     const stream = fs.createWriteStream(filePath);
     // Attach an 'error' listener at creation time. A WriteStream that emits
     // 'error' with no listener re-throws as an uncaught exception and would
@@ -10071,6 +10217,7 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     // report a clean failure rather than taking the app down.
     stream.on('error', (err) => {
       sendDebugLog(`[sysaudio] write stream error: ${err.message}`);
+      try { recordingJournal.update(filePath, 'failed'); } catch (_) {}
       if (activeSysAudioWriteStream === stream) {
         activeSysAudioWriteStream = null;
         activeSysAudioFilePath = null;
@@ -10081,7 +10228,7 @@ ipcMain.handle('open-system-audio-file', async (_event, sessionName) => {
     activeSysAudioFilePath = filePath;
     activeSysAudioSummaryFile = summaryFileForAudio(filePath);
     activeSysAudioBytesWritten = 0;
-    sendDebugLog(`[sysaudio] opened ${filename} for incremental write`);
+    sendDebugLog('[sysaudio] opened recording for incremental write');
     return { success: true, filePath };
   } catch (error) {
     sendDebugLog(`Error opening system audio file: ${error.message}`);
@@ -10140,10 +10287,11 @@ ipcMain.handle('close-system-audio-file', async () => {
     // empty recording or leave a stray .webm, and report no usable file.
     if (bytesWritten === 0) {
       try { fs.unlinkSync(filePath); } catch (_) { /* */ }
-      sendDebugLog(`[sysaudio] closed empty recording, removed ${path.basename(filePath)}`);
+      recordingJournal.forget(recordingJournal.idFor(filePath));
+      sendDebugLog('[sysaudio] closed empty recording and removed file');
       return { success: false, error: 'Empty recording (no audio captured)' };
     }
-    sendDebugLog(`[sysaudio] closed ${path.basename(filePath)} (${bytesWritten} bytes)`);
+    sendDebugLog(`[sysaudio] closed recording (${bytesWritten} bytes)`);
     return { success: true, filePath };
   } catch (error) {
     sendDebugLog(`Error closing system audio file: ${error.message}`);
@@ -10261,21 +10409,18 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
     // notes) inherits the previous meeting's notes — a real, persisted leak
     // (surfaced by the My notes tab). Snapshot it to a per-job temp (mirrors
     // the live-transcript snapshot) and DELETE the shared draft, so each job
-    // owns its notes and the draft can't leak forward. The temp is cleaned up
-    // in the queue's finally.
+    // owns its notes and the draft can't leak forward. Recovery snapshots
+    // are cleaned up only after completed batch transcription.
     const notesFile = userNotesFilePath(getOutputDir(), actualSessionName);
     let notesPath;
     if (fs.existsSync(notesFile)) {
       try {
         const draft = fs.readFileSync(notesFile, 'utf-8');
-        fs.unlinkSync(notesFile);
         if (draft.trim()) {
-          notesPath = path.join(
-            os.tmpdir(),
-            `stenoai-notes-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
-          );
-          fs.writeFileSync(notesPath, draft, 'utf-8');
+          notesPath = saveRecoverySnapshot(audioFilePath, 'notes', draft);
+          recordingJournal.update(audioFilePath, 'recording', { notesFile: notesPath });
         }
+        fs.unlinkSync(notesFile);
       } catch (e) {
         sendDebugLog(`[notes] failed to snapshot draft notes: ${e.message}`);
       }
@@ -10285,7 +10430,7 @@ ipcMain.handle('process-system-audio-recording', async (event, audioFilePath, se
     // backend can fall back to it if the batch transcription comes back empty.
     // Done here at stop time, before liveTranscriptState gets reset by the next
     // recording.
-    const liveTranscriptFile = await snapshotLiveTranscriptForFallback(actualSessionName);
+    const liveTranscriptFile = await snapshotLiveTranscriptForFallback(actualSessionName, audioFilePath);
 
     // Consume the continue-recording target (set at start-recording-ui) so
     // this segment is appended to its note; cleared so the next recording
@@ -10889,6 +11034,7 @@ function loadGoogleTokens() {
     const tokenPath = getTokenFilePath();
     migrateLegacyCredentialFile(tokenPath, '.google-tokens');
     if (!fs.existsSync(tokenPath)) return null;
+    if (!keychainGate.isOpen()) return null;
     const encrypted = fs.readFileSync(tokenPath);
     const decrypted = getSafeStorage().decryptString(encrypted);
     return JSON.parse(decrypted);
@@ -10937,6 +11083,7 @@ function loadOutlookTokens() {
     const tokenPath = getOutlookTokenFilePath();
     migrateLegacyCredentialFile(tokenPath, '.outlook-tokens');
     if (!fs.existsSync(tokenPath)) return null;
+    if (!keychainGate.isOpen()) return null;
     const encrypted = fs.readFileSync(tokenPath);
     const decrypted = getSafeStorage().decryptString(encrypted);
     return JSON.parse(decrypted);
@@ -12315,7 +12462,7 @@ async function firePreMeetingNotification(event) {
   // meeting. Title collisions (two same-named meetings) are an accepted edge for a
   // heads-up notification.
   if (currentRecordingSessionName && currentRecordingSessionName === event.title) {
-    sendDebugLog(`[premeeting] suppressed — already recording "${event.title}"`);
+    sendDebugLog('[premeeting] suppressed — this meeting is already recording');
     return false;
   }
 
@@ -12611,6 +12758,11 @@ function loadOrgSessionEx() {
   if (!fs.existsSync(p)) {
     orgSessionDecryptFailingSince = null;
     return { session: null, exists: false, decryptFailed: false };
+  }
+  if (!keychainGate.isOpen()) {
+    // Same transient state as a locked Keychain: callers never act on it.
+    if (orgSessionDecryptFailingSince === null) orgSessionDecryptFailingSince = Date.now();
+    return { session: null, exists: true, decryptFailed: true };
   }
   try {
     const encrypted = fs.readFileSync(p);

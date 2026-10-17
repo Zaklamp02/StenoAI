@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import { MeetingsShell } from '@/components/MeetingsShell';
 import { UpcomingCard } from '@/components/home/UpcomingCard';
@@ -13,7 +14,7 @@ function dayKey(d: Date): string {
 }
 
 /** Upcoming meetings for the next week, one group per day. Each meeting is the
- *  same card as on Home: click to start a note, or Join / Join & take notes. */
+ *  same card as on Home: click for details; only explicit actions start notes. */
 export function Calendar() {
   const calendar = useCalendarEvents();
   const apple = useAppleCalendar();
@@ -70,40 +71,32 @@ export function Calendar() {
         <h1
           className="text-[32px] leading-tight tracking-tight"
           style={{ fontFamily: 'var(--font-serif)' }}
-        >
-          Calendar
-        </h1>
+        >{t('sidebar.calendar')}</h1>
 
         {calendar.isLoading ? (
-          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>Loading meetings…</p>
+          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>{t('calendar.loading_meetings')}</p>
         ) : apple.status.data?.enabled && apple.status.data.authorization !== 'full' ? (
-          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>
-            Apple Calendar is on, but StenoAI doesn't have calendar access.{' '}
+          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>{t('calendar.apple_calendar_is_on_but_stenoai_doesn')}{' '}
             <button
               type="button"
               className="underline"
               disabled={apple.connect.isPending}
               onClick={() => apple.connect.mutate()}
             >
-              {apple.connect.isPending ? 'Waiting for permission…' : 'Allow access'}
+              {apple.connect.isPending ? t('calendar.waiting_for_permission') : t('calendar.allow_access')}
             </button>
           </p>
         ) : !calendar.data || calendar.data.needsAuth ? (
-          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>
-            No calendar connected.{' '}
+          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>{t('calendar.no_calendar_connected')}{' '}
             <button
               type="button"
               className="underline"
               onClick={() => navigate('/settings?tab=general')}
-            >
-              Connect one in Settings
-            </button>
+            >{t('calendar.connect_one_in_settings')}</button>
             .
           </p>
         ) : days.length === 0 ? (
-          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>
-            No meetings in the next {DAYS_AHEAD} days.
-          </p>
+          <p className="mt-6 text-sm" style={{ color: 'var(--fg-2)' }}>{t('calendar.no_meetings', { days: DAYS_AHEAD })}</p>
         ) : (
           <div className="mt-8 flex flex-col gap-8">
             {days.map((day) => (
@@ -115,8 +108,7 @@ export function Calendar() {
                   {label(day.date)}
                 </h2>
                 {day.allDay.length > 0 && (
-                  <p className="mb-1 text-[12px]" style={{ color: 'var(--fg-muted)' }}>
-                    All day: {day.allDay.map((e) => e.title).join(' · ')}
+                  <p className="mb-1 text-[12px]" style={{ color: 'var(--fg-muted)' }}>{t('calendar.all_day')}{day.allDay.map((e) => e.title).join(' · ')}
                   </p>
                 )}
                 <div className="flex flex-col">

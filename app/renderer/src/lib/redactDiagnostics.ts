@@ -111,6 +111,10 @@ function escapeRegExp(s: string): string {
 
 function redactLine(line: string, storageRoot?: string): string {
   let out = line;
+  // Legacy capture logs used a bare title-derived filename. Handle those
+  // before path redaction, including spaces and Unicode in the title.
+  out = out.replace(/(^|[\s"'])sysaudio-\d+-[^\r\n]*?\.(?:webm|wav|m4a|mp3|mp4|json|md|txt)(?=$|[\s"'),;])/gi, '$1<recording>');
+  out = out.replace(/(\[premeeting\] suppressed [—-] already recording ).*$/, '$1<redacted>');
 
   // 1. URLs first: strip credentials + path so the path rules below never see a
   //    URL's internals (and can't mistake a URL path for a filesystem path).

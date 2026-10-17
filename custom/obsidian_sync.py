@@ -2,9 +2,8 @@
 """Sync StenoAI meeting notes and transcripts into the Obsidian vault.
 
 StenoAI keeps each meeting as one local file (`<stem>_summary.md`: frontmatter,
-summary sections, then `## Transcript`). Its built-in Obsidian sync drops the
-transcript, so this script splits each file into the same note + transcript pair
-the Fireflies sync writes, so process-daily-note treats both inboxes alike.
+summary sections, then `## Transcript`). The app and optional standalone scheduler use this exporter to create a linked
+note + transcript pair with speaker evidence and calendar invitees.
 
   <vault>/StenoAI/Meeting notes/YYYYMMDD-meetingnotes-<title>.md
   <vault>/StenoAI/Transcripts/YYYYMMDD-transcript-<title>.md
@@ -22,8 +21,11 @@ import argparse
 import difflib
 import hashlib
 import json
+import math
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import tempfile
@@ -119,6 +121,176 @@ def steno_output_dir(cfg):
     except (OSError, ValueError):
         pass
     return os.path.join(base, "output")
+
+
+def speaker_settings():
+    """Read only identification inputs; never export credentials or embeddings."""
+    raw = speaker_source(os.path.join(STENOAI_DATA_DIR, "config.json"))
+    config = json.loads(raw) if raw else {}
+    if not isinstance(config, dict):
+        raise RuntimeError("Speaker settings are unreadable; export will retry")
+    return {key: config.get(key) for key in ("identity_matching_enabled", "person_profiles")}
+
+
+def speaker_revision():
+    return sha(json.dumps(speaker_settings(), sort_keys=True, ensure_ascii=False))
+
+
+def speaker_source(path):
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        raise RuntimeError("Meeting identification context could not be read; export will retry") from None
+
+
+def speaker_backend(cfg):
+    configured = cfg.get("steno_backend") or os.environ.get("STENOAI_BACKEND_PATH")
+    if configured:
+        return os.path.expanduser(configured)
+    if sys.platform == "darwin":
+        return "/Applications/StenoAI.app/Contents/Resources/stenoai/stenoai"
+    return shutil.which("stenoai.exe" if sys.platform == "win32" else "stenoai")
+
+
+def identify_speakers(cfg, stem, sidecar_raw):
+    """Run the same model-free ranking as the app, BEFORE either vault write.
+
+    Acoustic analysis already runs during transcription. This reads its saved
+    results and scores current profiles; it never loads models or uploads audio.
+    A failed query holds back the export instead of silently dropping evidence.
+    """
+    settings = speaker_settings()
+    if settings["identity_matching_enabled"] is False:
+        return {"state": "disabled", "channels": {}}
+    if not sidecar_raw:
+        return {"state": "unavailable", "channels": {}}
+    sidecar = json.loads(sidecar_raw)
+    if not isinstance(sidecar, dict):
+        raise RuntimeError("Speaker analysis is invalid; export will retry")
+    backend = speaker_backend(cfg)
+    if not backend:
+        raise RuntimeError("Speaker identification backend is unavailable; export will retry")
+    # Keep an explicit test override, but don't manufacture one in production:
+    # the backend's override deliberately takes precedence over custom storage.
+    env = dict(os.environ)
+    try:
+        result = subprocess.run([backend, "suggest-speakers", stem], env=env,
+                                capture_output=True, text=True, timeout=60, check=True)
+        payload = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise RuntimeError("Speaker identification could not finish; export will retry") from None
+    if not isinstance(payload, dict) or payload.get("success") is not True or not isinstance(payload.get("channels"), dict):
+        raise RuntimeError("Speaker identification returned invalid results; export will retry")
+    expected = (sidecar.get("diarization_run") or {}).get("run_id")
+    # Legacy sidecars use a content token rather than an explicit run ID.
+    if expected and payload.get("diarization_run_id") != expected:
+        raise RuntimeError("Speaker analysis changed during export; export will retry")
+    return dict(payload, state="complete")
+
+
+def transcript_speaker_turns(transcript, manifest):
+    """Only link clusters to transcript turns when exact saved provenance fits.
+
+    Numbers refer to 1-based timestamped lines, not physical Markdown lines.
+    Never guess by nearby timestamps when the manifest is missing or stale.
+    """
+    turns = re.findall(r"^\[(\d{1,3}:\d{2}(?::\d{2})?)\]\s*\[([^\]]+)\]", transcript, re.M)
+    if not isinstance(manifest, list) or not manifest or len(turns) != len(manifest):
+        return None
+    owned = {}
+    for number, ((stamp, label), entry) in enumerate(zip(turns, manifest), 1):
+        if not isinstance(entry, dict):
+            return None
+        start = entry.get("start")
+        seconds = 0
+        for component in stamp.split(":"):
+            seconds = seconds * 60 + int(component)
+        if not isinstance(start, (int, float)) or not math.isfinite(start) or int(start) != seconds:
+            return None
+        key = (entry.get("channel"), entry.get("diarization_speaker_id"))
+        if all(isinstance(part, str) and part for part in key):
+            owned.setdefault(key, []).append((number, label))
+    return owned
+
+
+def speaker_context(stem, transcript, analysis, sidecar_raw, event):
+    sidecar = json.loads(sidecar_raw) if sidecar_raw else {}
+    owned = transcript_speaker_turns(transcript, sidecar.get("transcript_lines"))
+    rows = []
+    for channel, clusters in sorted(analysis.get("channels", {}).items()):
+        for sid, row in sorted(clusters.items()):
+            confirmed = row.get("confirmed_by_user")
+            mixed = bool(row.get("contains_multiple_speakers"))
+            generic = row.get("review_state") == "generic"
+            suggestion = row.get("suggested_name")
+            review = ("mixed" if mixed else "kept_generic" if generic else
+                      "confirmed" if confirmed else "unconfirmed" if suggestion else "unidentified")
+            fragment_ids = [sid, *(row.get("merged_from") or [])]
+            turns = sorted(turn for fragment in fragment_ids for turn in (owned or {}).get((channel, fragment), []))
+            candidates = [{key: candidate.get(key) for key in
+                           ("person_id", "display_name", "distance", "hard_negative_conflict")}
+                          for candidate in row.get("candidates", [])]
+            rows.append({
+                "speaker_ref": channel + "/" + sid, "channel": channel, "cluster_id": sid,
+                "merged_cluster_ids": row.get("merged_from") or [],
+                "transcript_labels": sorted({label for _, label in turns}),
+                "transcript_turns": [number for number, _ in turns],
+                "review_status": review,
+                "confirmed_name": confirmed if not mixed else None,
+                "confirmed_person_id": row.get("confirmed_person_id") if not mixed else None,
+                "suggested_name": suggestion if not mixed else None,
+                "suggested_person_id": row.get("suggested_person_id") if not mixed else None,
+                # Backend 'confirmed' means a strong *suggestion*, never human approval.
+                "suggestion_strength": {"confirmed": "likely", "possible": "possible"}.get(row.get("status")),
+                "likely_artifact": bool(row.get("is_likely_artifact")),
+                "hidden_in_app": bool((row.get("is_likely_artifact") or
+                    (row.get("status") == "none" and not candidates)) and not mixed and not generic),
+                "speech_seconds": row.get("speech_duration_seconds"),
+                "segment_count": row.get("segment_count"), "first_timestamp": row.get("first_timestamp"),
+                "match_candidates": candidates, "match_reasons": row.get("reasons") or [],
+            })
+    invitees = [{key: attendee.get(key) for key in ("name", "email", "self", "status")}
+                for attendee in (event or {}).get("attendees") or [] if isinstance(attendee, dict)]
+    return {"schema_version": 1, "meeting_id": stem, "analysis_status": analysis["state"],
+            "diarization_run_id": analysis.get("diarization_run_id"),
+            "transcript_sha256": sha(transcript),
+            "turn_mapping": "exact" if owned is not None else "unavailable",
+            "turn_numbering": "1-based timestamped transcript lines, excluding headers",
+            "match_distance_metric": "cosine distance; lower is more similar, not a probability",
+            "calendar_event": {key: (event or {}).get(key) for key in ("id", "title", "start", "end")},
+            "calendar_organizer": {key: ((event or {}).get("organizer") or {}).get(key) for key in ("name", "email")},
+            "calendar_invitees": invitees, "speakers": rows}
+
+
+def render_speaker_context(context):
+    def cell(value):
+        return str(value or "—").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    lines = ["## Speaker identification", "",
+             "Calendar invitees are invited, not verified attendees. Suggested names are unconfirmed; only confirmed names were approved by a person.",
+             'A "You" transcript label can be a microphone default. Match distances are not probabilities. Filtered rows are included.', "",
+             "Analysis status: **%s**." % context["analysis_status"], ""]
+    if context["calendar_invitees"]:
+        lines += ["### Calendar invitees", "", "| Name | Email | RSVP | Calendar self |", "| --- | --- | --- | --- |"]
+        for invitee in context["calendar_invitees"]:
+            lines.append("| %s | %s | %s | %s |" % (cell(invitee["name"]), cell(invitee["email"]), cell(invitee["status"]), "yes" if invitee["self"] else "no"))
+        lines.append("")
+    if context["speakers"]:
+        lines += ["### Speaker review", "", "| Speaker reference | Transcript labels | Identity | Review status | Notes |", "| --- | --- | --- | --- | --- |"]
+        for row in context["speakers"]:
+            name = row["confirmed_name"] if row["review_status"] == "confirmed" else row["suggested_name"]
+            notes = "Filtered in app; possible artifact" if row["likely_artifact"] else ""
+            lines.append("| %s | %s | %s | %s | %s |" % tuple(cell(v) for v in
+                (row["speaker_ref"], ", ".join(row["transcript_labels"]), name, row["review_status"], notes)))
+        lines.append("")
+    # JSON is stable, versioned and deliberately allowlisted; never copy raw
+    # speaker sidecars/config, which contain biometric embeddings and secrets.
+    encoded = json.dumps(context, ensure_ascii=False, indent=2, allow_nan=False)
+    fence = "`" * max(3, max((len(m.group()) + 1 for m in re.finditer(r"`+", encoded)), default=3))
+    lines += ["### Structured speaker data", "", fence + "json", encoded, fence]
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -236,7 +408,7 @@ def frontmatter(stem, meta, kind, counterpart_link, dt):
     if meta.get("language"):
         lines.append("language: %s" % meta["language"])
     event = meta.get("_calendar_event") or {}
-    invited = [a for a in event.get("attendees") or [] if not a.get("self")]
+    invited = [a for a in event.get("attendees") or [] if isinstance(a, dict)]
     names = [a.get("name") or a.get("email") for a in invited if a.get("name") or a.get("email")]
     if names:
         # From the calendar event StenoAI matched to this recording
@@ -253,6 +425,15 @@ def frontmatter(stem, meta, kind, counterpart_link, dt):
     participants = meta.get("_participants") or []
     if participants:
         lines.append("participants: [%s]" % ", ".join(yaml_escape(n) for n in participants))
+    context = meta.get("_speaker_context")
+    if context:
+        lines.append("speaker_identification_schema: 1")
+        lines.append("speaker_identification_status: " + context["analysis_status"])
+        for key, field, status in (("confirmed_speakers", "confirmed_name", "confirmed"),
+                                   ("suggested_speakers", "suggested_name", "unconfirmed")):
+            names = sorted({row[field] for row in context["speakers"] if row["review_status"] == status and row[field]})
+            lines.append(key + ": " + json.dumps(names, ensure_ascii=False))
+        lines.append("participants_source: steno_summary")
     lines.append("transcript_complete: true")
     lines.append("summary_available: %s" % ("true" if meta.get("_summary_available") else "false"))
     lines.append("summary_stale: %s" % ("true" if meta.get("notes_stale") else "false"))
@@ -266,6 +447,8 @@ def frontmatter(stem, meta, kind, counterpart_link, dt):
 def render_note(stem, meta, body, transcript_link, dt):
     out = [frontmatter(stem, meta, "note", transcript_link, dt), ""]
     out.append(body or "_No AI summary was available for this meeting._")
+    if meta.get("_speaker_context"):
+        out += ["", render_speaker_context(meta["_speaker_context"])]
     description = (meta.get("_calendar_event") or {}).get("description")
     if description:
         out += ["", "## Invitation", "", description]
@@ -277,6 +460,8 @@ def render_transcript(stem, meta, transcript, note_link, dt):
     out.append("# Transcript for: %s" % (meta.get("title") or "Untitled"))
     out.append("")
     out.append(transcript)
+    if meta.get("_speaker_context"):
+        out += ["", render_speaker_context(meta["_speaker_context"])]
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -333,7 +518,8 @@ AUTO_START = "<!-- stenoai:generated:start -->"
 AUTO_END = "<!-- stenoai:generated:end -->"
 MANAGED_KEYS = {"steno_id", "title", "type", "source", "created", "duration_minutes", "language",
                 "attendees", "attendee_emails", "attendees_source", "attendees_unresolved",
-                "calendar_event", "participants", "note", "transcript", "transcript_complete", "summary_available", "summary_stale"}
+                "calendar_event", "participants", "note", "transcript", "transcript_complete", "summary_available", "summary_stale",
+                "speaker_identification_schema", "speaker_identification_status", "confirmed_speakers", "suggested_speakers", "participants_source"}
 
 
 def split_document(text):
@@ -361,7 +547,14 @@ def merged_frontmatter(current, generated, previous=None):
     existing, fresh = frontmatter_blocks(old), frontmatter_blocks(new)
     baseline = frontmatter_blocks(previous or "")
     authoritative = {"steno_id", "type", "source", "note", "transcript", "participants",
-                     "transcript_complete", "summary_available", "summary_stale"}
+                     "transcript_complete", "summary_available", "summary_stale",
+                     "speaker_identification_schema", "speaker_identification_status", "confirmed_speakers", "suggested_speakers", "participants_source"}
+    # Calendar-sourced values follow calendar edits. Preserve independently
+    # enriched vault attendees only while StenoAI has no matched calendar event.
+    if fresh.get("attendees_source") == "attendees_source: calendar":
+        authoritative.update({"attendees", "attendee_emails", "attendees_source", "attendees_unresolved", "calendar_event"})
+    elif baseline.get("attendees_source") == "attendees_source: calendar":
+        authoritative.update({"attendees", "attendee_emails", "attendees_source", "attendees_unresolved", "calendar_event"})
     for key, value in existing.items():
         if key not in MANAGED_KEYS:
             fresh[key] = value
@@ -424,7 +617,29 @@ def refresh_managed(current, generated, entry, prefix):
     return merged_frontmatter(current, generated, entry.get(prefix + "_frontmatter")) + result.strip() + "\n", new_body
 
 
-def index_locations(cfg):
+def native_sync_index(cfg):
+    source = cfg.get("native_sync_state_path")
+    if not source:
+        return {}
+    try:
+        with open(source, encoding="utf-8") as fh:
+            return json.load(fh).get("notes", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def indexed_document(cfg, relative):
+    if not isinstance(relative, str) or os.path.isabs(relative):
+        return None
+    vault = os.path.realpath(cfg["vault"])
+    target = os.path.join(vault, relative)
+    if (os.path.commonpath([vault, os.path.realpath(target)]) != vault
+            or os.path.islink(target) or not os.path.isfile(target)):
+        return None
+    return read_text(target)
+
+
+def index_locations(cfg, synced=None):
     found = {}
     roots = [cfg["notes_folder"], cfg["transcripts_folder"], *(cfg.get("archive_folders") or [])]
     for folder in dict.fromkeys(roots):
@@ -442,6 +657,26 @@ def index_locations(cfg):
                 if match and kind:
                     stem = str(parse_frontmatter_value(match.group(1)))
                     found.setdefault((stem, kind.group(1)), []).append(os.path.relpath(path, cfg["vault"]))
+    # Native Settings exports used arbitrary root/folder paths. Adopt only an
+    # indexed file whose on-disk identity agrees; the old index had no vault ID.
+    candidates = [(stem, "note", entry.get("vaultRelPath"))
+                  for stem, entry in native_sync_index(cfg).items() if isinstance(entry, dict)]
+    for stem, entry in (synced or {}).items():
+        for kind in ("note", "transcript"):
+            candidates.append((stem, kind, entry.get(kind + "_rel")))
+    for stem, kind, relative in candidates:
+        current = indexed_document(cfg, relative)
+        if current is None:
+            continue
+        header, _ = split_document(current)
+        fields = {key: parse_frontmatter_value(value.split(":", 1)[1].strip())
+                  for key, value in frontmatter_blocks(header).items()}
+        rich = fields.get("steno_id") == stem and fields.get("type") == kind
+        native = kind == "note" and fields.get("source") == "Steno" and fields.get("steno_stem") == stem
+        if rich or native:
+            paths = found.setdefault((stem, kind), [])
+            if relative not in paths:
+                paths.append(relative)
     return found
 
 
@@ -563,9 +798,12 @@ def sync_one(cfg, synced, path, dry_run, force):
     raw = read_text(path)
     if raw is None:
         return False
-    calendar_raw = read_text(path[:-len("_summary.md")] + "_calendar.json") or ""
+    calendar_raw = speaker_source(path[:-len("_summary.md")] + "_calendar.json")
     canonical = canonical_transcript(cfg, stem)
-    source_hash = sha("managed-v2\n" + raw + calendar_raw + canonical)
+    speakers_path = path[:-len("_summary.md")] + "_speakers.json"
+    sidecar_raw = speaker_source(speakers_path)
+    profile_revision = speaker_revision()
+    source_hash = sha(json.dumps(["managed-v3-speakers", raw, calendar_raw, canonical, sidecar_raw, profile_revision]))
     entry = synced.get(stem) or {}
     if entry.get("source_hash") == source_hash and not force:
         return False
@@ -579,9 +817,28 @@ def sync_one(cfg, synced, path, dry_run, force):
                 synced[stem] = dict(entry, waiting_hash=source_hash, waiting_reason=unfinished)
         return False
     try:
-        meta["_calendar_event"] = json.loads(calendar_raw).get("event") if calendar_raw else None
+        calendar_data = json.loads(calendar_raw) if calendar_raw else {}
+        if not isinstance(calendar_data, dict):
+            raise ValueError("Invalid calendar context")
+        event = calendar_data.get("event")
+        if event is not None and not isinstance(event, dict):
+            raise ValueError("Invalid calendar event")
+        if event is not None and not isinstance(event.get("attendees") or [], list):
+            raise ValueError("Invalid calendar invitees")
+        if event is not None and not isinstance(event.get("organizer") or {}, dict):
+            raise ValueError("Invalid calendar organizer")
+        meta["_calendar_event"] = event
     except ValueError:
-        meta["_calendar_event"] = None
+        raise RuntimeError("Calendar context could not be read; export will retry") from None
+    analysis = identify_speakers(cfg, stem, sidecar_raw)
+    meta["_speaker_context"] = speaker_context(stem, transcript, analysis, sidecar_raw, meta["_calendar_event"])
+    # Ranking invokes a separate backend process. Never combine its answer with
+    # a transcript/review/profile revision that changed while it was running.
+    if (read_text(path) != raw or canonical_transcript(cfg, stem) != canonical
+            or speaker_source(speakers_path) != sidecar_raw
+            or speaker_source(path[:-len("_summary.md")] + "_calendar.json") != calendar_raw
+            or speaker_revision() != profile_revision):
+        raise RuntimeError("Meeting or speaker evidence changed during export; export will retry")
     participants = re.search(r"^## Participants[ \t]*\n(.*?)(?=^## |\Z)", body, re.M | re.S)
     meta["_participants"] = [p.strip() for p in participants.group(1).strip().split(",") if p.strip()] if participants else []
     meta["_summary_available"] = meta.get("notes_generated") is not False and bool(re.search(r"^## Summary[ \t]*$", raw, re.M))
@@ -590,7 +847,7 @@ def sync_one(cfg, synced, path, dry_run, force):
     local = dt.astimezone()
     locations = cfg.get("_locations")
     if locations is None:
-        locations = index_locations(cfg)
+        locations = index_locations(cfg, synced)
     note_name, tr_name = (entry.get("note_file"), entry.get("transcript_file"))
     if not note_name or not tr_name:
         note_name, tr_name = unique_names(cfg, local, title, stem)
@@ -620,7 +877,19 @@ def sync_one(cfg, synced, path, dry_run, force):
             if os.path.commonpath([vault, os.path.realpath(dest)]) != vault:
                 raise RuntimeError("Export target escapes the vault")
             current = read_text(dest)
-            content, baseline = refresh_managed(current, generated[kind], entry, prefix)
+            merge_entry = entry
+            if kind == "note" and current and not entry.get("note_hash"):
+                native = native_sync_index(cfg).get(stem, {})
+                header, _ = split_document(current)
+                if "steno_stem:" in header and native.get("vaultRelPath") == rel:
+                    merge_entry = dict(entry)
+                    if sha(current) == native.get("lastWrittenHash"):
+                        merge_entry.update(note_hash=sha(current), note_frontmatter=header)
+                    else:
+                        # Preserve custom native metadata as well as the body.
+                        # A fresh baseline marks its values as human changes.
+                        merge_entry["note_frontmatter"] = split_document(generated[kind])[0]
+            content, baseline = refresh_managed(current, generated[kind], merge_entry, prefix)
             outcome = write_file(dest, content, dry_run)
             if outcome != "unchanged":
                 log("  %s: %s -> %s" % (kind, outcome, rel))
@@ -644,7 +913,7 @@ def sync_one(cfg, synced, path, dry_run, force):
 def source_mtime(path):
     """Include speaker, transcript and calendar updates when scheduling a sync."""
     base = path[:-len("_summary.md")]
-    candidates = [path, base + "_calendar.json",
+    candidates = [path, base + "_calendar.json", base + "_speakers.json",
                   os.path.join(os.path.dirname(os.path.dirname(path)), "transcripts",
                                os.path.basename(base) + "_transcript.txt")]
     stamps = []
@@ -662,11 +931,14 @@ def sync(cfg, days, dry_run, force):
         log("StenoAI notes folder not found: %s" % out_dir)
         return 0
 
+    state = load_state()
+    synced = state.setdefault("synced", {})
     cutoff = time.time() - days * 86400
     paths = [
         os.path.join(out_dir, name) for name in os.listdir(out_dir)
         if name.endswith("_summary.md")
-        and source_mtime(os.path.join(out_dir, name)) >= cutoff
+        and (source_mtime(os.path.join(out_dir, name)) >= cutoff
+             or name[:-len("_summary.md")] in synced)
     ]
     # This run was usually started by the very write that saved the note, so wait
     # for it to settle here: skipping it would leave it until the 15-minute run.
@@ -678,9 +950,7 @@ def sync(cfg, days, dry_run, force):
     paths = [p for p in paths if os.path.exists(p)]
     paths.sort(key=source_mtime)
 
-    cfg = dict(cfg, _locations=index_locations(cfg))
-    state = load_state()
-    synced = state.setdefault("synced", {})
+    cfg = dict(cfg, _locations=index_locations(cfg, synced))
     # Per-note outcome for StenoAI's "In vault" line: the last error stays
     # until the note syncs cleanly again.
     errors = state.setdefault("errors", {})
@@ -705,13 +975,13 @@ def sync(cfg, days, dry_run, force):
     return written
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Sync StenoAI meetings into Obsidian")
     ap.add_argument("--days", type=int, help="how many days back to look")
     ap.add_argument("--dry-run", action="store_true", help="print actions without writing")
     ap.add_argument("--force", action="store_true",
                     help="revisit unchanged sources and recreate missing exports; preserve vault edits")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     cfg = load_config()
     if not os.path.isdir(cfg["vault"]):

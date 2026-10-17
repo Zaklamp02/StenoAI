@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import {
   CalendarDays,
@@ -408,7 +409,7 @@ export function Sidebar({
             onClick={() => navigate('/calendar')}
           >
             <CalendarDays className="size-[14px]" />
-            <span className="flex-1 truncate">Calendar</span>
+            <span className="flex-1 truncate">{t('sidebar.calendar')}</span>
           </button>
 
           <button
@@ -418,7 +419,7 @@ export function Sidebar({
             onClick={() => navigate('/people')}
           >
             <Users className="size-[14px]" />
-            <span className="flex-1 truncate">People</span>
+            <span className="flex-1 truncate">{t('sidebar.people')}</span>
           </button>
 
           {sharedNotes.enabled && (

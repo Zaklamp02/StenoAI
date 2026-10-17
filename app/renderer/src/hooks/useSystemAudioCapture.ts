@@ -7,6 +7,13 @@ import { startLinuxLoopbackStream, type LinuxLoopbackStream } from '@/lib/linuxL
 import { flushNotesThenProcess } from '@/lib/notesFlush';
 import { unwrap } from '@/lib/result';
 import { getLiveDraft } from './liveDraftStore';
+import { useCaptureCheckStore } from './captureCheckStore';
+import {
+  CAPTURE_CHECK_MS,
+  bufferPeak,
+  captureWarnings,
+  createCaptureCheck,
+} from '@/lib/captureCheck';
 import { useRecording } from './useRecording';
 import { useTranscriptionEngine } from './useModels';
 import {
@@ -24,6 +31,8 @@ import {
  *  exposing this just creates a knob no one tunes correctly. */
 const SILENCE_RMS_THRESHOLD = 0.01;
 const SILENCE_SAMPLE_INTERVAL_MS = 1_000;
+/** Pre-flight level meters refresh at 10 Hz during the check window. */
+const CAPTURE_CHECK_SAMPLE_MS = 100;
 
 /**
  * Mounts ONCE at App level. This is the ONLY recording path — whenever the
@@ -138,6 +147,9 @@ export function useSystemAudioCapture() {
   // setting and pause state are read via refs so the polling loop sees
   // current values without re-creating the interval.
   const silenceIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  // Pre-flight capture check (lib/captureCheck.ts): level meters for the
+  // first CAPTURE_CHECK_MS, then only while a channel is still flagged flat.
+  const captureCheckIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const silenceConfigRef = React.useRef<{ enabled: boolean; minutes: number }>({
     enabled: true,
     minutes: 15,
@@ -163,6 +175,14 @@ export function useSystemAudioCapture() {
   React.useEffect(() => {
     const bridge = ipc();
 
+    const teardownCaptureCheck = () => {
+      if (captureCheckIntervalRef.current !== null) {
+        clearInterval(captureCheckIntervalRef.current);
+        captureCheckIntervalRef.current = null;
+      }
+      useCaptureCheckStore.getState().reset();
+    };
+
     const teardownSilenceDetector = () => {
       if (silenceIntervalRef.current !== null) {
         clearInterval(silenceIntervalRef.current);
@@ -172,6 +192,7 @@ export function useSystemAudioCapture() {
 
     const teardownStreams = () => {
       teardownSilenceDetector();
+      teardownCaptureCheck();
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       sysStreamRef.current?.getTracks().forEach((t) => t.stop());
       mixedStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -278,6 +299,9 @@ export function useSystemAudioCapture() {
         //    stays null and the stereo graph below wires mic → L with a silent R
         //    channel (the backend tolerates an empty Others side). A genuine mic
         //    failure above still aborts.
+        // Whether system audio was wanted at all, for the pre-flight check: off
+        // by setting is not a failure and must never raise a warning.
+        const systemExpected = loopbackEnabledRef.current;
         try {
           if (!loopbackEnabledRef.current) {
             throw new Error('loopback disabled');
@@ -579,6 +603,40 @@ export function useSystemAudioCapture() {
           }
           return Math.sqrt(sumSq / buf.length);
         };
+
+        // 5a. Pre-flight capture check. Reads the same analysers as float
+        //     samples (byte samples round quiet room tone to zero) on its own
+        //     timer, publishing meters to the recording screen. Stops after
+        //     the window unless a channel is flat, in which case it keeps
+        //     watching so the warning clears itself once sound arrives.
+        {
+          const check = createCaptureCheck({ systemExpected, systemAcquired: sysAnalyser !== null });
+          const micFloat = new Float32Array(micAnalyser.fftSize);
+          const sysFloat = sysAnalyser ? new Float32Array(sysAnalyser.fftSize) : null;
+          const checkStartedAtMs = Date.now();
+          let checkLogged = false;
+          useCaptureCheckStore.getState().reset();
+          captureCheckIntervalRef.current = setInterval(() => {
+            micAnalyser.getFloatTimeDomainData(micFloat);
+            if (sysAnalyser && sysFloat) sysAnalyser.getFloatTimeDomainData(sysFloat);
+            const elapsedMs = Date.now() - checkStartedAtMs;
+            const state = check.sample(elapsedMs, bufferPeak(micFloat), sysFloat ? bufferPeak(sysFloat) : null);
+            useCaptureCheckStore.getState().publish(state);
+            if (elapsedMs < CAPTURE_CHECK_MS) return;
+            const warnings = captureWarnings(state);
+            if (warnings.length === 0 || warnings.every((w) => w === 'system-unavailable')) {
+              // Nothing left to watch: a missing loopback cannot recover.
+              if (captureCheckIntervalRef.current !== null) {
+                clearInterval(captureCheckIntervalRef.current);
+                captureCheckIntervalRef.current = null;
+              }
+            }
+            if (!checkLogged) {
+              checkLogged = true;
+              appendDebugLog(`[capture-check] after ${Math.round(elapsedMs / 1000)}s: mic=${state.mic.status} system=${state.system.status}`);
+            }
+          }, CAPTURE_CHECK_SAMPLE_MS);
+        }
 
         const micBuf = new Uint8Array(new ArrayBuffer(micAnalyser.fftSize));
         const sysBuf = sysAnalyser
@@ -920,6 +978,11 @@ export function useSystemAudioCapture() {
         clearInterval(silenceIntervalRef.current);
         silenceIntervalRef.current = null;
       }
+      if (captureCheckIntervalRef.current !== null) {
+        clearInterval(captureCheckIntervalRef.current);
+        captureCheckIntervalRef.current = null;
+      }
+      useCaptureCheckStore.getState().reset();
       // Close the incremental-write file so the partial recording is flushed
       // and the main-side stream isn't leaked across unmount. Reading
       // appendChainRef.current must be DEFERRED until after recorder.stop()'s

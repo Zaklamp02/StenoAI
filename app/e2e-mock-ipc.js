@@ -71,6 +71,12 @@ const SEED_MEETING = {
     processed_at: '2026-06-19T12:00:00Z',
     duration_seconds: 1500,
     transcription_failed: false,
+    ...(process.env.STENOAI_E2E_TRANSCRIPT_LANGUAGE ? {
+      configured_language: process.env.STENOAI_E2E_LANGUAGE_SETTING || 'auto',
+      detected_language: process.env.STENOAI_E2E_TRANSCRIPT_LANGUAGE === 'unknown'
+        ? null : process.env.STENOAI_E2E_TRANSCRIPT_LANGUAGE,
+      output_language: 'nl',
+    } : {}),
   },
   transcript: 'Alice: we ship Friday.\nBob: I will prep the release notes.',
   is_diarised: false,
@@ -1489,7 +1495,9 @@ function install({ ipcMain }) {
       },
     },
     'list-folders': { success: true, folders: [] },
-    'get-calendar-events': { success: true, events: [] },
+    'get-calendar-events': { success: true, events: process.env.STENOAI_E2E_CALENDAR === '1' ? [{ id: 'calendar-fixture', title: 'Calendar review fixture', start: new Date(Date.now() + 300000).toISOString(), end: new Date(Date.now() + 3600000).toISOString(), meeting_url: 'https://example.test/meeting', description: 'Invitation details' }] : [] },
+    'list-recoverable-recordings': { success: true, recordings: [] },
+    'get-telemetry': { success: true, telemetry_enabled: false },
     'meeting-calendar': {
       success: true,
       event: process.env.STENOAI_E2E_SEED_CALENDAR_INVITEES === '1' ? {

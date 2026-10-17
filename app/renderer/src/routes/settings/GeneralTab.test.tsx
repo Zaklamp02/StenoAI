@@ -75,6 +75,7 @@ const h = vi.hoisted(() => {
 vi.mock('@/hooks/useCalendarEvents', () => ({
   useGoogleCalendarAuth: () => h.google,
   useOutlookCalendarAuth: () => h.outlook,
+  useAppleCalendar: () => ({ status: { data: { enabled: false, available: true } }, connect: { mutate: vi.fn() }, disconnect: { mutate: vi.fn() } }),
 }));
 
 vi.mock('@/hooks/useTheme', () => ({

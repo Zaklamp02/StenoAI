@@ -3,19 +3,19 @@
   "version": "0.8.0",
   "description": "AI powered intelligence layer for confidential workflows",
   "main": "main.js",
-  "homepage": "https://github.com/stenolabs/stenoai",
+  "homepage": "https://github.com/Zaklamp02/StenoAI",
   "repository": {
     "type": "git",
-    "url": "https://github.com/stenolabs/stenoai.git"
+    "url": "https://github.com/Zaklamp02/StenoAI.git"
   },
   "scripts": {
-    "postinstall": "node scripts/patch-electron-dev.js",
+    "postinstall": "install-electron && node scripts/patch-electron-dev.js",
     "start": "npm run build:renderer && electron .",
     "start:nobuild": "electron .",
     "start:empty": "../dev/scripts/empty-state.sh --quit-app && npm start",
     "start:restore": "../dev/scripts/empty-state.sh --restore --quit-app && npm start",
     "dev:renderer": "vite",
-    "build:renderer": "vite build",
+    "build:renderer": "node scripts/write-build-info.cjs && vite build",
     "typecheck:renderer": "tsc -p renderer/tsconfig.json --noEmit",
     "lint:renderer": "eslint --config renderer/eslint.config.mjs renderer/src",
     "lint:main": "eslint --max-warnings 0 --config eslint.config.main.mjs main.js",
@@ -24,7 +24,7 @@
     "i18n:inventory": "node scripts/i18n-copy-inventory.mjs",
     "i18n:inventory:update": "node scripts/i18n-copy-inventory.mjs --update",
     "format:renderer": "prettier --write renderer/src",
-    "test:unit": "node --test person-contacts.test.js note-language.test.js audio-storage.test.js vault-sync-status.test.js chat-query.test.js reprocess-error.test.js brand-name.test.js meeting-transfer-audio.test.js meeting-transfer-codec.test.js meeting-transfer-store.test.js meeting-transfer-ipc.test.js parakeet-download-ipc.test.js processing-log.test.js linux-loopback.test.js meeting-detect.test.js notes-file.test.js backend-stream.test.js ipc-contract.test.js person-sample-ipc.test.js speaker-ipc.test.js speaker-model-prepare.test.js shortcut-url.test.js setup-check-parse.test.js diagnostics-forward.test.js analytics-helpers.test.js live-snapshot-sweep.test.js backend-cli.test.js openai-asr-safety.test.js openai-asr-ipc.test.js debug-log.test.js teardown.test.js folders-ipc.test.js settings-ipc.test.js regen-title-busy-guard.test.js update-idle-gate.test.js update-os-gate.test.js local-network-usage.test.js update-error-copy.test.js notification-copy.test.js obsidian-sync.test.js e2e-window-visibility.test.js i18n-gate.test.mjs && vitest run",
+    "test:unit": "node scripts/run-unit-tests.cjs",
     "build": "npm run build:renderer && electron-builder",
     "pack:unsigned": "npm run build:renderer && electron-builder --dir --config electron-builder.ci.yml",
     "build-mac": "npm run build:renderer && electron-builder --mac",
@@ -41,7 +41,9 @@
     "release:major": "npm run version:major && npm run build",
     "test:unit:watch": "vitest",
     "test:e2e": "cross-env NODE_PATH=node_modules playwright test --config ../e2e/playwright.config.ts",
-    "test:e2e:update": "cross-env NODE_PATH=node_modules playwright test --config ../e2e/playwright.config.ts --update-snapshots"
+    "test:e2e:update": "cross-env NODE_PATH=node_modules playwright test --config ../e2e/playwright.config.ts --update-snapshots",
+    "test:unit:main": "node --test person-contacts.test.js note-language.test.js audio-storage.test.js vault-sync-status.test.js cloud-concurrency.test.js keychain-gate.test.js speaker-model-warmup.test.js chat-query.test.js reprocess-error.test.js brand-name.test.js meeting-transfer-audio.test.js meeting-transfer-codec.test.js meeting-transfer-store.test.js meeting-transfer-ipc.test.js parakeet-download-ipc.test.js processing-log.test.js linux-loopback.test.js meeting-detect.test.js notes-file.test.js backend-stream.test.js ipc-contract.test.js person-sample-ipc.test.js speaker-ipc.test.js speaker-model-prepare.test.js shortcut-url.test.js setup-check-parse.test.js diagnostics-forward.test.js analytics-helpers.test.js live-snapshot-sweep.test.js backend-cli.test.js openai-asr-safety.test.js openai-asr-ipc.test.js debug-log.test.js teardown.test.js folders-ipc.test.js settings-ipc.test.js regen-title-busy-guard.test.js update-idle-gate.test.js update-os-gate.test.js local-network-usage.test.js update-error-copy.test.js notification-copy.test.js obsidian-sync.test.js e2e-window-visibility.test.js i18n-gate.test.mjs recording-journal.test.js apple-calendar.test.js obsidian-managed-sync.test.js",
+    "test:unit:renderer": "vitest run"
   },
   "keywords": [
     "audio",
@@ -59,7 +61,7 @@
     "@playwright/test": "^1.59.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
-    "@types/node": "^20.12.0",
+    "@types/node": "^24.0.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^8.59.0",
@@ -67,8 +69,8 @@
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.5.0",
     "cross-env": "^10.1.0",
-    "electron": "^42.7.1",
-    "electron-builder": "^26.0.0",
+    "electron": "^42.11.15",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-i18next": "^6.1.5",
@@ -79,12 +81,11 @@
     "playwright": "^1.59.1",
     "postcss": "^8.5.10",
     "prettier": "^3.8.3",
-    "puppeteer-core": "^24.37.3",
     "tailwindcss": "^3.4.19",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.5.0",
-    "vite": "^5.4.21",
-    "vitest": "^2.1.9"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",
@@ -96,11 +97,11 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.99.2",
     "@tanstack/react-virtual": "^3.13.24",
-    "axios": "^1.6.0",
+    "axios": "^1.20.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron-audio-loopback": "^1.0.6",
-    "electron-updater": "^6.8.3",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.8.0",
     "posthog-node": "^4.18.0",
     "react": "^19.2.5",
@@ -243,8 +244,18 @@
       "maintainer": "StenoAI <ruzin@stenoai.co>",
       "icon": "build/icon.png",
       "target": [
-        { "target": "deb", "arch": ["x64"] },
-        { "target": "AppImage", "arch": ["x64"] }
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "stenoAI-linux-${version}-${arch}.${ext}"
     },
@@ -298,5 +309,11 @@
       "owner": "stenolabs",
       "repo": "stenoai"
     }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "brace-expansion@5": "^5.0.12"
   }
 }

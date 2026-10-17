@@ -63,7 +63,7 @@ const IPC_TS = read('renderer/src/lib/ipc.ts');
 // the EMISSION sources only.
 const SIBLING_IPC_MODULES = fs
   .readdirSync(__dirname)
-  .filter((f) => /-ipc\.js$/.test(f) && f !== 'e2e-mock-ipc.js' && !/\.test\.js$/.test(f))
+  .filter((f) => f.endsWith('.js') && f !== 'main.js' && f !== 'e2e-mock-ipc.js' && !/\.test\.js$/.test(f))
   .map((f) => read(f));
 const EMIT_ONLY_SOURCES = ['debug-log.js'].map((f) => read(f));
 

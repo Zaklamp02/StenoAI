@@ -9,7 +9,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/app/dist/mac-arm64/StenoAI.app"
 TARGET=/Applications/StenoAI.app
-BACKUP="$HOME/code/stenoai-previous/StenoAI.app"
+BACKUP="$ROOT/.local/previous/StenoAI.app"
 
 [ -d "$APP" ] || { echo "No build at $APP — run custom/build.sh first" >&2; exit 1; }
 codesign --verify --deep --strict "$APP"

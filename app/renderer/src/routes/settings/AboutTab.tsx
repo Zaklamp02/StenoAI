@@ -26,7 +26,7 @@ function ExternalLinkAction({ label, onClick }: { label: string; onClick: () => 
 }
 
 const DISCORD_URL = 'https://discord.gg/DZ6vcQnxxu';
-const GITHUB_URL = 'https://github.com/stenolabs/stenoai';
+const GITHUB_URL = 'https://github.com/Zaklamp02/StenoAI';
 const TERMS_URL = 'https://stenoai.co/terms.html';
 const PRIVACY_URL = 'https://stenoai.co/privacy.html';
 
@@ -215,7 +215,7 @@ export function AboutTab() {
   // on the button itself (Checking for Updates -> You're on the latest
   // version / Check failed), so the description only needs to add the
   // persistent, actionable update-available case.
-  const versionLabel = `Version ${version.data?.version ?? '—'}`;
+  const versionLabel = `Version ${version.data?.version ?? '—'} · ${version.data?.build ?? 'local build'}`;
   const checkDescription =
     checkState.kind === 'update-available'
       ? `${versionLabel} — Update available (v${checkState.version})`

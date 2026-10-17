@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 
 import {
@@ -21,7 +22,7 @@ import {
 
 /**
  * One-time, soft privacy disclosure for existing installs upgrading into the
- * version that added telemetry + launch-on-login (both default ON). Nothing is
+ * version that added telemetry + launch-on-login (analytics now defaults off). Nothing is
  * gated or held back — the modal only discloses what's on and offers immediate
  * off-toggles. Acknowledging (the "Got it" button, the X, or Escape) marks the
  * notice seen forever via `privacy.markNoticeSeen()` and invalidates the gate
@@ -36,7 +37,7 @@ export function PrivacyConsentModal({ open }: { open: boolean }) {
 
   const telemetry = useTelemetrySetting();
   const setTelemetry = useSetTelemetry();
-  const telemetryEnabled = telemetry.data?.telemetry_enabled ?? true;
+  const telemetryEnabled = telemetry.data?.telemetry_enabled ?? false;
 
   const launchOnLogin = useLaunchOnLoginSetting();
   const setLaunchOnLogin = useSetLaunchOnLogin();
@@ -71,10 +72,7 @@ export function PrivacyConsentModal({ open }: { open: boolean }) {
         <DialogHeader>
           <DialogTitle>A quick note on privacy</DialogTitle>
           <DialogDescription>
-            To help find and fix failures, Steno sends anonymous usage data —
-            never your recordings, transcripts, or notes. Steno also starts
-            automatically when you log in. Both are on by default and you can
-            change either one anytime in Settings.
+            {t('privacy.optionalAnalytics')}
           </DialogDescription>
         </DialogHeader>
 

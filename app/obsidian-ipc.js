@@ -91,6 +91,10 @@ function registerObsidianIpc({
       return { success: true, conflicts: idx.conflicts || {} };
     } catch (e) { return { success: false, error: e.message }; }
   });
+  ipcMain.handle('retry-obsidian-sync', async () => {
+    const result = await obsidianSync.backfillAll();
+    return result.status === 'error' ? { success: false, error: 'Vault sync could not finish.' } : { success: true };
+  });
 }
 
 module.exports = { registerObsidianIpc };

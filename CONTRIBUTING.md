@@ -4,55 +4,10 @@ Thank you for your interest in contributing to Steno! This guide will help you g
 
 ## Getting Started
 
-### Prerequisites
-
-- macOS (required for development and testing)
-- Python 3.8+
-- Node.js 18+
-- Git
-
-### Local Development Setup
-
-1. **Fork and clone the repository**
-   ```bash
-   git clone https://github.com/your-username/stenoai.git
-   cd stenoai
-   ```
-
-2. **Set up Python environment**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   pip install -e .
-   ```
-
-3. **Install system dependencies**
-   ```bash
-   # Install Ollama
-   brew install ollama
-   ollama serve &
-   ollama pull gemma4:e2b-it-qat
-   
-   # Install ffmpeg
-   brew install ffmpeg
-   ```
-
-4. **Set up Electron app**
-   ```bash
-   cd app
-   npm install
-   npm start
-   ```
-
-5. **Test the setup**
-   ```bash
-   # Test CLI
-   python simple_recorder.py --help
-   
-   # Test app launch
-   cd app && npm start
-   ```
+Use the [Apple Silicon colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
+Python 3.11, Node 24 LTS and Xcode Command Line Tools are required. The CLI is
+bundled with PyInstaller; this repository is not an editable pip package.
+Build the backend and native helpers before starting Electron.
 
 ## Development Workflow
 

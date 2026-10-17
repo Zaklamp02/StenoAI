@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import { describe, expect, test } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { parseChatChart, chartTickFormatter, CHART_INSTRUCTIONS } from './chatChart';

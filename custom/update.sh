@@ -27,7 +27,7 @@ VERSION="${TAG#v}"
 echo "==> Current base $BASE, target $TAG"
 
 # --- 1. official app for the target release ---------------------------------
-DEST="$HOME/code/stenoai-official/$TAG"
+DEST="$ROOT/.local/official/$TAG"
 if [ ! -d "$DEST/StenoAI.app" ]; then
   mkdir -p "$DEST/download"
   DMG="$DEST/download/stenoAI-macos-$VERSION-arm64.dmg"
@@ -39,7 +39,8 @@ if [ ! -d "$DEST/StenoAI.app" ]; then
   rm -rf "$DEST/download"
 fi
 codesign --verify --deep --strict "$DEST/StenoAI.app"
-codesign -dv "$DEST/StenoAI.app" 2>&1 | grep -q "TeamIdentifier=$TEAM_ID" \
+DETAILS="$(codesign -dv "$DEST/StenoAI.app" 2>&1)"
+grep -Fq "TeamIdentifier=$TEAM_ID" <<< "$DETAILS" \
   || { echo "Official app is not signed by Steno Labs ($TEAM_ID)" >&2; exit 1; }
 spctl -a "$DEST/StenoAI.app"
 

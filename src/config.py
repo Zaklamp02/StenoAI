@@ -1034,7 +1034,8 @@ class Config:
             # (both use a .get() fallback); listed explicitly here since it's
             # new and the default matters for the "both hidden" warning logic.
             "show_menu_bar_icon": True,
-            "telemetry_enabled": True,
+            "telemetry_enabled": False,
+            "telemetry_consent_given": False,
             # Fresh installs see the disclosure during onboarding. Existing
             # configs missing this key are migrated to False so the one-time
             # upgrade notice is shown.
@@ -2026,7 +2027,8 @@ class Config:
 
     def get_telemetry_enabled(self) -> bool:
         """Get whether anonymous usage analytics are enabled."""
-        return self._config.get("telemetry_enabled", True)
+        return (self._config.get("telemetry_enabled", False) is True
+                and self._config.get("telemetry_consent_given", False) is True)
 
     def set_telemetry_enabled(self, enabled: bool) -> bool:
         """
@@ -2039,6 +2041,7 @@ class Config:
             True if saved successfully, False otherwise
         """
         self._config["telemetry_enabled"] = enabled
+        self._config["telemetry_consent_given"] = True
         return self._save()
 
     def get_privacy_notice_seen(self) -> bool:

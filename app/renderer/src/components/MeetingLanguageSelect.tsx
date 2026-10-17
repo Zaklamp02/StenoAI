@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import {
   Select,
   SelectContent,
@@ -26,7 +27,7 @@ export function MeetingLanguageSelect({
 }) {
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger className="h-8 w-[200px] text-[13px]" data-testid={testId} aria-label="Meeting language">
+      <SelectTrigger className="h-8 w-[200px] text-[13px]" data-testid={testId} aria-label={t('meetingLanguageSelect.meeting_language')}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

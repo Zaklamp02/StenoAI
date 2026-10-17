@@ -12,7 +12,8 @@ class _FakeSummarizer:
     def __init__(self, chunks):
         self._chunks = chunks
     def summarize_transcript_streaming(self, transcript, duration_minutes=0, language="en",
-                                       notes=None, progress_callback=None, template_prompt=None):
+                                       notes=None, progress_callback=None, template_prompt=None,
+                                       meeting_context=None):
         # assert the template prompt is threaded through
         assert template_prompt, "expected a template prompt"
         for c in self._chunks:
@@ -81,7 +82,8 @@ class DefaultTemplateReportTests(unittest.TestCase):
             model_name = "llama3.2:3b"
             def summarize_transcript_streaming(self, transcript, duration_minutes=0,
                                                language="en", notes=None,
-                                               progress_callback=None, template_prompt=None):
+                                               progress_callback=None, template_prompt=None,
+                                               meeting_context=None):
                 yield "## partial"
                 raise RuntimeError("model exploded mid-stream")
 

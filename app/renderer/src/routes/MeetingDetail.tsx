@@ -1437,9 +1437,9 @@ function DetailContent({
       <ConfirmDialog
         open={retranscribeOpen}
         onOpenChange={setRetranscribeOpen}
-        title="Re-transcribe this recording?"
-        description="This re-runs transcription with your transcription settings and the language below, replacing the transcript and regenerating the summary."
-        confirmLabel="Re-transcribe"
+        title={t('meetingDetail.re_transcribe_this_recording')}
+        description={t('meetingDetail.this_re_runs_transcription_with_your_transcription')}
+        confirmLabel={t('meetingDetail.re_transcribe')}
         isPending={retranscribe.isPending}
         onConfirm={async () => {
           const saved = await ipc().meetings.setLanguage(summaryFile, meetingLanguage);
@@ -1448,9 +1448,7 @@ function DetailContent({
           startRetranscribe();
         }}
       >
-        <label className="flex items-center justify-between gap-3 text-[13px]" style={{ color: 'var(--fg-2)' }}>
-          Language for this meeting
-          <MeetingLanguageSelect value={meetingLanguage} onChange={setMeetingLanguage} />
+        <label className="flex items-center justify-between gap-3 text-[13px]" style={{ color: 'var(--fg-2)' }}>{t('meetingDetail.language_for_this_meeting')}<MeetingLanguageSelect value={meetingLanguage} onChange={setMeetingLanguage} />
         </label>
       </ConfirmDialog>
     </article>

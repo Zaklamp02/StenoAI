@@ -32,6 +32,8 @@ import {
   useSetUserName,
   useTelemetrySetting,
   useUserName,
+  useKeepRecordingsSetting,
+  useSetKeepRecordings,
 } from '@/hooks/useSettings';
 import {
   useSetAiProvider,
@@ -234,7 +236,9 @@ export function Setup() {
   // immediately via the same backend used by the Settings page.
   const telemetry = useTelemetrySetting();
   const setTelemetry = useSetTelemetry();
-  const telemetryEnabled = telemetry.data?.telemetry_enabled ?? true;
+  const telemetryEnabled = telemetry.data?.telemetry_enabled ?? false;
+  const keepRecordings = useKeepRecordingsSetting();
+  const setKeepRecordings = useSetKeepRecordings();
 
   // Launch-on-login disclosed here too (defaults ON) so onboarding fully
   // discloses the two default-on behaviours; both persist immediately via the
@@ -541,7 +545,7 @@ export function Setup() {
             aria-label={t('downloads.speakers.ariaLabel')}
           />
         ) : statuses.speakers === 'running' && details.speakers?.startsWith('Downloading') ? (
-          <IndeterminateBar label="Downloading and preparing models..." kind="speakers" />
+          <IndeterminateBar label={t('setup.downloading_and_preparing_models')} kind="speakers" />
         ) : undefined,
     });
   }
@@ -789,8 +793,8 @@ export function Setup() {
               Anonymous usage analytics
             </div>
             <Muted className="mt-0.5">
-              Help improve Steno — meeting content is never sent. You can
-              change this any time in Settings → Advanced.
+              Off by default. If enabled, usage events go to Steno Labs through
+              PostHog; meeting content is excluded. Change this in Settings → Advanced.
             </Muted>
           </div>
           <Switch
@@ -801,10 +805,16 @@ export function Setup() {
           />
         </div>
 
-        <div
-          className="mt-3 flex items-start gap-4 rounded-md border border-border p-4"
-          data-setup-launch
-        >
+        <div className="mt-3 flex items-start gap-4 rounded-md border border-border p-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{t('setup.save_recordings')}</div>
+            <Muted className="mt-0.5">{t('setup.keep_audio_for_listening_language_retries_and')}</Muted>
+          </div>
+          <Switch checked={keepRecordings.data ?? false} disabled={keepRecordings.data === undefined}
+            onCheckedChange={v => setKeepRecordings.mutate(v)} aria-label={t('setup.save_recordings')} />
+        </div>
+
+        <div className="mt-3 flex items-start gap-4 rounded-md border border-border p-4" data-setup-launch>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium text-foreground">
               Launch on login
@@ -866,7 +876,7 @@ export function Setup() {
 
         <div className="mt-8 text-center text-xs text-muted-foreground">
           <a
-            href="https://github.com/stenolabs/stenoai/issues"
+            href="https://github.com/Zaklamp02/StenoAI/issues"
             target="_blank"
             rel="noreferrer"
             className="hover:text-foreground"

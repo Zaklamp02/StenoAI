@@ -8,6 +8,14 @@ import { redactDiagnostics } from '@/lib/redactDiagnostics';
 const redact = (line: string, storageRoot?: string): string =>
   redactDiagnostics([line], { storageRoot })[0];
 
+test('legacy bare capture names and calendar titles are redacted', () => {
+  const lines = ['[sysaudio] opened sysaudio-1792240000000-Confidential_Board.webm for incremental write',
+    '[premeeting] suppressed — already recording "Confidential Board"'];
+  const result = redactDiagnostics(lines);
+  expect(result.join('\n')).not.toContain('Confidential');
+  expect(redactDiagnostics(result)).toEqual(result);
+});
+
 describe('redactDiagnostics - home dir', () => {
   test('macOS /Users/<name>/ -> ~/ (any username, generically)', () => {
     expect(redact('SAVED:/Users/alice/Documents/notes.txt')).toBe('SAVED:~/Documents/notes.txt');

@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import { MeetingsShell } from '@/components/MeetingsShell';
 import { PeopleTab } from '@/routes/settings/PeopleTab';
 
@@ -11,13 +12,8 @@ export function People() {
         <h1
           className="text-[32px] leading-tight tracking-tight"
           style={{ fontFamily: 'var(--font-serif)' }}
-        >
-          People
-        </h1>
-        <p className="mt-4 mb-8 max-w-[580px] text-sm leading-relaxed" style={{ color: 'var(--fg-2)' }}>
-          People you've named in a meeting's Speakers section. Steno uses their voice
-          profiles to suggest them in later meetings.
-        </p>
+        >{t('sidebar.people')}</h1>
+        <p className="mt-4 mb-8 max-w-[580px] text-sm leading-relaxed" style={{ color: 'var(--fg-2)' }}>{t('people.people_you_ve_named_in_a_meeting')}</p>
         <PeopleTab />
       </div>
     </MeetingsShell>

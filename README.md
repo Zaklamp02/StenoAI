@@ -18,7 +18,7 @@
   <a href="#sponsors"><img src="https://img.shields.io/badge/Sponsors-%E2%9D%A4-EA4AAA?style=for-the-badge" alt="Sponsors"></a>
 </p>
 
-<p align="center">StenographAI is the privacy-first AI notepad for all your confidential conversations. No cloud, no usage limits and your private data never leaves your premises. Record, summarize, and query your meetings using local AI models. Perfect for government, defence and C-suite professionals with confidential data needs.</p>
+<p align="center">StenographAI is the privacy-first AI notepad for all your confidential conversations. Local processing is available; optional cloud providers receive the audio or text you choose to process with them. Usage analytics is off by default in this fork. Record, summarize, and query your meetings using local AI models. Perfect for government, defence and C-suite professionals with confidential data needs.</p>
 
 <p align="center"><sub>Trusted by teams at <b>AWS</b>, <b>Deliveroo</b>, <b>Tesco</b>, <b>Hashicorp</b>, <b>Rutgers</b> & <b>European Union</b>.</sub></p>
 
@@ -251,39 +251,14 @@ Issues + feedback welcome on the GitHub issues tracker.
 
 ## Local Development/Use Locally
 
-### Prerequisites
-- Python 3.9+
-- Node.js 18+
+For this Apple Silicon fork, follow [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
+It contains the supported runtimes, verified native-helper setup, local signing,
+permissions, model choices and testing commands.
 
-### Setup
-```bash
-git clone https://github.com/stenolabs/stenoai.git
-cd stenoai
-
-# Backend setup
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Download bundled binaries (Ollama, ffmpeg)
-./scripts/download-ollama.sh
-
-# Build the Python backend
-pip install pyinstaller
-pyinstaller stenoai.spec --noconfirm
-
-# Frontend
-cd app
-npm install
-npm start
-```
-
-Note: Ollama and ffmpeg are bundled - no system installation needed. The setup wizard in the app will download the required AI models automatically.
-
-### Build
-```bash
-cd app
-npm run build
+```sh
+custom/setup-signing.sh  # once per Mac; creates a local signing identity
+custom/bootstrap.sh     # Node 24 + Python 3.11 + Xcode Command Line Tools
+custom/install.sh       # separate installation step
 ```
 
 ## Project Structure

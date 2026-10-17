@@ -236,9 +236,8 @@ test('LIST and DETAIL agree on the FULL parsed contract, incl. reasoning-tag nor
   expect(listed, 'seeded note present in list').toBeTruthy();
 
   // Restrict to the fields both parsers surface. list-meetings strips the
-  // transcript (fetched lazily by get-meeting) and adds has_transcript, and the
-  // Python session_info carries configured_language/detected_language that the JS
-  // side does not — those are out of scope here, so compare the intersection.
+  // transcript (fetched lazily by get-meeting) and adds has_transcript.
+  // Optional fields not set in this fixture are normalized below.
   const contract = (m: Meeting) => {
     const si = m.session_info;
     return {
@@ -255,6 +254,8 @@ test('LIST and DETAIL agree on the FULL parsed contract, incl. reasoning-tag nor
         // normalize, so key identity on the filename the parsers surface.
         summary_file: String(si.summary_file).split(/[\\/]/).pop(),
         output_language: si.output_language ?? null,
+        configured_language: si.configured_language ?? null,
+        detected_language: si.detected_language ?? null,
         notes_stale: si.notes_stale ?? false,
         is_live_transcript: si.is_live_transcript ?? false,
         notes_generated: si.notes_generated ?? true,
@@ -275,4 +276,24 @@ test('LIST and DETAIL agree on the FULL parsed contract, incl. reasoning-tag nor
   expect(detailContract.summary).toContain('renders correctly');
   // Full-contract parity: LIST (Python) and DETAIL (JS) must agree byte-for-byte.
   expect(detailContract).toEqual(contract(listed!));
+});
+
+// Language provenance must survive both parsers: the transcript panel reads DETAIL.
+test('get-meeting preserves detected, configured and notes languages separately', async ({ launchApp, userDataDir }) => {
+  const file = writeMeetingMarkdown(userDataDir, 'language', {
+    name: 'Language provenance',
+    summaryMarkdown: '## Summary\nDutch notes.',
+    transcript: 'Bonjour tout le monde.',
+    frontmatter: { configured_language: 'auto', detected_language: 'fr', language: 'nl' },
+  });
+  const { page } = await launchApp();
+  const detail = await getMeeting(page, file);
+  expect(detail.success, detail.error).toBe(true);
+  expect(detail.meeting!.session_info).toMatchObject({
+    configured_language: 'auto', detected_language: 'fr', output_language: 'nl',
+  });
+  const listed = (await listMeetings(page)).meetings.find((m) => m.session_info.summary_file === file);
+  expect(listed!.session_info).toMatchObject({
+    configured_language: 'auto', detected_language: 'fr', output_language: 'nl',
+  });
 });

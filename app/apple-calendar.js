@@ -115,7 +115,7 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     const res = await runHelper([
       'events', '--from', isoAt(timeMs - 6 * 3600 * 1000), '--to', isoAt(timeMs + 3600 * 1000),
     ]);
-    if (!res.success) return null;
+    if (!res.success) throw new Error('Calendar lookup failed. Check access and try again.');
     const LEAD_MS = 10 * 60 * 1000;
     let best = null;
     for (const event of res.events || []) {
@@ -136,44 +136,96 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     return m ? Number(m[1]) : null;
   }
 
-  /** `<stem>_calendar.json` next to the note: the calendar event the meeting
-   *  belongs to (or null when none matched), looked up once by recording start
-   *  time. That covers notes started from the calendar and plain recordings
-   *  alike. Nothing is written while Apple Calendar is not connected, so a
-   *  later connect still fills in older notes. */
-  async function ensureMeetingCalendar(summaryPath) {
-    if (!summaryPath || !summaryPath.endsWith('_summary.md')) return null;
-    const sidecar = summaryPath.replace(/_summary\.md$/, '_calendar.json');
-    try {
-      return JSON.parse(fs.readFileSync(sidecar, 'utf-8'));
-    } catch {
-      // not looked up yet
-    }
-    const startMs = recordingStartMs(summaryPath);
-    if (startMs === null || !isEnabled()) return null;
-    const event = await eventAt(startMs);
-    const record = { checked_at: new Date().toISOString(), event };
-    try {
-      fs.writeFileSync(sidecar, JSON.stringify(record, null, 2), 'utf-8');
-    } catch (e) {
-      sendDebugLog(`[apple-calendar] could not save ${path.basename(sidecar)}: ${e.message}`);
-    }
+  const MEETING_CACHE_MS = 5 * 60 * 1000;
+  function readRecord(summaryPath) {
+    try { return JSON.parse(fs.readFileSync(summaryPath.replace(/_summary\.md$/, '_calendar.json'), 'utf8')); }
+    catch { return null; }
+  }
+  function saveRecord(summaryPath, record) {
+    const dest = summaryPath.replace(/_summary\.md$/, '_calendar.json');
+    const tmp = `${dest}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(record, null, 2), { mode: 0o600 });
+    fs.renameSync(tmp, dest);
     return record;
   }
-
-  ipcMain.handle('meeting-calendar', async (_event, summaryFile) => {
-    if (typeof summaryFile !== 'string' || !isAllowedSummaryPath(summaryFile)) {
-      return { success: false, error: 'Invalid note' };
+  async function meetingOptions(summaryPath, previous) {
+    if (process.platform !== 'darwin' || !isEnabled()) throw new Error('Connect Apple Calendar in Settings first.');
+    const start = recordingStartMs(summaryPath) ?? Date.parse(previous?.event?.start);
+    if (!Number.isFinite(start)) return [];
+    const iso = ms => new Date(ms).toISOString();
+    const res = await runHelper(['events', '--from', iso(start - 24 * 3600 * 1000), '--to', iso(start + 24 * 3600 * 1000)]);
+    if (!res.success) throw new Error('Calendar lookup failed. Check access and try again.');
+    return (res.events || []).filter(e => !e.is_all_day && e.response_status !== 'declined');
+  }
+  async function ensureMeetingCalendar(summaryPath, { force = false } = {}) {
+    if (!summaryPath || !summaryPath.endsWith('_summary.md')) return null;
+    const previous = readRecord(summaryPath);
+    if (previous?.detached) return previous;
+    if (!isEnabled()) return previous;
+    if (!force && previous && Date.now() - Date.parse(previous.checked_at) < MEETING_CACHE_MS) return previous;
+    // A helper failure throws before saving: it is never persisted as no-match.
+    let event;
+    if (previous?.event?.id) {
+      const options = await meetingOptions(summaryPath, previous);
+      event = options.find(e => e.id === previous.event.id && e.start === previous.event.start) || null;
+    } else {
+      const start = recordingStartMs(summaryPath);
+      if (start === null) return previous;
+      event = await eventAt(start);
     }
-    const record = await ensureMeetingCalendar(summaryFile);
-    return { success: true, event: record ? record.event : null };
+    // A user unlink/rematch or a newer lookup wins over this in-flight refresh.
+    const latest = readRecord(summaryPath);
+    if (JSON.stringify(latest) !== JSON.stringify(previous) || !isEnabled()) return latest;
+    return saveRecord(summaryPath, { checked_at: new Date().toISOString(), event });
+  }
+  const validNote = p => typeof p === 'string' && p.endsWith('_summary.md') && isAllowedSummaryPath(p);
+  ipcMain.handle('meeting-calendar', async (_event, summaryFile) => {
+    if (!validNote(summaryFile)) return { success: false, error: 'Invalid note' };
+    try {
+      const record = await ensureMeetingCalendar(summaryFile);
+      return { success: true, event: record?.event || null };
+    } catch (e) {
+      // Display the last successful snapshot through a temporary outage.
+      return { success: true, event: readRecord(summaryFile)?.event || null, warning: e.message };
+    }
+  });
+  ipcMain.handle('meeting-calendar-options', async (_event, summaryFile) => {
+    if (!validNote(summaryFile)) return { success: false, error: 'Invalid note' };
+    try { return { success: true, events: await meetingOptions(summaryFile, readRecord(summaryFile)) }; }
+    catch (e) { return { success: false, error: e.message }; }
+  });
+  ipcMain.handle('update-meeting-calendar', async (_event, summaryFile, change) => {
+    if (!validNote(summaryFile)) return { success: false, error: 'Invalid note' };
+    try {
+      let record;
+      if (change?.action === 'unlink') {
+        record = saveRecord(summaryFile, { checked_at: new Date().toISOString(), event: null, detached: true });
+      } else if (change?.action === 'match') {
+        const previous = readRecord(summaryFile);
+        const options = await meetingOptions(summaryFile, previous);
+        if (JSON.stringify(readRecord(summaryFile)) !== JSON.stringify(previous)) throw new Error('The invitation changed. Try again.');
+        const event = options.find(e => e.id === change.eventId && e.start === change.eventStart);
+        if (!event) throw new Error('This calendar event is no longer available. Refresh and try again.');
+        record = saveRecord(summaryFile, { checked_at: new Date().toISOString(), event });
+      } else if (change?.action === 'refresh') {
+        const previous = readRecord(summaryFile);
+        if (previous?.detached) {
+          const start = recordingStartMs(summaryFile);
+          const event = start === null ? null : await eventAt(start);
+          if (JSON.stringify(readRecord(summaryFile)) !== JSON.stringify(previous)) throw new Error('The invitation changed. Try again.');
+          record = saveRecord(summaryFile, { checked_at: new Date().toISOString(), event });
+        } else record = await ensureMeetingCalendar(summaryFile, { force: true });
+      } else throw new Error('Invalid calendar action');
+      return { success: true, event: record?.event || null };
+    } catch (e) { return { success: false, error: e.message }; }
   });
 
   ipcMain.handle('apple-calendar-event-at', async (_event, timeMs) => {
     if (typeof timeMs !== 'number' || !Number.isFinite(timeMs)) {
       return { success: false, error: 'Invalid time' };
     }
-    return { success: true, event: await eventAt(timeMs) };
+    try { return { success: true, event: await eventAt(timeMs) }; }
+    catch (e) { return { success: false, error: e.message }; }
   });
 
   ipcMain.handle('apple-calendar-disconnect', async () => {

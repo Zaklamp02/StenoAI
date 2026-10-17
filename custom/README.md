@@ -1,7 +1,7 @@
 # Custom StenoAI build
 
-This branch (`custom`) is StenoAI with a few personal changes on top of an
-official release. It is built locally and replaces `/Applications/StenoAI.app`.
+This fork extends an official StenoAI release. For a fresh clone, follow
+[the colleague quickstart](COLLEAGUE_QUICKSTART.md). It is built locally and replaces `/Applications/StenoAI.app`.
 Notes, settings and speaker profiles (`~/Library/Application Support/stenoai`)
 are shared with the official app, so switching back and forth is safe.
 
@@ -14,7 +14,7 @@ are shared with the official app, so switching back and forth is safe.
 | OpenAI transcription: three-minute overlapping parts, six requests shared across both channels, chronological assembly, per-part progress and durable re-transcription checkpoints | `src/openai_asr_jobs.py`, `src/transcriber.py`, `app/main.js`, `MeetingDetail.tsx` | candidate PR |
 | Processing feedback: distinct preparation/transcription/speaker/summary stages, restored from a serializable queue snapshot on opening a note | `app/main.js`, `MeetingDetail.tsx`, backend progress events | candidate PR |
 | Cloud recommendation: gpt-transcribe JSON with local acoustic speaker turns, parallel per-turn ASR and exact audio-turn timestamps | `src/cloud_speaker_transcription.py`, `src/transcriber.py`, tests | custom only |
-| Complete transcript + available summary/My notes exported to Obsidian; speaker edits refresh managed sections while preserving vault annotations and archived files | `custom/obsidian_sync.py`, `custom/OBSIDIAN_SYNC.md`, tests | custom only |
+| Complete transcript + available summary/My notes exported to Obsidian, with versioned speaker suggestions/confirmations, exact turn references and calendar invitees; later profile/review/calendar edits refresh archived exports while preserving vault annotations | `custom/obsidian_sync.py`, `custom/OBSIDIAN_SYNC.md`, tests | custom only |
 | Settings: model suggestions + hint for cloud transcription | `app/renderer/src/routes/settings/AiTab.tsx`, `en.json` | candidate PR |
 | Speakers panel appears without leaving the note after processing | `app/renderer/src/hooks/useSpeakerSuggestions.ts`, `SpeakerReviewPanel.tsx`, `useRecording.ts` | candidate PR |
 | Auto-update off (it would install the stock app over this one) | `app/main.js` (`IS_CUSTOM_BUILD`) | custom only |
@@ -67,7 +67,7 @@ and bounded retries; numeric Retry-After is honored within the retry limits.
 The approved 41m59.6s real-meeting test completed a fresh full re-transcription
 in **8m48.8s**, with the same gpt-4o-transcribe-diarize model and no checkpoint
 hits. Real-meeting recovery reused 29 completed parts and finished in 3m34.3s.
-Stage timings and verification limits are kept in local notes.
+These are individual benchmark runs, not accuracy guarantees.
 
 ## Model comparison and developer benchmarks
 
@@ -125,11 +125,8 @@ cloud jobs use the existing main-process credential loader. Logs/results are
 private local benchmark files. No benchmark UI or renderer credential access
 is exposed. `src/asr_benchmark.py` defines the job/result format.
 
-For colleagues, use a private fork for maintenance and a Developer ID signed,
-notarized DMG for installation. Current local builds are arm64/macOS 14.4+ and
-are not notarized distribution builds. Local signing identity alone does not
-provide smooth installation on other Macs. Keep credentials, user data and the
-personal handover out of any shared source archive.
+Colleagues build and sign locally using `custom/bootstrap.sh`; no distributed
+DMG is required. Keep credentials, recordings and private working notes out of Git.
 
 ## Build and install
 
@@ -142,8 +139,9 @@ custom/install.sh      # quits StenoAI, keeps the old app, installs, relaunches
 
 `build.sh` reuses the native helpers (steno-diarize, steno-audio-encode,
 mic-monitor, Ollama, ffmpeg) from the pristine official app in
-`~/code/stenoai-official/`, so no Swift toolchain is needed. Python 3.11 comes
-from Anaconda (`PYTHON311` overrides it).
+`.local/official/` inside this checkout. `bootstrap.sh` downloads and verifies
+that pinned release when absent. Xcode Command Line Tools compile the Calendar
+helper. Python 3.11 is found on PATH (`PYTHON311` overrides it).
 
 Local builds use **StenoAI Local Signing**, a self-signed certificate created
 in the login keychain. Setup grants it user-level trust for code signing only
@@ -187,6 +185,6 @@ this Mac; these builds are not notarized for distribution.
 ## Roll back
 
 ```bash
-ditto ~/code/stenoai-official/StenoAI.app /Applications/StenoAI.app   # official 0.8.0
-ditto ~/code/stenoai-previous/StenoAI.app /Applications/StenoAI.app   # previous build
+ditto ~/Documents/StenoAI/.local/official/StenoAI.app /Applications/StenoAI.app   # official 0.8.0
+ditto ~/Documents/StenoAI/.local/previous/StenoAI.app /Applications/StenoAI.app   # previous build
 ```

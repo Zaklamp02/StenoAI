@@ -125,6 +125,8 @@ class PartialCoverageStreamingTests(unittest.TestCase):
             reason.assert_called_once_with("Tomorrow.", False, 16 / 61)
             summary = (root / "meeting_summary.md").read_text(encoding="utf-8")
             transcript = (recorder.transcripts_dir / "meeting_transcript.txt").read_text(encoding="utf-8")
+            self.assertIn("TRANSCRIPTION_SOURCE:live", result.output)
+            self.assertNotIn("TRANSCRIPTION_SOURCE:batch", result.output)
             self.assertIn("is_live_transcript: true", summary)
             self.assertIn(live_text, summary)
             self.assertIn(live_text, transcript)

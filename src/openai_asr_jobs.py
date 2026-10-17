@@ -41,9 +41,13 @@ def _prune(root):
         pass
 
 
+# Upper bound for STENOAI_OAI_PARALLELISM (Settings → AI, default 6 in the app).
+MAX_PARALLELISM = 12
+
+
 def parallelism():
     try:
-        return max(1, min(6, int(os.environ.get("STENOAI_OAI_PARALLELISM", "1"))))
+        return max(1, min(MAX_PARALLELISM, int(os.environ.get("STENOAI_OAI_PARALLELISM", "1"))))
     except ValueError:
         return 1
 

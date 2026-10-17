@@ -9,9 +9,9 @@
 #   custom/stage-official-binaries.sh [/path/to/official/StenoAI.app]
 set -euo pipefail
 
-OFFICIAL="${1:-$HOME/code/stenoai-official/StenoAI.app}"
-INTERNAL="$OFFICIAL/Contents/Resources/stenoai/_internal"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+OFFICIAL="${1:-$ROOT/.local/official/StenoAI.app}"
+INTERNAL="$OFFICIAL/Contents/Resources/stenoai/_internal"
 BIN="$ROOT/bin"
 
 if [ ! -d "$INTERNAL/ollama" ]; then

@@ -57,6 +57,16 @@ class OpenAiJobTests(unittest.TestCase):
                     self.assertEqual(sorted(job.result()), [(i, i) for i in range(4)])
         self.assertEqual(peak, 2)
 
+    def test_parallelism_setting_is_clamped_to_one_through_twelve(self):
+        from src.openai_asr_jobs import parallelism
+        for raw, expected in (('1', 1), ('6', 6), ('12', 12), ('13', 12), ('40', 12),
+                              ('0', 1), ('-3', 1), ('six', 1)):
+            with self.subTest(raw=raw), patch.dict(os.environ, {'STENOAI_OAI_PARALLELISM': raw}):
+                self.assertEqual(parallelism(), expected)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('STENOAI_OAI_PARALLELISM', None)
+            self.assertEqual(parallelism(), 1)
+
     def test_cached_result_is_invalidated_by_audio_model_language_and_corruption(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'STENOAI_OAI_CACHE_DIR': tmp}):
             audio = Path(tmp) / 'audio.wav'

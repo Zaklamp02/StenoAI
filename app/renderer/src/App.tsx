@@ -23,6 +23,8 @@ import { BottomDockSlot } from '@/components/BottomDockSlot';
 import { PrimaryDock } from '@/components/PrimaryDock';
 import { useLiveTranscriptOpen } from '@/hooks/liveTranscriptOpenStore';
 import { QuitDialog } from '@/components/QuitDialog';
+import { KeychainWaitBanner } from '@/components/KeychainWaitBanner';
+import { RecordingRecovery } from '@/components/RecordingRecovery';
 import { PrivacyConsentModal } from '@/components/PrivacyConsentModal';
 import { usePrivacyNoticeSeen } from '@/hooks/useSettings';
 import { ImportDropZone } from '@/components/ImportDropZone';
@@ -252,6 +254,8 @@ export function App() {
       <AskBarProvider>
         <RouteView route={route} />
         <QuitDialog />
+        <KeychainWaitBanner />
+        {route !== '/setup' && <RecordingRecovery />}
         <PrivacyConsentModal open={showPrivacyModal} />
         <ImportDropZone />
 

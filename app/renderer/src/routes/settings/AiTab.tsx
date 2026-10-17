@@ -206,8 +206,8 @@ export function AudioStorageLimitSetting() {
   const used = state ? formatMb(state.usedBytes / 1_000_000) : '…';
   return (
     <SettingRow
-      label="Recordings storage limit"
-      description={`When saved audio passes this size, the oldest recordings are deleted. Notes and transcripts are kept. Now using ${used}.`}
+      label={t('aiTab.recordings_storage_limit')}
+      description={t('aiTab.when_saved_audio_passes_this_size_the', { used: used })}
     >
       <div className="flex w-[220px] items-center gap-3">
         <input
@@ -220,15 +220,69 @@ export function AudioStorageLimitSetting() {
           onPointerUp={(e) => save(Number((e.target as HTMLInputElement).value))}
           onKeyUp={(e) => save(Number((e.target as HTMLInputElement).value))}
           disabled={!state}
-          aria-label="Recordings storage limit"
+          aria-label={t('aiTab.recordings_storage_limit')}
           data-testid="audio-storage-limit"
           className="w-full accent-[color:var(--fg-1)]"
         />
         <span className="w-[64px] shrink-0 text-right text-[13px] tabular-nums" style={{ color: 'var(--fg-1)' }}>
-          {stop === null ? 'No limit' : formatMb(stop)}
+          {stop === null ? t('aiTab.no_limit') : formatMb(stop)}
         </span>
       </div>
     </SettingRow>
+  );
+}
+
+const CLOUD_CONCURRENCY_OPTIONS = Array.from({ length: 12 }, (_, i) => i + 1);
+const DEFAULT_CLOUD_CONCURRENCY = 6;
+
+/**
+ * How many cloud transcription requests run at once, shared across the
+ * microphone and system-audio channels. Applies from the next job.
+ */
+export function CloudConcurrencySetting() {
+  const [value, setValue] = React.useState<number | null>(null);
+  const [error, setError] = React.useState(false);
+  React.useEffect(() => {
+    void ipc().settings.getCloudConcurrency().then((res) => {
+      setValue(res.success ? res.concurrency : DEFAULT_CLOUD_CONCURRENCY);
+    });
+  }, []);
+  const save = (next: number) => {
+    const previous = value;
+    setValue(next);
+    void ipc().settings.setCloudConcurrency(next).then((res) => {
+      setError(!res.success);
+      setValue(res.success ? res.concurrency : previous);
+    });
+  };
+  return (
+    <div>
+      <label
+        htmlFor="openai-asr-concurrency"
+        className="mb-1 block text-[12px] font-medium uppercase"
+        style={{ letterSpacing: '0.06em', color: 'var(--fg-muted)' }}
+      >{t('aiTab.parallel_requests')}</label>
+      <Select
+        value={value === null ? undefined : String(value)}
+        onValueChange={(v) => save(Number(v))}
+        disabled={value === null}
+      >
+        <SelectTrigger id="openai-asr-concurrency" className={COMPACT_TRIGGER} data-testid="openai-asr-concurrency">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {CLOUD_CONCURRENCY_OPTIONS.map((n) => (
+            <SelectItem key={n} value={String(n)}>
+              {n === DEFAULT_CLOUD_CONCURRENCY ? t('aiTab.n_default', { n: n }) : String(n)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="mt-1 text-[12px]" style={{ color: 'var(--fg-muted)' }}>{t('aiTab.requests_sent_at_the_same_time_shared')}</p>
+      {error && (
+        <p role="alert" className="mt-1 text-[11.5px]" style={{ color: 'var(--danger, #b42318)' }}>{t('aiTab.could_not_save_this_setting')}</p>
+      )}
+    </div>
   );
 }
 
@@ -306,12 +360,12 @@ export function SpeakerIdentificationSetting() {
   const setEnabled = useSetIdentityMatchingEnabled();
   return (
     <SettingRow
-      label="Speaker identification"
-      description="Optional and off by default."
+      label={t('aiTab.speaker_identification')}
+      description={t('aiTab.optional_and_off_by_default')}
       descriptionId="speaker-identification-description"
     >
       <Switch
-        aria-label="Speaker identification"
+        aria-label={t('aiTab.speaker_identification')}
         aria-describedby="speaker-identification-description"
         checked={enabled.data ?? false}
         onCheckedChange={(value) => setEnabled.mutate(value)}
@@ -664,6 +718,7 @@ function OpenAiAsrConfig() {
           {t('settings.ai.cloudAsr.modelHint')}
         </p>
       </div>
+      <CloudConcurrencySetting />
       <div>
         <label
           htmlFor="openai-asr-api-key"

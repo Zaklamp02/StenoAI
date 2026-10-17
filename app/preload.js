@@ -109,6 +109,9 @@ const stenoai = {
   },
 
   recording: {
+    recoverable: () => invoke('list-recoverable-recordings'),
+    recover: (id) => invoke('recover-recording', id),
+    dismissRecovery: (id) => invoke('dismiss-recoverable-recording', id),
     start: (name, trigger, appendTo) =>
       invoke('start-recording-ui', name, trigger, appendTo),
     stop: () => invoke('stop-recording-ui'),
@@ -311,6 +314,9 @@ const stenoai = {
     getKeepRecordings: () => invoke('get-keep-recordings'),
     getAudioStorage: () => invoke('get-audio-storage'),
     setAudioStorage: (limitMb) => invoke('set-audio-storage', limitMb),
+    getKeychainState: () => invoke('get-keychain-state'),
+    getCloudConcurrency: () => invoke('get-cloud-concurrency'),
+    setCloudConcurrency: (n) => invoke('set-cloud-concurrency', n),
     setKeepRecordings: (v) => invoke('set-keep-recordings', v),
     getAutoSummarize: () => invoke('get-auto-summarize'),
     setAutoSummarize: (v) => invoke('set-auto-summarize', v),
@@ -343,6 +349,7 @@ const stenoai = {
     setObsidianVaultPath: (p) => invoke('set-obsidian-vault-path', p),
     pickObsidianVaultFolder: () => invoke('select-obsidian-vault-folder'),
     getObsidianConflicts: () => invoke('get-obsidian-conflicts'),
+    retryObsidianSync: () => invoke('retry-obsidian-sync'),
     getAiPrompts: () => invoke('get-ai-prompts'),
     saveDiagnostics: (defaultFilename, content) =>
       invoke('save-diagnostics', defaultFilename, content),
@@ -382,6 +389,8 @@ const stenoai = {
       eventAt: (timeMs) => invoke('apple-calendar-event-at', timeMs),
     },
     meetingEvent: (summaryFile) => invoke('meeting-calendar', summaryFile),
+    meetingOptions: (summaryFile) => invoke('meeting-calendar-options', summaryFile),
+    updateMeeting: (summaryFile, change) => invoke('update-meeting-calendar', summaryFile, change),
     getEvents: () => invoke('get-calendar-events'),
   },
 
@@ -479,6 +488,7 @@ const stenoai = {
     meetingTransferImported: (cb) => subscribe('meeting-transfer-imported', cb),
     showQuitDialog: (cb) => subscribe('show-quit-dialog', cb),
     showNotification: (cb) => subscribe('show-notification', cb),
+    keychainState: (cb) => subscribe('keychain-state', cb),
   },
 
   subscribeQueryStream,

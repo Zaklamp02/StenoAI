@@ -208,6 +208,37 @@ def _normalize_markdown_for_parsing(md_text: str) -> str:
 
 
 _ACTION_ITEM_LINE = re.compile(r'^(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\]\s)(\S.*)$')
+_ACTION_TASK_LINE = re.compile(r'^[-*+]\s+\[([ xX])\]\s+(\S.*)$')
+
+# Owner / due-date clean-up for action items written as
+# "Name: task (due YYYY-MM-DD)" (see summarizer._action_item_rules). Models
+# sometimes wrap the owner in bold or brackets, write "(due: …)", or fill the
+# slots with placeholders when nothing was stated — owners and dates are only
+# kept when the transcript gave them, so placeholders are dropped.
+_ACTION_BOLD_OWNER = re.compile(r'^\*\*([^*\n]{1,80}?)(?::\*\*|\*\*:)\s+')
+_ACTION_BRACKET_OWNER = re.compile(r'^\[([^\[\]\n]{1,80})\]:\s+')
+_ACTION_PLACEHOLDER_OWNER = re.compile(
+    r'^(?:unassigned|tbd|tba|unknown|n/?a|none|owner|name|nobody|someone|'
+    r'onbekend|niemand|nvt|n\.v\.t\.)\s*:\s+',
+    re.IGNORECASE,
+)
+_ACTION_DUE_ISO = re.compile(r'\(\s*(?:due|deadline|by)\s*:?\s*(\d{4}-\d{2}-\d{2})\s*\)', re.IGNORECASE)
+_ACTION_DUE_PLACEHOLDER = re.compile(
+    r'\s*\(\s*(?:due|deadline)\s*:?\s*(?:yyyy-mm-dd|unknown|n/?a|none|null|tbd|tba|'
+    r'not stated|not specified|-|—)?\s*\)',
+    re.IGNORECASE,
+)
+
+
+def _normalize_action_item(text: str) -> str:
+    """One action item as ``Name: task (due YYYY-MM-DD)``, owner and due date
+    optional; never adds either, only tidies what the model wrote."""
+    tidy = _ACTION_BOLD_OWNER.sub(r'\1: ', text, count=1)
+    tidy = _ACTION_BRACKET_OWNER.sub(r'\1: ', tidy, count=1)
+    tidy = _ACTION_PLACEHOLDER_OWNER.sub('', tidy, count=1)
+    tidy = _ACTION_DUE_PLACEHOLDER.sub('', tidy)
+    tidy = _ACTION_DUE_ISO.sub(r'(due \1)', tidy).strip()
+    return tidy or text
 
 
 def _action_items_as_tasks(md_text: str) -> str:
@@ -216,6 +247,7 @@ def _action_items_as_tasks(md_text: str) -> str:
     Task-list syntax works in Obsidian, GitHub and most Markdown editors, so
     exported notes can be ticked off where they land. Items already written
     as tasks keep their state; other sections and nested lines are untouched.
+    Owners and due dates are tidied to ``Name: task (due YYYY-MM-DD)``.
     """
     out = []
     in_actions = False
@@ -223,11 +255,48 @@ def _action_items_as_tasks(md_text: str) -> str:
         if line.startswith('## '):
             in_actions = line.strip().startswith('## Action Items')
         elif in_actions:
-            match = _ACTION_ITEM_LINE.match(line)
-            if match:
-                line = f'- [ ] {match.group(1)}'
+            task = _ACTION_TASK_LINE.match(line)
+            match = None if task else _ACTION_ITEM_LINE.match(line)
+            if task:
+                line = f'- [{task.group(1)}] {_normalize_action_item(task.group(2))}'
+            elif match:
+                line = f'- [ ] {_normalize_action_item(match.group(1))}'
         out.append(line)
     return '\n'.join(out)
+
+
+def _meeting_context_for_note(summary_path, participants=None):
+    """Calendar event, confirmed speakers and meeting date for a note's
+    summary prompt: ``<stem>_calendar.json`` next to the note (written by
+    Electron's apple-calendar.js), person profiles confirmed for this meeting,
+    plus any names already in the note. Never raises — a summary must not
+    fail over its optional context."""
+    try:
+        from src.meeting_context import (
+            build_meeting_context, load_calendar_event, meeting_date_from_stem,
+        )
+        summary_path = Path(summary_path)
+        name = summary_path.name
+        stem = name[:-len('_summary.md')] if name.endswith('_summary.md') else summary_path.stem
+        speakers = [p for p in (participants or []) if isinstance(p, str)]
+        try:
+            from src.config import get_config
+            from src.speaker_suggestions import confirmed_participant_names
+            speakers += confirmed_participant_names(stem, get_config().get_person_profiles())
+        except Exception as e:
+            logger.debug(f"No confirmed speakers for the summary prompt: {type(e).__name__}")
+        event = load_calendar_event(summary_path)
+        context = build_meeting_context(event, speakers, meeting_date_from_stem(stem))
+        if context is not None:
+            # Counts only — names and invitation text stay out of the logs.
+            logger.info(
+                f"Meeting context: calendar event={'yes' if event else 'no'}, "
+                f"{len(context.invitees)} invitees, {len(context.speakers)} speakers"
+            )
+        return context
+    except Exception as e:
+        logger.warning(f"Meeting context unavailable: {type(e).__name__}")
+        return None
 
 # Shared atomic writers (tempfile + os.replace + Windows PermissionError
 # retry). One implementation for the summary JSON and config.json (recorder_state.json
@@ -878,6 +947,8 @@ Summary output language: {config.get_language_name(output_language)}
             transcript_text=text_for_summary,
         )
 
+        meeting_context = _meeting_context_for_note(self.output_dir / f"{audio_path.stem}_summary.md")
+
         print("PROGRESS:summarize:start", flush=True)
         print("🧠 Generating summary...", flush=True)
         streamed_chunks = []
@@ -885,6 +956,7 @@ Summary output language: {config.get_language_name(output_language)}
             for chunk in self.summarizer.summarize_transcript_streaming(
                 text_for_summary, duration_minutes, output_language, notes_text,
                 progress_callback=_emit_progress,
+                meeting_context=meeting_context,
             ):
                 encoded = base64.b64encode(chunk.encode('utf-8')).decode('ascii')
                 sys.stdout.write(f"CHUNK:{encoded}\n")
@@ -1009,6 +1081,7 @@ def generate_default_template_report(summary_path, transcript, notes, language,
             for chunk in summarizer.summarize_transcript_streaming(
                 transcript, duration_minutes, report_language, notes,
                 template_prompt=tmpl["prompt"],
+                meeting_context=_meeting_context_for_note(summary_path),
             ):
                 chunks.append(chunk)
         finally:
@@ -1381,6 +1454,9 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         duration_seconds = transcript_data.get("duration_seconds")
         duration_minutes = int(duration_seconds / 60) if duration_seconds else 0
 
+        # Explicit provenance lets the shell protect retry audio after a live
+        # fallback, even though that fallback is a successful note creation.
+        print(f"TRANSCRIPTION_SOURCE:{'live' if is_live_transcript else 'batch'}", flush=True)
         print(f"TRANSCRIPTION_COMPLETE:{len(transcript_text)}", flush=True)
 
         # Continue-recording (append) path: fold this segment's transcript
@@ -1492,6 +1568,9 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         )
 
         import base64
+        meeting_context = _meeting_context_for_note(
+            recorder.output_dir / f"{Path(audio_file).stem}_summary.md"
+        )
         streamed_chunks = []
         # Keep the watchdog alive through model load + prompt eval — the
         # silent stretch before the first streamed token. Stopped on the
@@ -1502,6 +1581,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             for chunk in recorder.summarizer.summarize_transcript_streaming(
                 text_for_summary, duration_minutes, output_language, notes_text,
                 progress_callback=_emit_progress,
+                meeting_context=meeting_context,
             ):
                 summary_heartbeat.set()
                 encoded = base64.b64encode(chunk.encode('utf-8')).decode('ascii')
@@ -2041,6 +2121,39 @@ def get_obsidian_sync_cmd():
     from src.config import get_config
     config = get_config()
     print(json.dumps({"obsidian_sync_enabled": config.get_obsidian_sync_enabled()}))
+
+
+@cli.command(name='sync-obsidian')
+@click.option('--state-dir', required=True, type=click.Path(file_okay=False))
+def sync_obsidian_cmd(state_dir):
+    """Export transcripts, notes and speaker evidence using the configured vault."""
+    from src.config import get_config, get_data_dirs, get_user_data_dir
+    from custom import obsidian_sync
+    config = get_config()
+    if not config.get_obsidian_sync_enabled() or not config.get_obsidian_vault_path():
+        return
+    state_dir = os.path.abspath(state_dir)
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    obsidian_sync.CONFIG_DIR = state_dir
+    obsidian_sync.CONFIG_PATH = os.path.join(state_dir, 'config.json')
+    obsidian_sync.STATE_PATH = os.path.join(state_dir, 'state.json')
+    obsidian_sync.LOG_PATH = os.path.join(state_dir, 'sync.log')
+    cfg = obsidian_sync.load_config()
+    # Existing standalone settings and edit-preservation state are reused.
+    cfg.update(vault=config.get_obsidian_vault_path(), days_back=36500,
+               steno_output_dir=str(get_data_dirs()['output']),
+               steno_transcript_dir=str(get_data_dirs()['transcripts']),
+               native_sync_state_path=str(Path(get_user_data_dir()) / '.obsidian-sync-state.json'))
+    if getattr(sys, 'frozen', False):
+        cfg['steno_backend'] = sys.executable
+    else:
+        cfg['steno_backend'] = str(Path(__file__).parent / 'dist' / 'stenoai' / ('stenoai.exe' if sys.platform == 'win32' else 'stenoai'))
+    if not os.path.exists(obsidian_sync.CONFIG_PATH):
+        cfg['link_from_daily_notes'] = False
+    obsidian_sync.atomic_text(obsidian_sync.CONFIG_PATH, json.dumps(cfg, indent=2))
+    code = obsidian_sync.main([])
+    if code:
+        sys.exit(code)
 
 
 @cli.command(name='set-obsidian-sync')
@@ -3435,6 +3548,10 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             from src.summarizer import OllamaSummarizer
             recorder.summarizer = OllamaSummarizer()
 
+        meeting_context = _meeting_context_for_note(
+            summary_path, existing_data.get('participants') or [],
+        )
+
         print("PROGRESS:summarize:start", flush=True)
         print("Generating summary...", flush=True)
         streamed_chunks = []
@@ -3446,6 +3563,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             for chunk in recorder.summarizer.summarize_transcript_streaming(
                 transcript, duration_minutes, output_language, notes_text,
                 progress_callback=_emit_progress,
+                meeting_context=meeting_context,
             ):
                 summary_heartbeat.set()
                 encoded = base64.b64encode(chunk.encode('utf-8')).decode('ascii')
@@ -3902,6 +4020,7 @@ def generate_report(summary_file, template_id):
             transcript, duration_minutes, output_language, notes_text,
             progress_callback=_emit_progress,
             template_prompt=tmpl["prompt"],
+            meeting_context=_meeting_context_for_note(summary_path),
         ):
             summary_heartbeat.set()
             encoded = base64.b64encode(chunk.encode('utf-8')).decode('ascii')

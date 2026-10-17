@@ -1,10 +1,15 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import {
+  AlertTriangle,
   Calendar as CalendarIcon,
   ChevronLeft,
   Clock,
   FolderPlus,
+  Mic,
   PencilLine,
+  Volume2,
+  X,
 } from 'lucide-react';
 import { MeetingsShell } from '@/components/MeetingsShell';
 import { MeetingLanguageSelect } from '@/components/MeetingLanguageSelect';
@@ -14,6 +19,8 @@ import { useRecording } from '@/hooks/useRecording';
 import { useLiveMeeting } from '@/hooks/useLiveMeeting';
 import { UI_LOCALE } from '@/lib/locale';
 import { isLiveRowStatus } from '@/lib/liveMeetingRow';
+import { useCaptureCheckStore } from '@/hooks/captureCheckStore';
+import { captureWarnings, type ChannelCheck } from '@/lib/captureCheck';
 
 export function Recording() {
   const navigate = useNavigate();
@@ -111,6 +118,8 @@ export function Recording() {
               </div>
             </header>
 
+            <CaptureCheckPanel />
+
             <section>
               <div
                 className="mb-2 inline-flex items-center gap-1.5 text-[13px]"
@@ -137,6 +146,98 @@ export function Recording() {
         </div>
       </div>
     </MeetingsShell>
+  );
+}
+
+const CAPTURE_WARNING_COPY = {
+  'mic-flat':
+    'No sound from your microphone. Check the microphone chosen in Settings and that StenoAI may use it (System Settings → Privacy & Security → Microphone).',
+  'system-unavailable':
+    'System audio is not being recorded, only your microphone. Allow StenoAI under System Settings → Privacy & Security → Screen & System Audio Recording, then start a new recording.',
+} as const;
+
+/**
+ * Pre-flight capture check (first 20 s): a level meter per channel, then a
+ * warning for a silent microphone or a failed system-audio capture.
+ * A silent but acquired system channel is normal for in-person meetings. Fed by useSystemAudioCapture through captureCheckStore.
+ */
+function CaptureCheckPanel() {
+  const state = useCaptureCheckStore((s) => s.state);
+  const dismissed = useCaptureCheckStore((s) => s.dismissed);
+  const dismiss = useCaptureCheckStore((s) => s.dismiss);
+  if (!state) return null;
+  const warnings = dismissed ? [] : captureWarnings(state);
+  if (!state.checking && warnings.length === 0) return null;
+  return (
+    <div className="-mt-4 mb-6 space-y-2" data-testid="capture-check">
+      {state.checking && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]" style={{ color: 'var(--fg-2)' }}>
+          <span style={{ color: 'var(--fg-muted)' }}>{t('recording.checking_audio')}</span>
+          <LevelMeter icon={<Mic size={12} />} label={t('recording.microphone')} channel={state.mic} />
+          <LevelMeter icon={<Volume2 size={12} />} label={t('recording.system_audio')} channel={state.system} />
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div
+          role="alert"
+          data-testid="capture-check-warning"
+          className="flex items-start gap-2 rounded-md px-3 py-2 text-[13px] leading-[1.45]"
+          style={{
+            color: 'var(--fg-1)',
+            background: 'var(--surface-raised)',
+            border: '1px solid var(--danger, #b42318)',
+          }}
+        >
+          <AlertTriangle size={14} className="mt-[3px] shrink-0" style={{ color: 'var(--danger, #b42318)' }} />
+          <div className="flex-1 space-y-1">
+            {warnings.map((w) => (
+              <p key={w}>{CAPTURE_WARNING_COPY[w]}</p>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label={t('recording.dismiss_audio_warning')}
+            className="cursor-pointer rounded border-0 bg-transparent p-0.5 hover:bg-[color:var(--surface-hover)]"
+            style={{ color: 'var(--fg-2)' }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LevelMeter({ icon, label, channel }: { icon: React.ReactNode; label: string; channel: ChannelCheck }) {
+  const inactive = channel.status === 'off' || channel.status === 'unavailable';
+  return (
+    <span className="inline-flex items-center gap-1.5" data-testid={`capture-meter-${label === 'Microphone' ? 'mic' : 'system'}`}>
+      {icon}
+      {label}
+      {inactive ? (
+        <span style={{ color: 'var(--fg-muted)' }}>{channel.status === 'off' ? t('recording.off') : t('recording.not_captured')}</span>
+      ) : (
+        <span
+          className="relative inline-block h-[5px] w-[72px] overflow-hidden rounded-full"
+          style={{ background: 'var(--border-subtle)' }}
+          role="meter"
+          aria-label={t('recording.label_level', { label: label })}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(channel.level * 100)}
+        >
+          <span
+            className="absolute inset-y-0 left-0 rounded-full"
+            style={{
+              width: `${Math.round(channel.level * 100)}%`,
+              background: channel.status === 'flat' ? 'var(--danger, #b42318)' : 'var(--fg-1)',
+              transition: 'width 90ms linear',
+            }}
+          />
+        </span>
+      )}
+    </span>
   );
 }
 

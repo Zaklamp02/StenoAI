@@ -12,12 +12,16 @@ const title = "What’s new in Steno";
 const seenKey = "steno-last-seen-release";
 
 async function foreground(app: ElectronApplication) {
-  await app.evaluate(({ BrowserWindow }) => {
+  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows().find((w) =>
       w.webContents.getURL().includes("index.html"),
     )!;
     win.show();
+    // A window can be visible without activating its application on macOS.
+    // Exercise real foreground state with CDP focus emulation still disabled.
+    if (process.platform === 'darwin') electronApp.focus({ steal: true });
     win.focus();
+    win.webContents.focus();
   });
 }
 

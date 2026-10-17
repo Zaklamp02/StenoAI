@@ -57,14 +57,10 @@ scripts/download-ollama.sh
 pyinstaller stenoai.spec --noconfirm
 ```
 
-`stenoai.spec` bundles `bin/steno-diarize` only when it exists and only on
-macOS (`_IS_DARWIN`). A local development build may omit it and falls back
-to legacy channel-only "You"/"Others" labeling. A macOS release build must
-build it first and assert both `bin/steno-diarize` and the bundled copy are
-executable; the release workflows enforce those checks. A failed individual
-diarization run still falls back without failing the meeting. Windows/Linux
-never get acoustic diarization;
-`_resolve_steno_diarize()` returns `None` immediately off-darwin.
+`stenoai.spec` requires the diarization sidecar on macOS. Build it first or use
+`custom/bootstrap.sh` to stage the verified upstream helpers. A failed individual
+analysis can still fall back to channel labels. Windows/Linux do not bundle the
+macOS acoustic diarizer.
 
 FluidAudio models are prepared explicitly during macOS onboarding with
 `prepare-speaker-models` and checked without writes via `speaker-model-status`.

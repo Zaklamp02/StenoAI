@@ -3,7 +3,7 @@
 #
 # Only the Python backend and the Electron app are built here. The native
 # helpers (Swift sidecars, Ollama, ffmpeg) are taken from the matching official
-# release, so no Swift 6 / Xcode toolchain is needed.
+# release. Xcode Command Line Tools compile this fork's Calendar helper.
 #
 #   custom/build.sh [/path/to/official/StenoAI.app]
 #
@@ -12,9 +12,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OFFICIAL="${1:-$HOME/code/stenoai-official/StenoAI.app}"
-PYTHON311="${PYTHON311:-$HOME/anaconda3/bin/python3.11}"
+OFFICIAL="${1:-$ROOT/.local/official/StenoAI.app}"
+PYTHON311="${PYTHON311:-$(command -v python3.11 || true)}"
 cd "$ROOT"
+if [ ! -x .venv/bin/python ] && [ -z "$PYTHON311" ]; then
+  echo 'Python 3.11 is required. Run custom/bootstrap.sh for prerequisite checks.' >&2
+  exit 1
+fi
 
 echo "==> Staging native binaries from $OFFICIAL"
 custom/stage-official-binaries.sh "$OFFICIAL"
@@ -46,4 +50,6 @@ custom/package.sh
 APP="$ROOT/app/dist/mac-arm64/StenoAI.app"
 codesign --verify --deep --strict "$APP"
 echo "==> Built $APP"
-echo "    based on official $(cat "$ROOT/bin/.official-version"), branch $(git -C "$ROOT" rev-parse --abbrev-ref HEAD) @ $(git -C "$ROOT" rev-parse --short HEAD)"
+BUILD_BRANCH="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || echo source-archive)"
+BUILD_COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo uncommitted-source)"
+echo "    based on official $(cat "$ROOT/bin/.official-version"), branch $BUILD_BRANCH @ $BUILD_COMMIT"
