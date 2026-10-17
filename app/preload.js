@@ -112,6 +112,8 @@ const stenoai = {
     start: (name, trigger, appendTo) =>
       invoke('start-recording-ui', name, trigger, appendTo),
     stop: () => invoke('stop-recording-ui'),
+    getLanguage: () => invoke('get-recording-language'),
+    setLanguage: (code) => invoke('set-recording-language', code),
     pause: () => invoke('pause-recording-ui'),
     resume: () => invoke('resume-recording-ui'),
     reportSystemAudioState: (active) => send('system-audio-recording-state', active),
@@ -157,6 +159,9 @@ const stenoai = {
   },
 
   meetings: {
+    cancelProcessing: (summaryFile) => invoke('cancel-processing', summaryFile),
+    getLanguage: (summaryFile) => invoke('get-note-language', summaryFile),
+    setLanguage: (summaryFile, code) => invoke('set-note-language', summaryFile, code),
     list: () => invoke('list-meetings'),
     get: (summaryFile) => invoke('get-meeting', summaryFile),
     update: (summaryFile, patch) => invoke('update-meeting', summaryFile, patch),
@@ -170,6 +175,7 @@ const stenoai = {
     // (regenTitle false; the retranscribe flag is the trailing arg).
     retranscribe: (summaryFile, name) => invoke('reprocess-meeting', summaryFile, false, name, true),
     recordingAvailable: (summaryFile) => invoke('recording-available', summaryFile),
+    vaultSyncStatus: (summaryFile) => invoke('vault-sync-status', summaryFile),
     regenTitle: (summaryFile, name) => invoke('regen-meeting-title', summaryFile, name),
     saveNotes: (name, notes) => invoke('save-meeting-notes', name, notes),
     generateReport: (summaryFile, templateId) => invoke('generate-report-meeting', summaryFile, templateId),
@@ -303,6 +309,8 @@ const stenoai = {
     getWhisperModel: () => invoke('get-whisper-model'),
     setWhisperModel: (model) => invoke('set-whisper-model', model),
     getKeepRecordings: () => invoke('get-keep-recordings'),
+    getAudioStorage: () => invoke('get-audio-storage'),
+    setAudioStorage: (limitMb) => invoke('set-audio-storage', limitMb),
     setKeepRecordings: (v) => invoke('set-keep-recordings', v),
     getAutoSummarize: () => invoke('get-auto-summarize'),
     setAutoSummarize: (v) => invoke('set-auto-summarize', v),
@@ -367,6 +375,13 @@ const stenoai = {
       status: () => invoke('outlook-auth-status'),
       disconnect: () => invoke('outlook-auth-disconnect'),
     },
+    apple: {
+      connect: () => invoke('apple-calendar-connect'),
+      status: () => invoke('apple-calendar-status'),
+      disconnect: () => invoke('apple-calendar-disconnect'),
+      eventAt: (timeMs) => invoke('apple-calendar-event-at', timeMs),
+    },
+    meetingEvent: (summaryFile) => invoke('meeting-calendar', summaryFile),
     getEvents: () => invoke('get-calendar-events'),
   },
 

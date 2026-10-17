@@ -1,4 +1,6 @@
 {
+  "settings.ai.localParakeetHint": "Recommended local option · audio stays on this device",
+  "meeting.transcriptionProgress": "Transcribing audio: {{done}}/{{total}} parts complete",
   "settings.ai.cloudAsr.disclosure": "Speech-to-text is sent to an OpenAI-compatible cloud endpoint. Unlike the on-device engines, your audio leaves your computer.",
   "settings.ai.cloudAsr.engineTagline": "Cloud API - sends audio to an OpenAI-compatible endpoint",
   "settings.ai.cloudAsr.providerLabel": "Cloud API",
@@ -14,7 +16,8 @@
   "settings.ai.cloudAsr.keySavedDescription": "A key is saved. Enter a new one to replace it, or clear it.",
   "settings.ai.cloudAsr.keyEmptyDescription": "Stored encrypted on your device - never written to config or sent anywhere except your chosen endpoint.",
   "settings.ai.cloudAsr.apiUrlPlaceholder": "https://api.openai.com/v1",
-  "settings.ai.cloudAsr.modelPlaceholder": "whisper-1",
+  "settings.ai.cloudAsr.modelPlaceholder": "gpt-transcribe",
+  "settings.ai.cloudAsr.modelHint": "Recommended cloud model: gpt-transcribe. Local speaker recognition identifies voices; timestamps mark audio turns rather than individual words.",
   "settings.ai.cloudAsr.apiKeyPlaceholder": "sk-…",
   "chat.scope.general": "No meeting context",
   "chat.scope.meeting": "This meeting",
@@ -38,5 +41,11 @@
   "settings.ai.speakers.retry": "Try again",
   "settings.ai.speakers.failed": "Download failed. Check your connection and try again.",
   "settings.ai.speakers.unavailable": "Not available on this Mac.",
-  "downloads.ollama.ariaLabel": "Summarization model download progress"
+  "downloads.ollama.ariaLabel": "Summarization model download progress",
+  "meeting.preparingAudio": "Preparing audio…",
+  "meeting.identifyingMicSpeakers": "Identifying speakers: microphone…",
+  "meeting.identifyingCallSpeakers": "Identifying speakers: the call…",
+  "meeting.transcribingAudio": "Transcribing audio…",
+  "meeting.generatingNotes": "Generating notes…",
+  "meeting.preparingProcessing": "Preparing…"
 }

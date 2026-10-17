@@ -191,6 +191,19 @@ class ConfigLanguageTests(unittest.TestCase):
             config = Config(config_path=config_path)
             self.assertEqual(config.get_language(), "auto")
 
+    def test_per_meeting_override_wins_for_that_job_only(self):
+        # Electron sets the override for one note's job; the saved global
+        # default is untouched and invalid values are ignored.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            with patch.dict("os.environ", {"STENOAI_LANGUAGE_OVERRIDE": "nl"}):
+                self.assertEqual(config.get_language(), "nl")
+            with patch.dict("os.environ", {"STENOAI_LANGUAGE_OVERRIDE": "zh-Hant"}):
+                self.assertEqual(config.get_whisper_language(), "zh")
+            with patch.dict("os.environ", {"STENOAI_LANGUAGE_OVERRIDE": "nl;x"}):
+                self.assertEqual(config.get_language(), "auto")
+            self.assertEqual(config.get_language(), "auto")
+
     def test_set_language_accepts_supported_dutch_code(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = Config(config_path=Path(tmp_dir) / "config.json")
@@ -493,7 +506,7 @@ class ConfigOpenAiAsrTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = Config(config_path=Path(tmp_dir) / "config.json")
             self.assertEqual(config.get_openai_asr_api_url(), "https://api.openai.com/v1")
-            self.assertEqual(config.get_openai_asr_model(), "whisper-1")
+            self.assertEqual(config.get_openai_asr_model(), "gpt-transcribe")
 
     def test_set_api_url_persists_and_strips(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -606,7 +619,7 @@ class ConfigOpenAiAsrTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "config.json"
             path.write_text(json.dumps({"openai_asr_model": "-unsafe"}))
-            self.assertEqual(Config(config_path=path).get_openai_asr_model(), "whisper-1")
+            self.assertEqual(Config(config_path=path).get_openai_asr_model(), "gpt-transcribe")
 
 
 class ConfigSummaryModelTests(unittest.TestCase):

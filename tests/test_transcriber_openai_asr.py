@@ -175,6 +175,11 @@ def _build_transcriber() -> WhisperTranscriber:
     return transcriber
 
 
+def _wav_size(frame_count: int) -> int:
+    """Size of a mono 16-bit WAV written by _write_pcm_wav (44-byte header)."""
+    return 44 + frame_count * 2
+
+
 def _write_pcm_wav(path: Path, frame_count: int) -> None:
     with wave.open(str(path), "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -1332,6 +1337,60 @@ class OpenAiAsrTests(unittest.TestCase):
         self.assertNotIn(marker, "\n".join(logs.output))
         self.assertNotIn(model_marker, "\n".join(logs.output))
 
+    def test_empty_chunk_retries_with_context_and_keeps_only_owned_timestamps(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / 'two-parts.wav'
+            _write_signal_wav(audio, frame_count=32000)
+            for response, expected in [
+                ({'text': 'speech', 'segments': [
+                    {'text': 'speech', 'start': 0.1, 'end': 0.8}]}, 'speech'),
+                ({'text': 'speech recovered', 'segments': [
+                    {'text': 'speech', 'start': 0.1, 'end': 0.8},
+                    {'text': 'recovered', 'start': 1.1, 'end': 1.5}]}, 'speech recovered'),
+                ({'text': '', 'segments': []}, None),
+                ({'text': 'untimed'}, None),
+            ]:
+                with self.subTest(expected=expected, response=response):
+                    opener = _FakeOpener([
+                        _json_response({'text': 'speech', 'segments': [
+                            {'text': 'speech', 'start': 0.1, 'end': 0.8}]}),
+                        _json_response({'text': '', 'segments': []}),
+                        _json_response(response),
+                    ])
+                    with patch('src.transcriber.OPENAI_ASR_MAX_CHUNK_SECONDS', 1), patch(
+                        'src.transcriber.OPENAI_ASR_CHUNK_OVERLAP_SECONDS', 0
+                    ), patch('urllib.request.build_opener', return_value=opener):
+                        if expected:
+                            result = _build_transcriber()._run_openai_asr(audio, 'en')
+                            self.assertEqual(result['text'], expected)
+                            self.assertEqual(result['duration_seconds'], 2)
+                            if 'recovered' in expected:
+                                self.assertEqual(result['segments'][-1]['start'], 1.1)
+                        else:
+                            with self.assertRaises(RuntimeError):
+                                _build_transcriber()._run_openai_asr(audio, 'en')
+                    self.assertEqual(len(opener.requests), 3)
+
+    def test_first_empty_chunk_uses_following_context_without_duplicating_it(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / 'two-parts.wav'
+            _write_signal_wav(audio, frame_count=32000)
+            opener = _FakeOpener([
+                _json_response({'text': '', 'segments': []}),
+                _json_response({'text': 'first next', 'segments': [
+                    {'text': 'first', 'start': 0.1, 'end': 0.8},
+                    {'text': 'next', 'start': 1.1, 'end': 1.5}]}),
+                _json_response({'text': 'next', 'segments': [
+                    {'text': 'next', 'start': 0.1, 'end': 0.5}]}),
+            ])
+            with patch('src.transcriber.OPENAI_ASR_MAX_CHUNK_SECONDS', 1), patch(
+                'src.transcriber.OPENAI_ASR_CHUNK_OVERLAP_SECONDS', 0
+            ), patch('urllib.request.build_opener', return_value=opener):
+                result = _build_transcriber()._run_openai_asr(audio, 'en')
+            self.assertEqual(result['text'], 'first next')
+            self.assertEqual([s['start'] for s in result['segments']], [0.1, 1.1])
+            self.assertEqual(len(opener.requests), 3)
+
     def test_empty_cloud_response_for_energetic_wav_is_a_failure_but_digital_silence_is_valid(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             audio = Path(tmp_dir) / "energetic.wav"
@@ -1504,7 +1563,10 @@ class OpenAiAsrTests(unittest.TestCase):
         self.assertEqual(result["duration_seconds"], 1.0)
         self.assertEqual(result["segments"][0]["end"], 0.9)
 
-    def test_chunk_overlap_preserves_every_timed_observation(self):
+    def test_chunk_overlap_drops_covered_duplicates_and_keeps_uncovered_ones(self):
+        # "boundary" is seen by chunks 0 and 1 at the same moment: chunk 1 owns
+        # it, so chunk 0's copy goes. The two "words" disagree on time by
+        # 0.35 s, so neither covers the other and both stay (no lost speech).
         transcriber = _build_transcriber()
         opener = _FakeOpener([
             _json_response({"text": "alpha boundary", "segments": [
@@ -1531,7 +1593,7 @@ class OpenAiAsrTests(unittest.TestCase):
                 result = transcriber._run_openai_asr(audio, language="en")
         self.assertEqual(
             result["text"],
-            "alpha boundary boundary words words omega",
+            "alpha boundary words words omega",
         )
 
     def test_untimed_chunk_text_keeps_real_repeated_words_without_lexical_deduplication(self):
@@ -1552,7 +1614,10 @@ class OpenAiAsrTests(unittest.TestCase):
                 result = transcriber._run_openai_asr(audio, language="en")
         self.assertEqual(result["text"], "again again again end final")
 
-    def test_timed_chunk_overlap_never_deduplicates_equal_or_jittered_text(self):
+    def test_timed_chunk_overlap_deduplicates_by_time_not_by_text(self):
+        # Chunk windows: [0, 0.875), [0.875, 1.625), [1.625, ...). Each copy
+        # outside its window overlaps an owned copy from the neighbour, so it
+        # is dropped; the two "Again"s inside chunk 0's window both survive.
         transcriber = _build_transcriber()
         opener = _FakeOpener([
             _json_response({"text": "Again Again", "segments": [
@@ -1577,13 +1642,11 @@ class OpenAiAsrTests(unittest.TestCase):
                 "urllib.request.build_opener", return_value=opener
             ):
                 result = transcriber._run_openai_asr(audio, language="en")
-        self.assertEqual(result["text"], "Again again! Again Again end")
+        self.assertEqual(result["text"], "Again Again end")
         self.assertEqual(
             [(segment["text"], segment["start"], segment["end"]) for segment in result["segments"]],
             [
                 ("Again", 0.7, 0.8),
-                ("again!", 0.75, 0.85),
-                ("Again", 0.9, 1.0),
                 ("Again", 0.9, 1.0),
                 ("end", 1.8, 1.9),
             ],
@@ -1625,7 +1688,10 @@ class OpenAiAsrTests(unittest.TestCase):
             ],
         )
 
-    def test_nested_overlap_jitter_fails_closed_and_preserves_audio(self):
+    def test_nested_overlap_duplicate_is_dropped_instead_of_failing(self):
+        # Previously the nested copy made the whole transcription fail. "inner"
+        # (0.75-0.8) sits outside chunk 1's window and inside chunk 0's owned
+        # "outer", so it is the same speech seen twice.
         transcriber = _build_transcriber()
         opener = _FakeOpener([
             _json_response({"text": "outer", "segments": [
@@ -1641,26 +1707,132 @@ class OpenAiAsrTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             audio = Path(tmp_dir) / "nested.wav"
             _write_pcm_wav(audio, frame_count=16000 * 2)
-            with patch.object(
-                transcriber, "_preprocess_audio", return_value=(audio, False)
-            ), patch.object(
-                transcriber, "_build_whisper_fallback", return_value=False
-            ), patch(
-                "src.transcriber.OPENAI_ASR_CHUNK_THRESHOLD_BYTES", 1
-            ), patch(
+            with patch("src.transcriber.OPENAI_ASR_CHUNK_THRESHOLD_BYTES", 1), patch(
                 "src.transcriber.OPENAI_ASR_MAX_CHUNK_SECONDS", 1
-            ), patch(
-                "src.transcriber.OPENAI_ASR_CHUNK_OVERLAP_SECONDS", 0.25
-            ), patch(
+            ), patch("src.transcriber.OPENAI_ASR_CHUNK_OVERLAP_SECONDS", 0.25), patch(
                 "urllib.request.build_opener", return_value=opener
             ):
-                failure = transcriber.transcribe_audio(audio, language="en")
-            self.assertTrue(failure["transcription_failed"])
-            self.assertEqual(
-                failure["error"],
-                "openai-asr final segment times are not globally monotone",
-            )
-            self.assertTrue(audio.exists())
+                result = transcriber._run_openai_asr(audio, language="en")
+        self.assertEqual(result["text"], "outer end")
+
+    def test_production_overlap_with_duplicate_sentence_merges(self):
+        # The real failure from 15 Oct: a sentence straddling the 595-600 s
+        # overlap is returned by both chunks with slightly different times.
+        transcriber = _build_transcriber()
+        opener = _FakeOpener([
+            _json_response({
+                "text": "early. Shared sentence here.",
+                "segments": [
+                    {"text": "early.", "start": 10.0, "end": 12.0},
+                    {"text": "Shared sentence here.", "start": 594.2, "end": 599.8},
+                ],
+                "duration": 600.0,
+            }),
+            _json_response({
+                "text": "Shared sentence here. After.",
+                "segments": [
+                    {"text": "Shared sentence here.", "start": 0.0, "end": 4.6},
+                    {"text": "After.", "start": 5.5, "end": 8.0},
+                ],
+                "duration": 195.0,
+            }),
+        ])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "production-values.wav"
+            _write_pcm_wav(audio, frame_count=16000 * 790)
+            with patch("urllib.request.build_opener", return_value=opener):
+                result = transcriber._run_openai_asr(audio, language="en")
+        self.assertEqual(result["text"], "early. Shared sentence here. After.")
+
+    @unittest.skipUnless(
+        os.path.exists("/usr/bin/afconvert"), "AAC upload compression is macOS-only"
+    )
+    def test_large_request_uploads_aac_copy_and_removes_it(self):
+        transcriber = _build_transcriber()
+        opener = _FakeOpener([
+            _json_response({"text": "", "segments": [], "duration": 60.0}),
+        ])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "minute.wav"
+            _write_pcm_wav(audio, frame_count=16000 * 60)  # ~1.9 MB
+            with patch("urllib.request.build_opener", return_value=opener), patch(
+                "src.transcriber._unlink_temporary_audio",
+                wraps=transcriber_mod._unlink_temporary_audio,
+            ) as unlink:
+                transcriber._run_openai_asr(audio, language="en")
+        removed = [Path(c.args[0]) for c in unlink.call_args_list if Path(c.args[0]).suffix == ".m4a"]
+        self.assertEqual(len(removed), 1)
+        self.assertFalse(removed[0].exists())
+        request = opener.requests[0]
+        self.assertIn(b'filename="audio.m4a"', request["prefix"])
+        self.assertIn(b"Content-Type: audio/mp4", request["prefix"])
+        self.assertLess(request["file_size"], _wav_size(16000 * 60) // 4)
+
+    def test_failed_compression_falls_back_to_wav(self):
+        transcriber = _build_transcriber()
+        opener = _FakeOpener([
+            _json_response({"text": "", "segments": [], "duration": 60.0}),
+        ])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "minute.wav"
+            _write_pcm_wav(audio, frame_count=16000 * 60)
+            with patch("urllib.request.build_opener", return_value=opener), patch(
+                "src.transcriber._openai_asr_compressed_copy", return_value=None,
+            ):
+                transcriber._run_openai_asr(audio, language="en")
+        request = opener.requests[0]
+        self.assertIn(b'filename="audio.wav"', request["prefix"])
+        self.assertEqual(request["file_size"], _wav_size(16000 * 60))
+
+    def test_small_request_is_not_compressed(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "short.wav"
+            _write_pcm_wav(audio, frame_count=16000)  # 32 KB
+            self.assertIsNone(transcriber_mod._openai_asr_compressed_copy(audio))
+
+    def test_diarize_model_requests_diarized_json_with_auto_chunking(self):
+        transcriber = _build_transcriber()
+        transcriber._openai_asr_model = "gpt-4o-transcribe-diarize"
+        opener = _FakeOpener([
+            _json_response({
+                "text": "Hello there. Hi.",
+                "segments": [
+                    {"type": "transcript.text.segment", "id": "seg_0",
+                     "text": "Hello there.", "start": 0.0, "end": 0.6, "speaker": "A"},
+                    {"type": "transcript.text.segment", "id": "seg_1",
+                     "text": "Hi.", "start": 0.7, "end": 0.9, "speaker": "B"},
+                ],
+                "duration": 1.0,
+            }),
+        ])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "short.wav"
+            _write_pcm_wav(audio, frame_count=16000)
+            with patch("urllib.request.build_opener", return_value=opener):
+                result = transcriber._run_openai_asr(audio, language="en")
+        prefix = opener.requests[0]["prefix"]
+        self.assertIn(b"diarized_json", prefix)
+        self.assertIn(b'name="chunking_strategy"\r\n\r\nauto', prefix)
+        self.assertEqual(
+            [(s["text"], s["start"], s["end"]) for s in result["segments"]],
+            [("Hello there.", 0.0, 0.6), ("Hi.", 0.7, 0.9)],
+        )
+
+    def test_non_diarize_model_keeps_verbose_json(self):
+        transcriber = _build_transcriber()
+        opener = _FakeOpener([
+            _json_response({"text": "Hi.", "segments": [
+                {"text": "Hi.", "start": 0.0, "end": 0.5},
+            ], "duration": 1.0}),
+        ])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "short.wav"
+            _write_pcm_wav(audio, frame_count=16000)
+            with patch("urllib.request.build_opener", return_value=opener):
+                transcriber._run_openai_asr(audio, language="en")
+        prefix = opener.requests[0]["prefix"]
+        self.assertIn(b"verbose_json", prefix)
+        self.assertNotIn(b"chunking_strategy", prefix)
 
     def test_global_segment_times_fail_closed_instead_of_clamping_overlap_regressions(self):
         with self.assertRaisesRegex(RuntimeError, "globally monotone"):

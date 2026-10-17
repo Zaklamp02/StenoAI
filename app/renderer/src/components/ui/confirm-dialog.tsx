@@ -20,6 +20,7 @@ export interface ConfirmDialogProps {
   destructive?: boolean;
   onConfirm: () => void | Promise<void>;
   isPending?: boolean;
+  children?: React.ReactNode;
 }
 
 export function ConfirmDialog({
@@ -32,6 +33,7 @@ export function ConfirmDialog({
   destructive,
   onConfirm,
   isPending,
+  children,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = React.useState(false);
   const pending = busy || isPending;
@@ -63,6 +65,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
+        {children}
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline" disabled={pending}>

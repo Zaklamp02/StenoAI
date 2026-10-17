@@ -191,6 +191,7 @@ notes/
 # Local agent scratch (skill working notes, task specs) - never publish
 .superpowers/
 .specs/
+/work/
 
 # Bundled Ollama binary (downloaded during build)
 bin/
@@ -205,3 +206,4 @@ ollama.pid
 # (fetched FluidAudio checkout + compiled binaries) — scripts/build-diarize-sidecar.sh
 # regenerates this; only diarize-sidecar/{Package.swift,Package.resolved,Sources/} are tracked.
 diarize-sidecar/.build/
+config.json.lock

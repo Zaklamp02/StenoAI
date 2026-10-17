@@ -96,6 +96,11 @@ export function PeopleTab() {
             label={profile.display_name}
             description={(
               <>
+                {profile.email && (
+                  <span className="mb-1 block" data-testid={`people-email-${profile.person_id}`}>
+                    {profile.email}
+                  </span>
+                )}
                 <span>{describeSamples(profile)}</span>
                 {playback.errorKey === profile.person_id && (
                   <span

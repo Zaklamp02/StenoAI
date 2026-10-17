@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
@@ -28,6 +29,48 @@ export function usePersonProfiles(enabled = true) {
     queryFn: async () => unwrap(await ipc().speakers.listProfiles()).person_profiles,
     enabled,
   });
+}
+
+/** How long a diarised note keeps re-checking for its speaker sidecar, and how
+ *  often. The sidecar can land after the detail payload the view first fetched
+ *  (live-transcription notes are opened as a placeholder and upgraded in
+ *  place), and nothing else re-reads the note until the view remounts. */
+const SIDECAR_WATCH_INTERVAL_MS = 3_000;
+const SIDECAR_WATCH_MAX_MS = 60_000;
+
+/** Keep the Speakers panel in step with its data without a remount:
+ *  - while a diarised note has no sidecar yet, re-read the note periodically
+ *    (bounded; with speaker identification off the sidecar never comes);
+ *  - when the sidecar appears, drop suggestions fetched before it existed. */
+export function useSpeakerSidecarWatch(
+  summaryFile: string | null | undefined,
+  meetingStem: string | null,
+  isDiarised: boolean,
+  hasSpeakerSidecar: boolean,
+) {
+  const qc = useQueryClient();
+
+  React.useEffect(() => {
+    if (!summaryFile || !isDiarised || hasSpeakerSidecar) return;
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - startedAt > SIDECAR_WATCH_MAX_MS) {
+        clearInterval(timer);
+        return;
+      }
+      void qc.invalidateQueries({ queryKey: meetingsKeys.detail(summaryFile) });
+    }, SIDECAR_WATCH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [qc, summaryFile, isDiarised, hasSpeakerSidecar]);
+
+  const hadSidecar = React.useRef(hasSpeakerSidecar);
+  React.useEffect(() => {
+    if (hasSpeakerSidecar && !hadSidecar.current && meetingStem) {
+      void qc.invalidateQueries({ queryKey: speakersKeys.suggestions(meetingStem) });
+      void qc.invalidateQueries({ queryKey: speakersKeys.profiles() });
+    }
+    hadSidecar.current = hasSpeakerSidecar;
+  }, [qc, meetingStem, hasSpeakerSidecar]);
 }
 
 export function useSpeakerSuggestions(
@@ -67,6 +110,7 @@ export function useConfirmSpeaker() {
           expectedRunId: args.expectedRunId,
           personId: args.personId,
           newPersonName: args.newPersonName,
+          summaryFile: args.summaryFile,
         }),
       ),
     // AWAITS the refetches (invalidateQueries' returned promise resolves

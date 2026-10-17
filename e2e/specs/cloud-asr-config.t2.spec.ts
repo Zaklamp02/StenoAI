@@ -50,7 +50,7 @@ test('non-secret openai-asr config (url/model) round-trips and persists to confi
   const initial = await getConfig(page);
   expect(initial.success).toBe(true);
   expect(initial.api_url).toBe('https://api.openai.com/v1');
-  expect(initial.model).toBe('whisper-1');
+  expect(initial.model).toBe('gpt-transcribe');
   expect(initial.api_key_set).toBe(false);
 
   // Set both non-secret fields.

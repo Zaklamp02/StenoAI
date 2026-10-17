@@ -6,6 +6,8 @@ import { Settings } from '@/routes/Settings';
 import { Setup } from '@/routes/Setup';
 import { Chat } from '@/routes/Chat';
 import { Agents } from '@/routes/Agents';
+import { People } from '@/routes/People';
+import { Calendar } from '@/routes/Calendar';
 import { ChatConversation } from '@/routes/ChatConversation';
 import { StreamingProvider } from '@/hooks/useStreamingQuery';
 import { Home } from '@/routes/Home';
@@ -226,6 +228,8 @@ export function App() {
   // pill docks alone there instead.
   const isChromeRoute =
     route === '/agents' ||
+    route === '/people' ||
+    route === '/calendar' ||
     route === '/settings' ||
     route.startsWith('/settings?') ||
     route === '/setup' ||
@@ -337,6 +341,8 @@ function RouteView({ route }: { route: string }) {
   if (route === '/recording') return <Recording />;
   if (route === '/chat') return <Chat />;
   if (route === '/agents') return <Agents />;
+  if (route === '/people') return <People />;
+  if (route === '/calendar') return <Calendar />;
   if (route.startsWith('/chat/')) {
     const sessionId = safeDecode(route.slice('/chat/'.length));
     return <ChatConversation sessionId={sessionId} />;

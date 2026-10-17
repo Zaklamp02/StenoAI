@@ -12,6 +12,7 @@ export const calendarKeys = {
   events: () => [...calendarKeys.all, 'events'] as const,
   google: () => [...calendarKeys.all, 'google'] as const,
   outlook: () => [...calendarKeys.all, 'outlook'] as const,
+  apple: () => [...calendarKeys.all, 'apple'] as const,
 };
 
 /**
@@ -85,6 +86,66 @@ export function useGoogleCalendarAuth() {
     onSuccess: () => qc.invalidateQueries({ queryKey: calendarKeys.all }),
   });
   return { status, connect, cancel, disconnect };
+}
+
+export function useAppleCalendar() {
+  const qc = useQueryClient();
+  const status = useQuery({
+    queryKey: calendarKeys.apple(),
+    queryFn: async () => unwrap(await ipc().calendar.apple.status()),
+  });
+  // Resolves once macOS's permission prompt is answered.
+  const connect = useMutation({
+    mutationFn: async () => unwrap(await ipc().calendar.apple.connect()),
+    onSettled: () => qc.invalidateQueries({ queryKey: calendarKeys.all }),
+  });
+  const disconnect = useMutation({
+    mutationFn: async () => unwrap(await ipc().calendar.apple.disconnect()),
+    onSuccess: () => qc.invalidateQueries({ queryKey: calendarKeys.all }),
+  });
+  return { status, connect, disconnect };
+}
+
+/** The Apple Calendar event a recording started at `timeMs` belongs to (null
+ *  when none, or Apple Calendar isn't connected). */
+export function useCalendarEventAt(timeMs: number | null, enabled = true) {
+  return useQuery({
+    queryKey: [...calendarKeys.all, 'at', timeMs] as const,
+    queryFn: async () => unwrap(await ipc().calendar.apple.eventAt(timeMs as number)).event,
+    enabled: enabled && timeMs !== null,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** The calendar event a note's meeting belongs to, or null. */
+export function useMeetingCalendarEvent(summaryFile: string | null | undefined) {
+  return useQuery({
+    queryKey: [...calendarKeys.all, 'meeting', summaryFile ?? null] as const,
+    queryFn: async () => unwrap(await ipc().calendar.meetingEvent(summaryFile as string)).event,
+    enabled: Boolean(summaryFile),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/** Display names of the people invited to `event`, excluding yourself.
+ *  Falls back to the address's local part ("jan.devries" -> "Jan Devries")
+ *  when the calendar has no name. */
+export function attendeeNames(event: CalendarEvent | null | undefined): string[] {
+  const names: string[] = [];
+  for (const a of event?.attendees ?? []) {
+    if (a.self) continue;
+    let name = (a.name ?? '').trim();
+    if (!name && a.email) {
+      name = a.email
+        .split('@')[0]
+        .split(/[._-]+/)
+        .filter(Boolean)
+        .map((part) => part[0].toUpperCase() + part.slice(1))
+        .join(' ');
+    }
+    if (name && !names.some((n) => n.toLowerCase() === name.toLowerCase())) names.push(name);
+  }
+  return names;
 }
 
 export function useOutlookCalendarAuth() {

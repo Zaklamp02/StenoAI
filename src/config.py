@@ -1109,7 +1109,7 @@ class Config:
             # transcription subprocess env as STENOAI_OAI_API_KEY, exactly like
             # the cloud summariser key. See get_openai_asr_api_key().
             "openai_asr_api_url": OPENAI_ASR_DEFAULT_URL,
-            "openai_asr_model": "whisper-1",
+            "openai_asr_model": "gpt-transcribe",
             "version": "1.0"
         }
 
@@ -2392,12 +2392,12 @@ class Config:
     def get_openai_asr_model(self) -> str:
         """Model name passed to the OpenAI-compatible STT endpoint.
 
-        Defaults to ``whisper-1`` (the standard OpenAI Whisper model).
+        Defaults to ``gpt-transcribe`` (recommended OpenAI file transcription).
         Groq uses ``whisper-large-v3``; other providers vary.
         """
         return _normalise_openai_asr_model(
-            self._config.get("openai_asr_model", "whisper-1")
-        ) or "whisper-1"
+            self._config.get("openai_asr_model", "gpt-transcribe")
+        ) or "gpt-transcribe"
 
     def set_openai_asr_model(self, model: str) -> bool:
         """Set the model name for the OpenAI-compatible STT endpoint."""
@@ -2452,6 +2452,11 @@ class Config:
         # "language" field existed, or ones missing just that key, agree with
         # the "auto" default in _get_default_config() and auto-detect the
         # transcript's language instead of silently defaulting to English (#281).
+        # A per-meeting choice (Electron passes it for that one job) wins over
+        # the global default for both transcription and the summary.
+        override = os.environ.get("STENOAI_LANGUAGE_OVERRIDE", "")
+        if re.fullmatch(r"[a-z]{2,3}(-[A-Za-z]{2,4})?", override):
+            return override
         return self._config.get("language", "auto")
 
     def get_whisper_language(self) -> str:

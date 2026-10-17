@@ -1,5 +1,6 @@
 import * as React from 'react';
 import {
+  CalendarDays,
   ChevronDown,
   Blocks,
   Globe,
@@ -12,6 +13,7 @@ import {
   Plus,
   Search,
   Settings as SettingsIcon,
+  Users,
 } from 'lucide-react';
 import { navigate, rememberNonSettingsRoute, toggleSettings } from '@/lib/router';
 import { cn, shortcut } from '@/lib/utils';
@@ -397,6 +399,26 @@ export function Sidebar({
           >
             <Blocks className="size-[14px]" />
             <span className="flex-1 truncate">{AGENTS_COPY.nav}</span>
+          </button>
+
+          <button
+            type="button"
+            className={cn('sb-row', currentRoute === '/calendar' && 'active')}
+            aria-current={currentRoute === '/calendar' ? 'page' : undefined}
+            onClick={() => navigate('/calendar')}
+          >
+            <CalendarDays className="size-[14px]" />
+            <span className="flex-1 truncate">Calendar</span>
+          </button>
+
+          <button
+            type="button"
+            className={cn('sb-row', currentRoute === '/people' && 'active')}
+            aria-current={currentRoute === '/people' ? 'page' : undefined}
+            onClick={() => navigate('/people')}
+          >
+            <Users className="size-[14px]" />
+            <span className="flex-1 truncate">People</span>
           </button>
 
           {sharedNotes.enabled && (

@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   useSpeakerSuggestions,
+  useSpeakerSidecarWatch,
   usePersonProfiles,
   useConfirmSpeaker,
   useGetSpeakerSampleAudio,
@@ -16,6 +17,7 @@ import {
   meetingStemFromSummaryFile,
 } from '@/hooks/useSpeakerSuggestions';
 import { useBlobAudioPlayback } from '@/hooks/useBlobAudioPlayback';
+import { attendeeNames, useMeetingCalendarEvent } from '@/hooks/useCalendarEvents';
 import type { SpeakerSuggestion, StaleAssignment } from '@/lib/ipc';
 
 interface SpeakerReviewPanelProps {
@@ -99,8 +101,13 @@ function isStaleDiarizationError(error: unknown): boolean {
 export function orderProfilesForRow<T extends { display_name: string; person_id: string }>(
   profiles: T[],
   alreadyInMeeting: Set<string>,
+  invitedNames: string[] = [],
 ): T[] {
+  const invited = new Set(invitedNames.map(foldPersonName));
   return [...profiles].sort((a, b) => {
+    const aInvited = invited.has(foldPersonName(a.display_name));
+    const bInvited = invited.has(foldPersonName(b.display_name));
+    if (aInvited !== bInvited) return aInvited ? -1 : 1;
     const aHere = alreadyInMeeting.has(a.person_id);
     const bHere = alreadyInMeeting.has(b.person_id);
     if (aHere !== bHere) return aHere ? -1 : 1;
@@ -362,8 +369,11 @@ export function SpeakerReviewPanel({
   hasSpeakerSidecar,
 }: SpeakerReviewPanelProps) {
   const meetingStem = meetingStemFromSummaryFile(summaryFile);
+  useSpeakerSidecarWatch(summaryFile, meetingStem, isDiarised, hasSpeakerSidecar);
   const suggestionsQuery = useSpeakerSuggestions(meetingStem, hasSpeakerSidecar);
   const profilesQuery = usePersonProfiles(hasSpeakerSidecar);
+  const meetingCalendar = useMeetingCalendarEvent(summaryFile);
+  const invitees = attendeeNames(meetingCalendar.data);
   const confirmSpeaker = useConfirmSpeaker();
   const markCluster = useMarkSpeakerCluster();
   const setReviewState = useSetClusterReviewState();
@@ -800,6 +810,7 @@ export function SpeakerReviewPanel({
                         const ordered = orderProfilesForRow(
                           profilesQuery.data ?? [],
                           alreadyInMeeting,
+                          invitees,
                         );
                         const matches = filterProfilesByQuery(ordered, personQuery);
                         return (
@@ -1072,6 +1083,22 @@ export function SpeakerReviewPanel({
               </span>
             </DialogDescription>
           </DialogHeader>
+          {invitees.filter((name) => !(profilesQuery.data ?? []).some(
+            (profile) => namesCollide(profile.display_name, name),
+          )).length > 0 && (
+            <div className="flex flex-wrap gap-2" data-testid="speaker-invitees">
+              {invitees.filter((name) => !(profilesQuery.data ?? []).some(
+                (profile) => namesCollide(profile.display_name, name),
+              )).map((name) => (
+                <Button key={name} size="sm" variant="outline"
+                  disabled={confirmSpeaker.isPending}
+                  onClick={() => { setNewPersonName(name); setNewPersonError(null); }}
+                >
+                  {name}
+                </Button>
+              ))}
+            </div>
+          )}
           <Input
             value={newPersonName}
             onChange={(e) => setNewPersonName(e.target.value)}

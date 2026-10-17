@@ -29,6 +29,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { MeetingsShell } from '@/components/MeetingsShell';
 import { SpeakerReviewPanel } from '@/components/SpeakerReviewPanel';
+import { MeetingCalendarSection } from '@/components/MeetingCalendarSection';
+import { MeetingLanguageSelect } from '@/components/MeetingLanguageSelect';
+import { VaultSyncStatusLine } from '@/components/VaultSyncStatusLine';
 import {
   Select,
   SelectContent,
@@ -55,6 +58,7 @@ import {
   useUnshareFromOrgBySummary,
 } from '@/hooks/useOrg';
 import { UI_LOCALE, SYSTEM_HOUR12 } from '@/lib/locale';
+import { t } from '@/i18n';
 import {
   keepNoteGenerationCause,
   noteGenerationErrorFromResult,
@@ -185,6 +189,17 @@ function DetailContent({
   // doesn't flash the transcript-only wording for the common auto-on case.
   const willGenerateNotes = useAutoSummarizeSetting().data ?? true;
   const [retranscribeOpen, setRetranscribeOpen] = React.useState(false);
+  // This meeting's language ('auto' = Settings default). Loaded when the
+  // re-transcribe dialog opens; saved just before re-transcription starts.
+  const [meetingLanguage, setMeetingLanguage] = React.useState('auto');
+  React.useEffect(() => {
+    if (!retranscribeOpen) return;
+    let stale = false;
+    void ipc().meetings.getLanguage(summaryFile).then((res) => {
+      if (!stale && res.success) setMeetingLanguage(res.language);
+    });
+    return () => { stale = true; };
+  }, [retranscribeOpen, summaryFile]);
   const generateReport = useGenerateReport();
   const setActiveReport = useSetActiveReport();
   const deleteReport = useDeleteReport();
@@ -285,9 +300,25 @@ function DetailContent({
   const cached = streamCache.get(summaryFile);
   const [streamText, setStreamText] = React.useState(cached?.text ?? '');
   const [streamPhase, setStreamPhase] = React.useState<StreamPhase>(cached?.phase ?? 'idle');
-  const [chunkProgress, setChunkProgress] = React.useState<{ step: number; total: number } | null>(
+  const [progressLine, setProgressLine] = React.useState<string | null>(cached?.progressLine ?? null);
+  const receivedProgress = React.useRef(false);
+  const [chunkProgress, setChunkProgress] = React.useState<{ step: number; total: number; stage?: 'transcribe' } | null>(
     null
   );
+  const applyProgress = React.useCallback((line: string) => {
+      setProgressLine(line);
+      const mapMatch = line.match(/^PROGRESS:summarize:(\d+)\/(\d+)$/);
+      const asrMatch = line.match(/^PROGRESS:transcribe:(\d+)\/(\d+)$/);
+      if (asrMatch) {
+        setChunkProgress({ step: Number(asrMatch[1]), total: Number(asrMatch[2]), stage: 'transcribe' });
+      } else if (line.startsWith('PROGRESS:diarize:')) {
+        setChunkProgress(null);
+      } else if (mapMatch) {
+        setChunkProgress({ step: parseInt(mapMatch[1]), total: parseInt(mapMatch[2]) });
+      } else {
+        setChunkProgress(null);
+      }
+  }, []);
   const [reprocessError, setReprocessError] = React.useState<NoteGenerationErrorCode | null>(null);
   const reprocessFailed = reprocessError !== null;
   const qc = useQueryClient();
@@ -316,8 +347,8 @@ function DetailContent({
   const generatingReportRef = React.useRef(false);
 
   React.useEffect(() => {
-    streamCache.set(summaryFile, { text: streamText, phase: streamPhase });
-  }, [summaryFile, streamText, streamPhase]);
+    streamCache.set(summaryFile, { text: streamText, phase: streamPhase, progressLine });
+  }, [summaryFile, streamText, streamPhase, progressLine]);
 
   React.useEffect(() => {
     const sessionName = info.name;
@@ -410,12 +441,8 @@ function DetailContent({
       // this scope check this view would render another meeting's map/reduce step.
       // Scoped on summaryFile (unique) rather than the display name (shareable).
       if (e.summaryFile !== summaryFile) return;
-      const mapMatch = e.line.match(/^PROGRESS:summarize:(\d+)\/(\d+)$/);
-      if (mapMatch) {
-        setChunkProgress({ step: parseInt(mapMatch[1]), total: parseInt(mapMatch[2]) });
-      } else if (e.line === 'PROGRESS:summarize:reducing') {
-        setChunkProgress(null);
-      }
+      receivedProgress.current = true;
+      applyProgress(e.line);
     });
     return () => {
       offChunk();
@@ -423,7 +450,7 @@ function DetailContent({
       offProcessing();
       offProgress();
     };
-  }, [info.name, summaryFile, qc]);
+  }, [info.name, summaryFile, qc, applyProgress]);
 
   // Non-Standard templates only — the locked `standard` template drives the
   // structured summary, not an on-demand report.
@@ -436,6 +463,8 @@ function DetailContent({
     setReprocessError(null);
     generatingReportRef.current = true;
     streamCache.set(summaryFile, { text: '', phase: 'analyzing' });
+    setProgressLine(null);
+    receivedProgress.current = false;
     generateReport.mutate(
       { summaryFile, templateId },
       {
@@ -475,6 +504,8 @@ function DetailContent({
     setChunkProgress(null);
     setReprocessError(null);
     streamCache.set(summaryFile, { text: '', phase: 'analyzing' });
+    setProgressLine(null);
+    receivedProgress.current = false;
     reprocess.mutate(
       { summaryFile, regenTitle: false, name: info.name },
       {
@@ -516,6 +547,8 @@ function DetailContent({
     setChunkProgress(null);
     setReprocessError(null);
     streamCache.set(summaryFile, { text: '', phase: 'analyzing' });
+    setProgressLine(null);
+    receivedProgress.current = false;
     retranscribe.mutate(
       { summaryFile, name: info.name },
       {
@@ -679,6 +712,14 @@ function DetailContent({
   // which collides for two default-"Note" notes); a recording on a *different*
   // note leaves this note's CTA untouched.
   const recording = useRecording();
+  const queuedProgress = recording.reprocesses.find((job) => job.summaryFile === summaryFile)?.progressLine
+    ?? (recording.processingProgress?.summaryFile === summaryFile ? recording.processingProgress.progressLine : undefined);
+  React.useEffect(() => {
+    if (queuedProgress && !receivedProgress.current) {
+      applyProgress(queuedProgress);
+      setStreamPhase((previous) => previous === 'idle' ? 'analyzing' : previous);
+    }
+  }, [queuedProgress, applyProgress]);
   const exportMeeting = useExportMeetingPackage();
   const isRecordingThisNote =
     recording.status !== 'idle' &&
@@ -1149,7 +1190,7 @@ function DetailContent({
               role="alert"
             >
               <div className="text-[15px] font-medium" style={{ color: 'var(--fg-1)' }}>
-                Notes weren’t generated
+                {reprocessError === 'processing_stopped' ? 'Processing stopped' : 'Notes weren’t generated'}
               </div>
               <p
                 className="text-[14px] leading-[1.6]"
@@ -1166,8 +1207,20 @@ function DetailContent({
               </Button>
             </section>
           )}
+          {streamPhase !== 'idle' && (
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void ipc().meetings.cancelProcessing(summaryFile)}
+                title="Stop processing. The audio is kept; use Re-transcribe to try again."
+              >
+                Stop
+              </Button>
+            </div>
+          )}
           {streamPhase !== 'idle' ? (
-            <StreamingView text={streamText} phase={streamPhase} chunkProgress={chunkProgress} />
+            <StreamingView text={streamText} phase={streamPhase} chunkProgress={chunkProgress} progressLine={progressLine} />
           ) : activeReport ? (
             <section
               className="stream-markdown"
@@ -1321,6 +1374,10 @@ function DetailContent({
                 </section>
               )}
 
+              <MeetingCalendarSection summaryFile={summaryFile} />
+
+              <VaultSyncStatusLine summaryFile={summaryFile} />
+
               {participants.length > 0 && (
                 <section className="flex flex-col gap-3">
                   <SectionTitle>Participants</SectionTitle>
@@ -1381,14 +1438,21 @@ function DetailContent({
         open={retranscribeOpen}
         onOpenChange={setRetranscribeOpen}
         title="Re-transcribe this recording?"
-        description="This re-runs transcription with your current transcription settings, replacing the transcript and regenerating the summary."
+        description="This re-runs transcription with your transcription settings and the language below, replacing the transcript and regenerating the summary."
         confirmLabel="Re-transcribe"
         isPending={retranscribe.isPending}
-        onConfirm={() => {
+        onConfirm={async () => {
+          const saved = await ipc().meetings.setLanguage(summaryFile, meetingLanguage);
+          if (!saved.success) return;
           setRetranscribeOpen(false);
           startRetranscribe();
         }}
-      />
+      >
+        <label className="flex items-center justify-between gap-3 text-[13px]" style={{ color: 'var(--fg-2)' }}>
+          Language for this meeting
+          <MeetingLanguageSelect value={meetingLanguage} onChange={setMeetingLanguage} />
+        </label>
+      </ConfirmDialog>
     </article>
   );
 }
@@ -1794,10 +1858,12 @@ function StreamingView({
   text,
   phase,
   chunkProgress,
+  progressLine,
 }: {
   text: string;
   phase: StreamPhase;
-  chunkProgress?: { step: number; total: number } | null;
+  progressLine?: string | null;
+  chunkProgress?: { step: number; total: number; stage?: 'transcribe' } | null;
 }) {
   const blocks = parseMarkdownBlocks(stripReasoning(text));
   const isStreaming = phase === 'analyzing' || phase === 'generating';
@@ -1904,11 +1970,24 @@ function StreamingView({
     []
   );
 
+  const stageLabel = progressLine?.startsWith('PROGRESS:audio:')
+    ? t('meeting.preparingAudio')
+    : progressLine?.startsWith('PROGRESS:diarize:You:')
+      ? t('meeting.identifyingMicSpeakers')
+      : progressLine?.startsWith('PROGRESS:diarize:Others:')
+        ? t('meeting.identifyingCallSpeakers')
+        : progressLine?.startsWith('PROGRESS:transcribe:')
+          ? t('meeting.transcribingAudio')
+          : progressLine?.startsWith('PROGRESS:summarize:')
+            ? t('meeting.generatingNotes')
+            : null;
   const indicatorLabel = chunkProgress
-    ? `Summarising part ${chunkProgress.step}/${chunkProgress.total}`
-    : phase === 'analyzing'
-      ? 'Analysing transcript'
-      : 'Generating notes';
+    ? chunkProgress.stage === 'transcribe'
+      ? t('meeting.transcriptionProgress', { done: chunkProgress.step, total: chunkProgress.total })
+      : `Summarising part ${chunkProgress.step}/${chunkProgress.total}`
+    : stageLabel ?? (phase === 'analyzing'
+      ? t('meeting.preparingProcessing')
+      : t('meeting.generatingNotes'));
 
   return (
     <div className="relative">

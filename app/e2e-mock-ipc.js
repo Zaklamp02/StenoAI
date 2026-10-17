@@ -327,7 +327,7 @@ function install({ ipcMain }) {
     autoInstallWhenIdle: true, // idle auto-install toggle (config default on)
     transcriptionEngine: process.env.STENOAI_E2E_MOCK_ENGINE || 'parakeet',
     openAiAsrUrl: 'https://api.openai.com/v1',
-    openAiAsrModel: 'whisper-1',
+    openAiAsrModel: 'gpt-transcribe',
     openAiAsrKeySet: process.env.STENOAI_E2E_OAI_ASR_KEY_SET === '1',
   };
 
@@ -1490,6 +1490,18 @@ function install({ ipcMain }) {
     },
     'list-folders': { success: true, folders: [] },
     'get-calendar-events': { success: true, events: [] },
+    'meeting-calendar': {
+      success: true,
+      event: process.env.STENOAI_E2E_SEED_CALENDAR_INVITEES === '1' ? {
+        id: 'invitee-fixture', title: 'Invited people',
+        start: '2026-10-16T09:00:00Z', end: '2026-10-16T10:00:00Z',
+        attendees: [
+          { name: 'Person Beta', email: 'beta@example.com' },
+          { name: 'Invited New Person', email: 'new@example.com' },
+          { name: 'Owner', email: 'owner@example.com', self: true },
+        ],
+      } : null,
+    },
     // Without these, both new toggles fall through to the permissive
     // {success:true} default (no show_menu_bar_icon/premeeting_notifications_enabled
     // field), and GeneralTab's disabled={...data === undefined} leaves both

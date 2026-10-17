@@ -9,6 +9,12 @@
  */
 
 // ---------- shared result envelope ----------
+export type VaultSyncStatus =
+  | { status: 'synced'; lastRun: string | null; syncedAt: string; notePath: string | null }
+  | { status: 'pending'; lastRun: string | null }
+  | { status: 'waiting'; lastRun: string | null; reason: string }
+  | { status: 'error'; lastRun: string | null; message: string };
+
 export type Result<T> = ({ success: true } & T) | {
   success: false;
   error: string;
@@ -108,14 +114,25 @@ export interface ListedModel {
   ggufInstalled?: boolean;
 }
 
+/** Apple Calendar (EventKit) connection; `authorization` is macOS's calendar
+ *  permission for StenoAI ('full' once allowed). */
+export interface AppleCalendarStatus {
+  available: boolean;
+  enabled: boolean;
+  authorization?: 'full' | 'write-only' | 'denied' | 'restricted' | 'not-determined' | 'unknown';
+}
+
 export interface CalendarEvent {
   id: string;
   title: string;
   start: string;
   end: string;
-  attendees?: Array<{ email: string; name?: string }>;
+  /** Apple Calendar attendees may lack an email and also carry `self` / `status`. */
+  attendees?: Array<{ email?: string; name?: string; self?: boolean; status?: string }>;
   location?: string;
   meeting_url?: string;
+  /** Apple Calendar: organizer of the event. */
+  organizer?: { name?: string; email?: string };
   description?: string;
   is_all_day?: boolean;
   response_status?: 'accepted' | 'declined' | 'tentative' | 'needsAction' | 'organizer' | 'unknown';
@@ -391,7 +408,8 @@ export interface QueueStatus {
    *  navigates to B, reprocesses B before A finishes). Renderer consumers
    *  use this to flag the matching existing meeting rows as in-progress
    *  on Home. Empty array (not undefined) when no reprocess is active. */
-  currentReprocesses: Array<{ summaryFile: string; sessionName: string | null }>;
+  currentProgress?: { summaryFile: string | null; progressLine?: string } | null;
+  currentReprocesses: Array<{ summaryFile: string; sessionName: string | null; progressLine?: string }>;
   hasRecording: boolean;
   isPaused: boolean;
   elapsedSeconds: number;
@@ -461,6 +479,7 @@ export type SaveTemplateResponse = Result<{ template: Template }>;
 export interface PersonProfile {
   person_id: string;
   display_name: string;
+  email?: string | null;
   prototype_counts: Record<string, number>;
   hard_negative_counts: Record<string, number>;
   sample_available: boolean;
@@ -618,6 +637,7 @@ export interface ConfirmSpeakerParams {
   expectedRunId: string;
   personId?: string;
   newPersonName?: string;
+  summaryFile?: string | null;
 }
 export type ConfirmSpeakerResponse = Result<{
   person_id: string;
@@ -1097,6 +1117,9 @@ export interface StenoaiBridge {
       StartRecordingResponse
     >;
     stop: RequestFn<[], StopRecordingResponse>;
+    /** Language for the meeting being recorded, saved to its note on Stop. */
+    getLanguage: RequestFn<[], Result<{ language: string }>>;
+    setLanguage: RequestFn<[code: string], Result<Record<string, never>>>;
     pause: RequestFn<[], PauseRecordingResponse>;
     resume: RequestFn<[], ResumeRecordingResponse>;
     reportSystemAudioState: SendFn<[active: boolean]>;
@@ -1147,6 +1170,11 @@ export interface StenoaiBridge {
   };
 
   meetings: {
+    /** Stop this note's (re)transcription; the audio is kept. */
+    cancelProcessing: RequestFn<[summaryFile?: string], Result<Record<string, never>>>;
+    /** This meeting's language; 'auto' means the Settings default applies. */
+    getLanguage: RequestFn<[summaryFile: string], Result<{ language: string }>>;
+    setLanguage: RequestFn<[summaryFile: string, code: string], Result<Record<string, never>>>;
     list: RequestFn<[], ListMeetingsResponse>;
     get: RequestFn<[summaryFile: string], GetMeetingResponse>;
     update: RequestFn<[summaryFile: string, patch: UpdateMeetingPatch], UpdateMeetingResponse>;
@@ -1165,6 +1193,8 @@ export interface StenoaiBridge {
     /** Whether the source recording for a note still exists on disk, gating the
      *  re-transcribe action (available only when keep-recordings was on). */
     recordingAvailable: RequestFn<[summaryFile: string], Result<{ available: boolean }>>;
+    /** The custom Obsidian sync's view of this note; null when not installed. */
+    vaultSyncStatus: RequestFn<[summaryFile: string], Result<{ sync: VaultSyncStatus | null }>>;
     saveNotes: RequestFn<[name: string, notes: string], SaveMeetingNotesResponse>;
     exportTranscript: RequestFn<
       [defaultFilename: string, content: string],
@@ -1321,6 +1351,9 @@ export interface StenoaiBridge {
     getWhisperModel: RequestFn<[], GetWhisperModelResponse>;
     setWhisperModel: RequestFn<[model: string], Result<Record<string, never>>>;
     getKeepRecordings: RequestFn<[], GetKeepRecordingsResponse>;
+    /** Disk cap for kept recordings; null = no limit. Oldest audio goes first. */
+    getAudioStorage: RequestFn<[], Result<{ limitMb: number | null; usedBytes: number }>>;
+    setAudioStorage: RequestFn<[limitMb: number | null], Result<{ limitMb: number | null; usedBytes: number }>>;
     setKeepRecordings: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getAutoSummarize: RequestFn<[], GetAutoSummarizeResponse>;
     setAutoSummarize: RequestFn<[v: boolean], Result<Record<string, never>>>;
@@ -1418,6 +1451,15 @@ export interface StenoaiBridge {
       status: RequestFn<[], AuthStatusResponse>;
       disconnect: RequestFn<[], Result<Record<string, never>>>;
     };
+    apple: {
+      connect: RequestFn<[], Result<AppleCalendarStatus>>;
+      status: RequestFn<[], Result<AppleCalendarStatus>>;
+      disconnect: RequestFn<[], Result<AppleCalendarStatus>>;
+      eventAt: RequestFn<[timeMs: number], Result<{ event: CalendarEvent | null }>>;
+    };
+    /** The calendar event a note's meeting belongs to (looked up once by
+     *  recording start and saved next to the note). */
+    meetingEvent: RequestFn<[summaryFile: string], Result<{ event: CalendarEvent | null }>>;
     getEvents: RequestFn<[], GetCalendarEventsResponse>;
   };
 

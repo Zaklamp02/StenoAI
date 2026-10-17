@@ -9,6 +9,7 @@ const messages = {
   generation_timeout: 'The AI service took too long to respond. Try again when it is available.',
   generation_out_of_memory: 'There was not enough memory to generate notes. Choose a smaller model in Settings or free up memory, then try again.',
   generation_not_configured: 'The AI service is not configured. Complete its setup in Settings, then try again.',
+  processing_stopped: 'Processing was stopped. The recording is kept, so you can resume with Re-transcribe or Generate notes.',
   generation_failed: 'Notes could not be generated. Try again. If the problem continues, check the AI settings and debug logs.',
 } as const;
 

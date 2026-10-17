@@ -1,0 +1,9 @@
+# Versions bundled in the official StenoAI 0.8.0 backend (read from its
+# _internal/*.dist-info). Pinning them keeps our rebuilt backend behaving like
+# the release. Refresh this list when moving to a new official release.
+click==8.5.0
+numpy==2.4.6
+ollama==0.6.3
+parakeet-mlx==0.5.3
+pydantic==2.13.5
+pywhispercpp==1.5.1

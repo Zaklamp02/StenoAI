@@ -6,6 +6,10 @@
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 
+	<!-- Calendar access for the Apple Calendar integration (steno-calendar) -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+
 	<!-- Network access for API calls (Ollama, etc.) -->
 	<key>com.apple.security.network.client</key>
 	<true/>

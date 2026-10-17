@@ -100,19 +100,7 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
       {/* CTA */}
       <div className="flex flex-shrink-0 items-center gap-2 pl-4 opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto">
         {meetingUrl ? (
-          urgent ? (
-            <button
-              type="button"
-              onClick={onStartAndJoin}
-              className="inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-transform hover:scale-105 active:scale-95"
-              style={{
-                background: 'var(--fg-1)',
-                color: 'var(--primary-fg)',
-              }}
-            >
-              Start now
-            </button>
-          ) : (
+          <>
             <button
               type="button"
               onClick={onJoin}
@@ -126,7 +114,20 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
               <Video className="size-3" />
               Join
             </button>
-          )
+            {/* Opens the meeting (Teams links go straight to the Teams app) and
+                starts a note named after it in one click. */}
+            <button
+              type="button"
+              onClick={onStartAndJoin}
+              className="inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-transform hover:scale-105 active:scale-95"
+              style={{
+                background: 'var(--fg-1)',
+                color: 'var(--primary-fg)',
+              }}
+            >
+              Join &amp; take notes
+            </button>
+          </>
         ) : null}
       </div>
     </div>

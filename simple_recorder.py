@@ -206,6 +206,29 @@ def _normalize_markdown_for_parsing(md_text: str) -> str:
     """Ensure headers immediately following a reasoning tag start on a new line."""
     return _REASONING_TAG_HEADER_PATTERN.sub(r'\1\n\2', md_text)
 
+
+_ACTION_ITEM_LINE = re.compile(r'^(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\]\s)(\S.*)$')
+
+
+def _action_items_as_tasks(md_text: str) -> str:
+    """Write top-level ``## Action Items`` bullets as Markdown tasks (``- [ ]``).
+
+    Task-list syntax works in Obsidian, GitHub and most Markdown editors, so
+    exported notes can be ticked off where they land. Items already written
+    as tasks keep their state; other sections and nested lines are untouched.
+    """
+    out = []
+    in_actions = False
+    for line in md_text.split('\n'):
+        if line.startswith('## '):
+            in_actions = line.strip().startswith('## Action Items')
+        elif in_actions:
+            match = _ACTION_ITEM_LINE.match(line)
+            if match:
+                line = f'- [ ] {match.group(1)}'
+        out.append(line)
+    return '\n'.join(out)
+
 # Shared atomic writers (tempfile + os.replace + Windows PermissionError
 # retry). One implementation for the summary JSON and config.json (recorder_state.json
 # is no longer written — see MeetingPipeline.state_file) and one for the summary
@@ -855,6 +878,7 @@ Summary output language: {config.get_language_name(output_language)}
             transcript_text=text_for_summary,
         )
 
+        print("PROGRESS:summarize:start", flush=True)
         print("🧠 Generating summary...", flush=True)
         streamed_chunks = []
         try:
@@ -875,7 +899,7 @@ Summary output language: {config.get_language_name(output_language)}
             err_msg = str(e).replace('\n', ' ').replace('\r', ' ')
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             raise
-        streamed_md = _apply_chinese_variant(''.join(streamed_chunks)) or ''
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
 
         print("STREAM_COMPLETE", flush=True)
 
@@ -1148,6 +1172,14 @@ def _read_existing_user_notes(summary_path: Path):
     section = content[idx + len('\n## User Notes'):].lstrip('\n')
     text = section.strip()
     return text or None
+
+
+@cli.command(name='benchmark-transcription')
+@click.argument('job_file', type=click.Path(exists=True, dir_okay=False))
+def benchmark_transcription_cmd(job_file):
+    """Run an explicitly requested isolated model comparison; no note/vault writes."""
+    from src.asr_benchmark import run_job
+    run_job(job_file)
 
 
 @cli.command(name='process-streaming')
@@ -1491,7 +1523,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
-        streamed_md = _apply_chinese_variant(''.join(streamed_chunks)) or ''
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
 
         print("STREAM_COMPLETE", flush=True)
 
@@ -3253,6 +3285,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
 
     recorder = MeetingPipeline()
     summary_path = Path(summary_file)
+    retranscribed_sidecar = None
 
     if not summary_path.exists():
         print(f"ERROR: Summary file not found: {summary_file}")
@@ -3366,7 +3399,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             # beside a summary living anywhere else would be written and
             # then never found by anything.
             from src.config import get_data_dirs as _get_data_dirs
-            _persist_speaker_sidecar(_get_data_dirs()["output"], stem, transcribe_result)
+            retranscribed_sidecar = (_get_data_dirs()["output"], stem, transcribe_result)
 
         # Get transcript from the data
         transcript = existing_data.get('transcript', '')
@@ -3402,6 +3435,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             from src.summarizer import OllamaSummarizer
             recorder.summarizer = OllamaSummarizer()
 
+        print("PROGRESS:summarize:start", flush=True)
         print("Generating summary...", flush=True)
         streamed_chunks = []
         # Same watchdog-liveness cover as process_streaming: model load +
@@ -3433,7 +3467,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
-        streamed_md = _apply_chinese_variant(''.join(streamed_chunks)) or ''
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
 
         # Regenerate the title when explicitly forced OR when the note still has
         # an auto/placeholder name. The latter is the common case now that the
@@ -3555,6 +3589,12 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             session_info.pop("notes_generated", None)
             session_info.pop("notes_stale", None)
             _atomic_write_text(summary_path, json.dumps(existing_data, indent=2))
+
+        if retranscribed_sidecar is not None:
+            _persist_speaker_sidecar(*retranscribed_sidecar)
+        if retranscribe:
+            from src.openai_asr_jobs import clear_checkpoints
+            clear_checkpoints()
 
         # Signal completion only AFTER the note file is fully written. The
         # renderer reads the note the instant it sees STREAM_COMPLETE, so
@@ -3879,7 +3919,7 @@ def generate_report(summary_file, template_id):
         print(f"STREAM_ERROR:{err_msg}", flush=True)
         sys.exit(1)
 
-    streamed_md = _apply_chinese_variant(''.join(streamed_chunks)) or ''
+    streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
 
     # Do NOT persist an empty report — surface a stream error instead.
     if not streamed_md.strip():
@@ -8019,7 +8059,9 @@ def _update_summary_participants(
             # No "## Summary" section found (shouldn't happen for any
             # summary this codebase writes) -- append at the end rather
             # than silently dropping the update.
-            spliced = lines + [""] + new_section
+            insertion = next((i for i, line in enumerate(lines)
+                              if line.strip().lower() in {"## transcript", "## user notes"}), len(lines))
+            spliced = lines[:insertion] + new_section + lines[insertion:]
         else:
             # Every section this codebase writes already ends its body with
             # a blank separator line before the next "## " header (or EOF),

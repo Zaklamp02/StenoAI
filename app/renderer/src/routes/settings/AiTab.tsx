@@ -27,7 +27,7 @@ import { MetaIcon } from '@/components/ui/meta-icon';
 import { QwenIcon } from '@/components/ui/qwen-icon';
 import { cn, isMac } from '@/lib/utils';
 import { t } from '@/i18n';
-import type { AiProvider, CloudProvider, TranscriptionEngine } from '@/lib/ipc';
+import { ipc, type AiProvider, type CloudProvider, type TranscriptionEngine } from '@/lib/ipc';
 import {
   useAiProvider,
   useSetAiProvider,
@@ -162,6 +162,8 @@ function TranscriptionSection() {
         />
       </SettingRow>
 
+      {keepRecordings.data && <AudioStorageLimitSetting />}
+
       {isMac && <SpeakerSeparationSetting />}
 
       {isMac && (
@@ -170,6 +172,63 @@ function TranscriptionSection() {
 
       <TranscriptionModelList />
     </div>
+  );
+}
+
+// Slider stops for the recordings disk cap; the last stop means no limit.
+const AUDIO_LIMIT_STOPS_MB = [100, 250, 500, 1000, 2000, 5000, 10000, 20000, null] as const;
+
+function formatMb(mb: number): string {
+  return mb >= 1000 ? `${(mb / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB` : `${Math.round(mb)} MB`;
+}
+
+/**
+ * Optional cap on the space kept recordings use. Past it, the oldest audio is
+ * deleted after each processed meeting; notes and transcripts stay.
+ */
+export function AudioStorageLimitSetting() {
+  const [state, setState] = React.useState<{ limitMb: number | null; usedBytes: number } | null>(null);
+  const [index, setIndex] = React.useState(AUDIO_LIMIT_STOPS_MB.length - 1);
+  React.useEffect(() => {
+    void ipc().settings.getAudioStorage().then((res) => {
+      if (!res.success) return;
+      setState(res);
+      const at = AUDIO_LIMIT_STOPS_MB.findIndex((mb) => mb === res.limitMb);
+      setIndex(at === -1 ? AUDIO_LIMIT_STOPS_MB.length - 1 : at);
+    });
+  }, []);
+  const save = (next: number) => {
+    void ipc().settings.setAudioStorage(AUDIO_LIMIT_STOPS_MB[next] ?? null).then((res) => {
+      if (res.success) setState(res);
+    });
+  };
+  const stop = AUDIO_LIMIT_STOPS_MB[index] ?? null;
+  const used = state ? formatMb(state.usedBytes / 1_000_000) : '…';
+  return (
+    <SettingRow
+      label="Recordings storage limit"
+      description={`When saved audio passes this size, the oldest recordings are deleted. Notes and transcripts are kept. Now using ${used}.`}
+    >
+      <div className="flex w-[220px] items-center gap-3">
+        <input
+          type="range"
+          min={0}
+          max={AUDIO_LIMIT_STOPS_MB.length - 1}
+          step={1}
+          value={index}
+          onChange={(e) => setIndex(Number(e.target.value))}
+          onPointerUp={(e) => save(Number((e.target as HTMLInputElement).value))}
+          onKeyUp={(e) => save(Number((e.target as HTMLInputElement).value))}
+          disabled={!state}
+          aria-label="Recordings storage limit"
+          data-testid="audio-storage-limit"
+          className="w-full accent-[color:var(--fg-1)]"
+        />
+        <span className="w-[64px] shrink-0 text-right text-[13px] tabular-nums" style={{ color: 'var(--fg-1)' }}>
+          {stop === null ? 'No limit' : formatMb(stop)}
+        </span>
+      </div>
+    </SettingRow>
   );
 }
 
@@ -268,7 +327,7 @@ export function SpeakerIdentificationSetting() {
 // one supported model today (see SUPPORTED_PARAKEET_MODELS /
 // SUPPORTED_WHISPER_MODELS in the Python registries).
 const ENGINE_TAGLINE: Record<Exclude<TranscriptionEngine, 'openai-asr'>, string> = {
-  parakeet: 'Fastest — English + European languages',
+  parakeet: t('settings.ai.localParakeetHint'),
   whisper: 'Most accurate — 99 languages',
 };
 
@@ -470,7 +529,15 @@ function TranscriptionModelList() {
 // a field resets to these rather than persisting a blank value (the backend
 // rejects a blank URL/model - see set_openai_asr_api_url / set_openai_asr_model).
 const DEFAULT_OPENAI_ASR_URL = 'https://api.openai.com/v1';
-const DEFAULT_OPENAI_ASR_MODEL = 'whisper-1';
+const DEFAULT_OPENAI_ASR_MODEL = 'gpt-transcribe';
+// Recommended cloud model uses local acoustic turns for speaker recognition.
+const OPENAI_ASR_MODEL_SUGGESTIONS = [
+  'gpt-transcribe',
+  'gpt-4o-transcribe-diarize',
+  'whisper-1',
+  'gpt-4o-transcribe',
+  'gpt-4o-mini-transcribe',
+];
 
 /**
  * Config sub-panel shown when the OpenAI-compatible cloud ASR engine is
@@ -577,6 +644,7 @@ function OpenAiAsrConfig() {
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder={t('settings.ai.cloudAsr.modelPlaceholder')}
+          list="openai-asr-model-suggestions"
           onBlur={() => {
             // Same as the URL: a cleared field resets to the default model
             // rather than persisting a blank (which the backend rejects).
@@ -586,6 +654,15 @@ function OpenAiAsrConfig() {
           }}
           className={COMPACT_INPUT}
         />
+        {/* Suggestions only: any model name the endpoint accepts can be typed. */}
+        <datalist id="openai-asr-model-suggestions">
+          {OPENAI_ASR_MODEL_SUGGESTIONS.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <p className="mt-1 text-[12px]" style={{ color: 'var(--fg-muted)' }}>
+          {t('settings.ai.cloudAsr.modelHint')}
+        </p>
       </div>
       <div>
         <label

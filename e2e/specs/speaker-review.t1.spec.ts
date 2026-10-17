@@ -25,6 +25,29 @@ async function openDetail(page: Page) {
   await expect(page.getByTestId('speaker-review-panel')).toBeVisible();
 }
 
+test('calendar invitees fill new names and invited known people lead the Change picker', async ({ launchApp }) => {
+  const { page } = await launchApp({
+    mockIpc: true,
+    env: {
+      STENOAI_E2E_SEED_SPEAKER_SUGGESTIONS: '1',
+      STENOAI_E2E_SEED_CALENDAR_INVITEES: '1',
+    },
+  });
+  await openDetail(page);
+  const row = page.getByTestId('speaker-row-mic:SPEAKER_0');
+  await row.getByRole('button', { name: 'New person', exact: true }).click();
+  const invitees = page.getByTestId('speaker-invitees');
+  await expect(invitees).toBeVisible();
+  await expect(invitees).not.toContainText('Owner');
+  await expect(invitees).not.toContainText('Person Beta');
+  await invitees.getByRole('button', { name: 'Invited New Person' }).click();
+  await expect(page.getByTestId('speaker-new-person-input')).toHaveValue('Invited New Person');
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await row.getByRole('button', { name: 'Change', exact: true }).click();
+  const choices = page.locator('[data-testid^="speaker-pick-person-"]');
+  await expect(choices.first()).toContainText('Person Beta');
+});
+
 test('saved transcript identifies each acoustically diarised speaker', async ({ launchApp }) => {
   const { page } = await launchApp({
     mockIpc: true,

@@ -11,6 +11,7 @@ export type StreamPhase = 'idle' | 'analyzing' | 'generating' | 'done';
 export interface StreamState {
   text: string;
   phase: StreamPhase;
+  progressLine?: string | null;
 }
 
 export const streamCache = new Map<string, StreamState>();

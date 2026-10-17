@@ -60,6 +60,7 @@ async function start(validationError) {
     validateMeetingFilePath: async () => validationError ? { error: validationError } : { realPath: '/synthetic/meeting.md' },
     activeReprocessJobs: jobs, getAiEnv: () => ({}),
     getBackendEnv: () => ({}), getTranscriptionEnv: async () => ({}),
+    noteLanguages: { env: () => ({}) }, enforceAudioStorage: () => {},
     spawn: () => proc, getBackendPath: () => '/synthetic/backend', getBackendCwd: () => '/synthetic',
     TRANSCRIBE_INACTIVITY_MS: 1000,
     activeInactivityWatchdogs: new Set(), systemSuspendedForWatchdogs: false,

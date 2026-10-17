@@ -7,6 +7,8 @@ import {
   PencilLine,
 } from 'lucide-react';
 import { MeetingsShell } from '@/components/MeetingsShell';
+import { MeetingLanguageSelect } from '@/components/MeetingLanguageSelect';
+import { ipc } from '@/lib/ipc';
 import { useNavigate } from '@/lib/router';
 import { useRecording } from '@/hooks/useRecording';
 import { useLiveMeeting } from '@/hooks/useLiveMeeting';
@@ -52,6 +54,18 @@ export function Recording() {
 
   const startedAt = live.startedAt ?? new Date();
 
+  // Language for this meeting only; applied when the recording is processed.
+  const [language, setLanguage] = React.useState('auto');
+  React.useEffect(() => {
+    void ipc().recording.getLanguage().then((res) => {
+      if (res.success) setLanguage(res.language);
+    });
+  }, []);
+  const chooseLanguage = (code: string) => {
+    setLanguage(code);
+    void ipc().recording.setLanguage(code);
+  };
+
   return (
     <MeetingsShell activeSummaryFile={null} hideToolbar>
       <div
@@ -89,6 +103,11 @@ export function Recording() {
                 <Chip icon={<FolderPlus size={11} />} dashed>
                   Add to folder
                 </Chip>
+                <MeetingLanguageSelect
+                  value={language}
+                  onChange={chooseLanguage}
+                  testId="recording-language-select"
+                />
               </div>
             </header>
 

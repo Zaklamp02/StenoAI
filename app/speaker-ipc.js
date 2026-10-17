@@ -87,11 +87,25 @@ function errorResponse(error) {
   return { success: false, error: error instanceof TypeError ? error.message : 'Speaker operation failed.' };
 }
 
-function registerSpeakerIpc({ ipcMain, runPythonScript, parsePythonFailureJson }) {
+function registerSpeakerIpc({
+  ipcMain, runPythonScript, parsePythonFailureJson, contacts, meetingCalendar,
+  sendDebugLog = () => {},
+}) {
   ipcMain.handle('list-person-profiles', async () => {
     try {
       const out = await runPythonScript('simple_recorder.py', ['list-person-profiles']);
-      return { success: true, ...JSON.parse(out) };
+      const result = { success: true, ...JSON.parse(out) };
+      if (contacts && Array.isArray(result.person_profiles)) {
+        try {
+          const saved = contacts.list();
+          result.person_profiles = result.person_profiles.map((profile) => ({
+            ...profile, email: saved[profile.person_id]?.email || null,
+          }));
+        } catch {
+          sendDebugLog('[people] Could not read local contact emails.');
+        }
+      }
+      return result;
     } catch (error) {
       return errorResponse(error);
     }
@@ -115,7 +129,16 @@ function registerSpeakerIpc({ ipcMain, runPythonScript, parsePythonFailureJson }
       if (params.newPersonName) args.push('--new-person', params.newPersonName);
       args.push('--expected-run-id', params.expectedRunId);
       args.push('--relabel-transcript');
-      return JSON.parse(await runPythonScript('simple_recorder.py', args));
+      const result = JSON.parse(await runPythonScript('simple_recorder.py', args));
+      if (result.success && contacts && meetingCalendar && params.summaryFile) {
+        try {
+          contacts.remember(result, await meetingCalendar(params.summaryFile, params.meetingStem));
+        } catch {
+          // Email enrichment must not turn a committed speaker confirmation into a failure.
+          sendDebugLog('[people] Could not remember a local contact email.');
+        }
+      }
+      return result;
     } catch (error) {
       return error instanceof TypeError ? errorResponse(error) : parsePythonFailureJson(error);
     }
@@ -143,7 +166,13 @@ function registerSpeakerIpc({ ipcMain, runPythonScript, parsePythonFailureJson }
   ipcMain.handle('delete-person-profile', async (_event, id) => {
     try {
       const personId = validateOpaqueId(id, 'person identifier');
-      return JSON.parse(await runPythonScript('simple_recorder.py', ['delete-person-profile', personId]));
+      const result = JSON.parse(await runPythonScript('simple_recorder.py', ['delete-person-profile', personId]));
+      if (result.success && contacts) {
+        try { contacts.remove(personId); } catch {
+          sendDebugLog('[people] Could not remove a local contact email.');
+        }
+      }
+      return result;
     } catch (error) {
       return error instanceof TypeError ? errorResponse(error) : parsePythonFailureJson(error);
     }

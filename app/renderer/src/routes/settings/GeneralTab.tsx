@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { CalendarDays, ExternalLink, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
@@ -52,6 +52,7 @@ import {
 } from '@/hooks/useSettings';
 import { useAudioInputDevices } from '@/hooks/useAudioInputDevices';
 import {
+  useAppleCalendar,
   useGoogleCalendarAuth,
   useOutlookCalendarAuth,
 } from '@/hooks/useCalendarEvents';
@@ -110,6 +111,7 @@ export function GeneralTab() {
   const audioInputDevices = useAudioInputDevices();
   const google = useGoogleCalendarAuth();
   const outlook = useOutlookCalendarAuth();
+  const apple = useAppleCalendar();
   const userName = useUserName();
   const setUserName = useSetUserName();
   const [nameDraft, setNameDraft] = React.useState('');
@@ -341,6 +343,41 @@ export function GeneralTab() {
               Outlook
             </Button>
           </div>
+        )}
+      </SettingRow>
+
+      <SettingRow
+        label="Apple Calendar"
+        description={
+          apple.connect.isError
+            ? (apple.connect.error as Error).message
+            : apple.status.data?.enabled
+              ? 'Connected. Uses every calendar in Calendar.app, with attendees; takes precedence over Google/Outlook.'
+              : 'Use the calendars in Calendar.app (iCloud, Exchange, Google accounts added to your Mac).'
+        }
+        noBorder
+      >
+        {apple.status.data?.enabled ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className={COMPACT_BTN}
+            onClick={() => apple.disconnect.mutate()}
+          >
+            <CalendarDays className="size-[13px]" />
+            Disconnect
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className={COMPACT_BTN}
+            disabled={apple.connect.isPending || apple.status.data?.available === false}
+            onClick={() => apple.connect.mutate()}
+          >
+            <CalendarDays className="size-[13px]" />
+            {apple.connect.isPending ? 'Waiting for permission…' : 'Connect'}
+          </Button>
         )}
       </SettingRow>
 

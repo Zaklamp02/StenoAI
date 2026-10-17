@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ipc } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
 import { meetingsKeys } from './meetingKeys';
+import { speakersKeys } from './useSpeakerSuggestions';
+import { calendarKeys } from './useCalendarEvents';
 import { orgKeys } from './useOrg';
 import { useLiveDraftStore } from './liveDraftStore';
 import { navigate, routeFromHash } from '@/lib/router';
@@ -301,6 +303,8 @@ export function useRecording() {
      *  Set rather than array so consumers can do O(1) membership checks
      *  inside the meetings list map. */
     reprocessingSummaryFiles: reprocessingSummaryFiles,
+    reprocesses: queue.data?.currentReprocesses ?? [],
+    processingProgress: queue.data?.currentProgress ?? null,
     /** True once the queue poll has resolved successfully at least once. The
      *  processing-screen watchdog must not count "idle+empty" ticks before real
      *  data has arrived — absent query data defaults to status:'idle' /
@@ -511,6 +515,10 @@ export function useRecordingProcessingEffects() {
           });
       }
       qc.invalidateQueries({ queryKey: meetingsKeys.all });
+      // A finished run (re)writes the speaker sidecar; suggestions cached
+      // from before it would keep the Speakers panel empty until a remount.
+      qc.invalidateQueries({ queryKey: speakersKeys.all });
+      qc.invalidateQueries({ queryKey: calendarKeys.all });
       qc.invalidateQueries({ queryKey: queueKey });
       // Clear any streamCache entry for the finished session. MeetingDetail
       // does its own cleanup when mounted (with a 400ms grace so the "done"

@@ -12,6 +12,31 @@ from src.config import Config
 
 
 class ReprocessFailurePreservationTests(unittest.TestCase):
+    def test_failed_retranscription_summary_preserves_speaker_sidecar_and_checkpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recordings = root / 'recordings'
+            recordings.mkdir()
+            (recordings / 'synthetic.wav').write_bytes(b'synthetic audio')
+            note = root / 'synthetic_summary.md'
+            original = '---\ntitle: Synthetic\nlanguage: en\nduration_seconds: 60\n---\n\n## Summary\nOld summary\n\n## Transcript\nOld transcript\n'
+            note.write_text(original)
+            pipeline = mock.MagicMock()
+            pipeline.recordings_dir = recordings
+            pipeline.transcribe_audio = mock.AsyncMock(return_value={
+                'transcript_text': 'New synthetic transcript', 'is_diarised': True,
+            })
+            pipeline.summarizer.summarize_transcript_streaming.side_effect = ConnectionError('interrupted')
+            with mock.patch.dict(os.environ, {'STENOAI_USER_DATA_DIR': tmp}), \
+                    mock.patch('simple_recorder.MeetingPipeline', return_value=pipeline), \
+                    mock.patch('simple_recorder._persist_speaker_sidecar') as sidecar, \
+                    mock.patch('src.openai_asr_jobs.clear_checkpoints') as clear:
+                result = CliRunner().invoke(simple_recorder.reprocess, [str(note), '--retranscribe'])
+            self.assertEqual(result.exit_code, 1, result.output)
+            self.assertEqual(note.read_text(), original)
+            sidecar.assert_not_called()
+            clear.assert_not_called()
+
     def test_failure_before_or_during_stream_keeps_note_and_user_notes(self):
         for partial in (False, True):
             with self.subTest(partial=partial), tempfile.TemporaryDirectory() as tmp:

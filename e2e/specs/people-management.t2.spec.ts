@@ -6,7 +6,7 @@ import {
   fixtureDiarizationRunId,
   writeSpeakersSidecar,
 } from '../fixtures/user-config';
-import { readFileSync, mkdirSync } from 'fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 
 type ProfileMutationResult = {
@@ -52,6 +52,50 @@ function storedProfileNames(configPath: string): string[] {
     return [];
   }
 }
+
+test('confirming a calendar invitee persists their email and displays it on People', async ({
+  launchApp, userDataDir,
+}) => {
+  const stem = 'e2e-invitee-contact';
+  const recordingsDir = path.join(userDataDir, 'recordings');
+  const outputDir = path.join(userDataDir, 'output');
+  mkdirSync(recordingsDir, { recursive: true });
+  mkdirSync(outputDir, { recursive: true });
+  makeWav(path.join(recordingsDir, `${stem}.wav`), { seconds: 3, channels: 2 });
+  writeSpeakersSidecar(userDataDir, stem, {
+    mic: { recording_type: 'in_person', clusters: {
+      SPEAKER_0: { embedding: [1, 0], speech_duration_seconds: 2,
+        segment_count: 1, segments: [{ start: 0.5, end: 2.5 }] },
+    } },
+  });
+  enableSpeakerIdentification(userDataDir);
+  const configPath = path.join(userDataDir, 'config.json');
+  writeFileSync(configPath, JSON.stringify({
+    ...JSON.parse(readFileSync(configPath, 'utf8')), privacy_notice_seen: true,
+  }));
+  const summaryFile = path.join(outputDir, `${stem}_summary.md`);
+  writeFileSync(summaryFile, '# Invitee contact\n\n## Summary\nTest note.\n');
+  writeFileSync(path.join(outputDir, `${stem}_calendar.json`), JSON.stringify({
+    event: { attendees: [{ name: 'Invited Person', email: 'invitee@example.com' }] },
+  }));
+  const { page } = await launchApp({ releaseHighlightsSeen: true });
+  const confirmed = await page.evaluate(async (params) => {
+    const bridge = (window as StenoWindow).stenoai.speakers;
+    return bridge.confirm(params);
+  }, {
+    meetingStem: stem, channel: 'mic', diarizationSpeakerId: 'SPEAKER_0',
+    expectedRunId: fixtureDiarizationRunId(stem), newPersonName: 'Invited Person', summaryFile,
+  });
+  expect(confirmed.success).toBe(true);
+  const contactFile = path.join(userDataDir, 'person-contacts.json');
+  expect(JSON.parse(readFileSync(contactFile, 'utf8'))[confirmed.person_id!].email)
+    .toBe('invitee@example.com');
+  await page.evaluate(() => { window.location.hash = '#/people'; });
+  await expect(page.getByTestId(`people-email-${confirmed.person_id}`)).toHaveText('invitee@example.com');
+  await page.getByTestId(`people-delete-${confirmed.person_id}`).click();
+  await page.locator('[data-confirm-dialog]').getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect.poll(() => JSON.parse(readFileSync(contactFile, 'utf8'))).toEqual({});
+});
 
 test('People settings sorts profiles and deletes one through the real backend', async ({
   launchApp,

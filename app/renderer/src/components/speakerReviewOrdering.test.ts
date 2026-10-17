@@ -5,6 +5,12 @@ import { namesCollide, orderProfilesForRow, filterProfilesByQuery } from './Spea
 const p = (display_name: string) => ({ display_name, person_id: `id-${display_name.toLowerCase()}` });
 
 describe('orderProfilesForRow', () => {
+  it('puts invitees before other people, including already assigned people', () => {
+    const ordered = orderProfilesForRow(
+      [p('Zoe'), p('Alice'), p('Max')], new Set(['id-max']), [' zoe '],
+    );
+    expect(ordered.map((x) => x.display_name)).toEqual(['Zoe', 'Max', 'Alice']);
+  });
   it('puts people already assigned in this meeting first', () => {
     const ordered = orderProfilesForRow(
       [p('Zoe'), p('Alice'), p('Max')],

@@ -74,6 +74,7 @@ const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
 const { registerObsidianSync } = require('./obsidian-sync');
+const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
 const { isSafeToAutoInstall } = require('./update-idle-gate');
 const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError } = require('./update-error-copy');
@@ -90,6 +91,29 @@ const {
 } = require('./notification-copy');
 const { makeLineReader } = require('./backend-stream');
 const { classifyReprocessError } = require('./reprocess-error');
+const noteLanguages = require('./note-language').createNoteLanguages(getUserDataDir);
+// Optional disk cap for kept recordings (Settings → Keep recordings).
+const audioStorage = require('./audio-storage').createAudioStorage({
+  getUserDataDir,
+  resolveRecordingsDir: () => resolveRecordingsDir(),
+  // Never delete audio a job is about to read or is reading.
+  isProtected: (filePath) => {
+    const { noteStem } = require('./note-language');
+    const stem = noteStem(filePath);
+    const busy = [currentProcessingJob?.audioFile, ...processingQueue.map((job) => job.audioFile),
+      ...activeReprocessJobs.keys()].filter(Boolean);
+    return busy.some((p) => noteStem(p) === stem);
+  },
+});
+
+function enforceAudioStorage() {
+  try {
+    const deleted = audioStorage.enforce();
+    if (deleted.length) sendDebugLog(`Audio storage limit: deleted ${deleted.length} oldest recording(s)`);
+  } catch (e) {
+    sendDebugLog(`Audio storage limit check failed: ${e.message}`);
+  }
+}
 // Pure deep-link (stenoai://) parsing/sanitizing lives in ./shortcut-url
 // (unit-tested). The stateful side — window creation, IPC dispatch,
 // notifications — stays here and calls parseShortcutUrl().
@@ -1096,6 +1120,16 @@ const obsidianSync = registerObsidianSync({
   sendDebugLog,
 });
 
+// Apple Calendar (EventKit) source; when connected it takes precedence over
+// Google/Outlook in every calendar lookup below.
+const appleCalendar = registerAppleCalendar({
+  ipcMain,
+  app,
+  getUserDataDir,
+  sendDebugLog,
+  isAllowedSummaryPath: (p) => Boolean(validateSafeFilePath(p, getAllowedBaseDirs())),
+});
+
 // Sync resolver for the audio recordings folder. Mirrors the path order used
 // by the async `get-recordings-dir` handler (custom storage > packaged data
 // dir > dev scratch). Use this anywhere we need the path inside an IPC
@@ -1913,6 +1947,7 @@ if (!gotSingleInstanceLock) {
 
   ipcMain.on('warmup-parakeet-hint', () => rewarmParakeet('renderer-hint'));
   app.on('second-instance', (event, argv) => {
+    void runRequestedBenchmark(argv);
     if (process.platform === 'darwin') {
       for (const arg of argv.slice(1)) meetingTransfer.openFile(arg);
     }
@@ -2063,6 +2098,7 @@ if (!gotSingleInstanceLock) {
     // helper encrypts, verifies a decrypt/readback, then asks the backend to
     // remove plaintext only after that succeeds.
     void migrateLegacyOpenAiAsrApiKey();
+    void runRequestedBenchmark(process.argv);
 
     // Application menu. macOS uses the global menu bar with mac-only roles
     // (services/hide/unhide). Windows/Linux get a slimmer, platform-correct
@@ -2365,6 +2401,7 @@ if (!gotSingleInstanceLock) {
     // dir and misses a custom-storage user's notes entirely. Deferred off the
     // critical path so the per-note frontmatter scan never delays first paint.
     setImmediate(sweepStuckProcessingFlags);
+    setTimeout(enforceAudioStorage, 60 * 1000);
 
     if (pendingShortcutUrls.length > 0) {
       const urlsToProcess = [...pendingShortcutUrls];
@@ -3097,18 +3134,24 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
     // reprocesses B before A finishes) coexist. Removed in the finally
     // block below so a Python crash or spawn error doesn't leave it
     // stuck.
-    activeReprocessJobs.set(summaryFile, { summaryFile, sessionName: sessionName || null });
+    activeReprocessJobs.set(summaryFile, { summaryFile, sessionName: sessionName || null, progressLine: retranscribe ? 'PROGRESS:audio:preparing' : 'PROGRESS:summarize:start' });
 
     const reprocessSecrets = retranscribe
-      ? { ...getAiEnv(), ...getTranscriptionEnv() }
+      ? { ...getAiEnv(), ...getTranscriptionEnv(),
+        STENOAI_OAI_CACHE_DIR: path.join(getUserDataDir(), 'asr-checkpoints',
+          require('crypto').createHash('sha256').update(realPath).digest('hex')) }
       : getAiEnv();
-    const reprocessEnv = getBackendEnv(reprocessSecrets);
+    const reprocessEnv = getBackendEnv({ ...reprocessSecrets, ...noteLanguages.env(realPath) });
 
     await new Promise((resolve, reject) => {
       const proc = spawn(getBackendPath(), args, {
         cwd: getBackendCwd(),
         env: reprocessEnv
       });
+      const reprocessJob = activeReprocessJobs.get(summaryFile);
+      if (reprocessJob) reprocessJob.proc = proc; // for cancel-processing
+      attachProcessingStderr(proc, 'reprocess');
+      processingLog.logLine('reprocess', `START retranscribe=${Boolean(retranscribe)}`);
 
       let stderrBuf = '';
       // Mirrors the main pipeline: true only if summarization actually ran
@@ -3133,6 +3176,7 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
       proc.stdout.on('data', (data) => {
         watchdog.reset();
         for (const line of stdoutReader.feed(data)) {
+          logPipelineStdoutLine(line, 'reprocess');
           if (line.startsWith('CHUNK:')) {
             try {
               const encoded = line.slice(6);
@@ -3152,6 +3196,7 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
               mainWindow.webContents.send('summary-complete', { success: true, sessionName, summaryFile });
             }
           } else if (line.startsWith('PROGRESS:')) {
+            if (reprocessJob) reprocessJob.progressLine = line;
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('processing-progress', { line, summaryFile });
             }
@@ -3183,6 +3228,7 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
       });
 
       proc.on('close', (code) => {
+        processingLog.logLine('reprocess', `EXIT code=${code} cancelled=${Boolean(reprocessJob?.cancelled)}`);
         watchdog.clear();
         if (code === 0 && !streamFailed && !watchdog.timedOut) {
           console.log(`✅ Completed reprocessing: ${sessionName}`);
@@ -3190,6 +3236,7 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
           // it into the vault (#413) if sync is on. Use the canonical realPath
           // (not the renderer alias) so it indexes under the true summary stem.
           try { if (realPath) obsidianSync.syncNoteBySummaryPath(realPath); } catch (_) {}
+          if (realPath) appleCalendar.ensureMeetingCalendar(realPath).catch(() => {});
           // Look up the saved meeting so the completion event carries meetingData
           // with the note's CURRENT title — reprocess may have generated an LLM
           // title, so `sessionName` here can still be the 'Note' placeholder. The
@@ -3230,6 +3277,8 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
         } else {
           // A STREAM_ERROR is more specific than a generic exit or trailing
           // diagnostic. Keep it through both terminal events and the result.
+          // A user Stop is not a failure: report it as its own state.
+          if (reprocessJob?.cancelled) errorCode = 'processing_stopped';
           if (errorCode === 'generation_failed' && watchdog.timedOut) errorCode = 'generation_timeout';
           if (errorCode === 'generation_failed') rememberError(stderrBuf);
           if (mainWindow && !mainWindow.isDestroyed()) {
@@ -3254,6 +3303,7 @@ ipcMain.handle('reprocess-meeting', async (event, summaryFile, regenerateTitle, 
     return { success: false, error: 'Note generation failed', error_code: errorCode };
   } finally {
     activeReprocessJobs.delete(summaryFile);
+    enforceAudioStorage();
   }
 });
 
@@ -4868,7 +4918,8 @@ ipcMain.handle('get-queue-status', async () => {
     isProcessing,
     queueSize: processingQueue.length,
     currentJob: currentProcessingJob?.sessionName || null,
-    currentReprocesses: Array.from(activeReprocessJobs.values()),
+    currentProgress: currentProcessingJob ? { summaryFile: currentProcessingJob.summaryFile || null, progressLine: currentProcessingJob.progressLine } : null,
+    currentReprocesses: Array.from(activeReprocessJobs.values(), ({ summaryFile, sessionName, progressLine }) => ({ summaryFile, sessionName, progressLine })),
     hasRecording: currentRecordingProcess !== null || systemAudioRecordingActive,
     isPaused: recordingRuntimeState.isPaused,
     elapsedSeconds: (currentRecordingProcess !== null || systemAudioRecordingActive)
@@ -5728,7 +5779,10 @@ async function processNextInQueue() {
     // process-streaming does BOTH transcription (needs the ASR key) and
     // summarization (needs the AI env), so merge both.
     const queueAiEnv = { ...getAiEnv(), ...getTranscriptionEnv() };
-    const queueEnv = getBackendEnv(queueAiEnv);
+    const queueEnv = getBackendEnv({
+      ...queueAiEnv,
+      ...noteLanguages.env(currentProcessingJob.appendTo || currentProcessingJob.summaryFile || currentProcessingJob.audioFile),
+    });
     const processArgs = ['process-streaming', currentProcessingJob.audioFile, '--name', currentProcessingJob.sessionName];
     if (currentProcessingJob.notesFile && fs.existsSync(currentProcessingJob.notesFile)) {
       processArgs.push('--notes', currentProcessingJob.notesFile);
@@ -5751,6 +5805,7 @@ async function processNextInQueue() {
         cwd: getBackendCwd(),
         env: queueEnv
       });
+      currentProcessingJob.proc = proc; // for cancel-processing
 
       let stderrBuf = '';
       // Captured from `SAVED:<path>` so processing-complete can include
@@ -5847,6 +5902,7 @@ async function processNextInQueue() {
             }
             forwardDiagnosticStdout(line, 'process-streaming');
           } else if (line.startsWith('PROGRESS:')) {
+            currentProcessingJob.progressLine = line;
             if (mainWindow && !mainWindow.isDestroyed()) {
               // Instant stop stamps the (deterministic) summaryFile so the
               // note's own map-reduce progress bar tracks it; undefined for
@@ -5896,6 +5952,8 @@ async function processNextInQueue() {
             const finishedSummary = savedSummaryFile
               || (currentProcessingJob && currentProcessingJob.summaryFile);
             if (finishedSummary) obsidianSync.syncNoteBySummaryPath(finishedSummary);
+            // Attach the calendar event this meeting belongs to (best-effort)
+            if (finishedSummary) appleCalendar.ensureMeetingCalendar(finishedSummary).catch(() => {});
           } catch (_) {}
           // Notify frontend that streaming is done and meeting is saved
           if (mainWindow && !mainWindow.isDestroyed()) {
@@ -5998,6 +6056,7 @@ async function processNextInQueue() {
         success: false,
         sessionName: currentProcessingJob.sessionName,
         error: error.message,
+        ...(currentProcessingJob.cancelled ? { error_code: 'processing_stopped' } : {}),
         // The source audio is preserved above; hand its path to the renderer
         // so the Processing screen's "Try again" can re-queue it via
         // process-recording instead of dead-ending on an infinite spinner.
@@ -6030,6 +6089,7 @@ async function processNextInQueue() {
     isProcessing = false;
     currentProcessingJob = null;
     currentProcessingStartedAtMs = null;
+    enforceAudioStorage();
     // Process next job in queue
     setTimeout(processNextInQueue, 1000);
   }
@@ -6261,6 +6321,12 @@ function sweepStuckProcessingFlags() {
 }
 
 function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile) {
+  // A language picked on the recording screen belongs to this meeting only.
+  if (pendingRecordingLanguage) {
+    try { noteLanguages.set(appendTo || summaryFile || audioFile, pendingRecordingLanguage); }
+    catch (e) { sendDebugLog(`Meeting language not saved: ${e.message}`); }
+    pendingRecordingLanguage = null;
+  }
   processingQueue.push({ audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile });
   console.log(`📋 Added to processing queue: ${sessionName} (Queue size: ${processingQueue.length})`);
   processNextInQueue();
@@ -6277,6 +6343,66 @@ let currentRecordingAppendTarget = null;
 // renderer arg can't smuggle an arbitrary string into PostHog.
 const RECORDING_TRIGGERS = new Set(['manual', 'notification_click', 'hotkey', 'tray', 'url_scheme']);
 
+ipcMain.handle('get-audio-storage', async () => {
+  try {
+    return { success: true, limitMb: audioStorage.getLimitMb(), usedBytes: audioStorage.usedBytes() };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('set-audio-storage', async (_event, limitMb) => {
+  try {
+    audioStorage.setLimitMb(limitMb === null ? null : Number(limitMb));
+    enforceAudioStorage();
+    return { success: true, limitMb: audioStorage.getLimitMb(), usedBytes: audioStorage.usedBytes() };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('vault-sync-status', async (_event, summaryFile) => {
+  const validated = await validateMeetingFilePath(summaryFile);
+  if (validated.error) return { success: false, error: validated.error };
+  try {
+    const { noteStem } = require('./note-language');
+    const sourceMtimeMs = (await fs.promises.stat(validated.realPath)).mtimeMs;
+    return { success: true, sync: require('./vault-sync-status').vaultSyncStatus({ stem: noteStem(validated.realPath), sourceMtimeMs }) };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Language chosen for the meeting being recorded; stored per note at enqueue.
+let pendingRecordingLanguage = null;
+
+ipcMain.handle('get-recording-language', async () => ({ success: true, language: pendingRecordingLanguage || 'auto' }));
+
+ipcMain.handle('set-recording-language', async (_event, code) => {
+  if (code !== 'auto' && !require('./note-language').isLanguageCode(code)) {
+    return { success: false, error: 'Invalid language' };
+  }
+  pendingRecordingLanguage = code === 'auto' ? null : code;
+  return { success: true };
+});
+
+ipcMain.handle('get-note-language', async (_event, summaryFile) => {
+  const validated = await validateMeetingFilePath(summaryFile);
+  if (validated.error) return { success: false, error: validated.error };
+  return { success: true, language: noteLanguages.get(validated.realPath) || 'auto' };
+});
+
+ipcMain.handle('set-note-language', async (_event, summaryFile, code) => {
+  const validated = await validateMeetingFilePath(summaryFile);
+  if (validated.error) return { success: false, error: validated.error };
+  try {
+    noteLanguages.set(validated.realPath, code);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) => {
   try {
     if (currentRecordingProcess) {
@@ -6285,6 +6411,9 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     if (systemAudioRecordingActive) {
       return { success: false, error: 'Recording already in progress' };
     }
+    // A new meeting starts with the Settings default language.
+    pendingRecordingLanguage = null;
+    autoStopDeclined = false;
 
     // Validate the append target up front: it must be an existing, canonical
     // meeting file (`*_summary.md`/`.json`) scoped to an `output/` dir — the
@@ -6535,6 +6664,8 @@ ipcMain.handle('resume-recording-ui', async () => {
 });
 
 ipcMain.handle('stop-recording-ui', async () => {
+  // The call this recording was paired with no longer matters once it stops.
+  clearAutoStartedSession();
   try {
     // Stopping ends any sleep-pause state — don't prompt Resume on a
     // recording that no longer exists.
@@ -6847,9 +6978,37 @@ function autoUpdateOSEligible() {
   });
 }
 
+// Stop a note's transcription / re-transcription. The job ends through its
+// normal failure path, which keeps the audio and leaves the note retryable
+// (Re-transcribe). Without a summaryFile, stops the current queue job.
+ipcMain.handle('cancel-processing', async (_event, summaryFile) => {
+  const reprocess = typeof summaryFile === 'string' ? activeReprocessJobs.get(summaryFile) : null;
+  const target = reprocess
+    || (currentProcessingJob
+      && (!summaryFile || currentProcessingJob.summaryFile === summaryFile)
+      ? currentProcessingJob
+      : null);
+  if (!target || !target.proc || target.proc.exitCode !== null) {
+    return { success: false, error: 'Nothing is processing for this note' };
+  }
+  sendDebugLog(`Processing cancelled by user: ${target.summaryFile || target.sessionName}`);
+  target.cancelled = true;
+  target.proc.kill('SIGTERM');
+  return { success: true };
+});
+
+// Custom build (see custom/README.md): it is not signed by Steno Labs, so an
+// official update would replace it with the stock app. New releases are pulled
+// in with custom/update.sh instead; the read-only "latest version" check stays.
+const IS_CUSTOM_BUILD = true;
+
 function setupAutoUpdater() {
   if (IS_E2E) {
     sendDebugLog('Auto-updater: skipped (E2E mode)');
+    return;
+  }
+  if (IS_CUSTOM_BUILD) {
+    sendDebugLog('Auto-updater: skipped (custom build; update with custom/update.sh)');
     return;
   }
   // Don't check for updates in dev mode
@@ -7104,7 +7263,21 @@ const MEETING_END_DEBOUNCE_MS = 3_000;
 // brief device switch — since auto-resume cancels the auto-stop if the mic
 // returns within it. Because a released mic reliably means the call ended (not
 // mute), we finalize automatically after this rather than prompting the user.
-const MEETING_END_AUTOSTOP_GRACE_MS = 10_000;
+// 30 s rather than 10 s: the recording is already paused at this point, so a
+// longer grace costs no audio, only a short delay before processing starts. It
+// leaves time for a slow device switch or a Teams reconnect, and for the user
+// to press "Keep recording" on the notification.
+const MEETING_END_AUTOSTOP_GRACE_MS = 30_000;
+
+// A recording started by hand or with "Join & take notes" is paired with the
+// first meeting app that opens the mic during it. Its release only ends the
+// recording once it has held the mic this long, so a browser tab or dictation
+// tool that briefly uses the mic during an in-person meeting cannot stop it.
+const OBSERVED_MEETING_MIN_MS = 60_000;
+
+// Set when the user presses "Keep recording": no more auto-stop for this
+// recording. Cleared when the next recording starts.
+let autoStopDeclined = false;
 
 let micMonitorProc = null;
 let micMonitorRespawnTimer = null;
@@ -7237,7 +7410,20 @@ async function handleMicEvent(line) {
   }
 
   if (currentRecordingProcess || systemAudioRecordingActive) {
-    sendDebugLog(`[auto-detect] ignoring start (${evt.app_name || evt.app_id || 'unknown'}) — already recording`);
+    if (!autoStartedSession && !autoStopDeclined) {
+      autoStartedSession = {
+        pid: evt.pid ?? null,
+        app_id: evt.app_id ?? null,
+        appName: humanizeAppName(evt),
+        paused: false,
+        pauseTimer: null,
+        autoStopTimer: null,
+        observedAt: Date.now(),
+      };
+      sendDebugLog(`[auto-detect] paired running recording with ${autoStartedSession.appName} for auto-stop`);
+    } else {
+      sendDebugLog(`[auto-detect] ignoring start (${evt.app_name || evt.app_id || 'unknown'}) — already recording`);
+    }
     return;
   }
 
@@ -7268,6 +7454,13 @@ function handleMicStop(evt) {
   }
   const matches = evt.pid === autoStartedSession.pid || evt.app_id === autoStartedSession.app_id;
   if (!matches) return;
+  if (autoStartedSession.observedAt && Date.now() - autoStartedSession.observedAt < OBSERVED_MEETING_MIN_MS) {
+    // Too short to be the meeting this recording is about: forget it and
+    // let the next meeting app that opens the mic pair instead.
+    sendDebugLog(`[auto-detect] ${autoStartedSession.appName} released the mic quickly; not ending the recording`);
+    clearAutoStartedSession();
+    return;
+  }
 
   if (autoStartedSession.pauseTimer) clearTimeout(autoStartedSession.pauseTimer);
   autoStartedSession.pauseTimer = setTimeout(() => {
@@ -7287,6 +7480,7 @@ function handleMicStop(evt) {
     // the stream open while muted, see MEETING_END_DEBOUNCE_MS), so we auto-stop
     // — a meeting is never left stranded paused.
     if (autoStartedSession.autoStopTimer) clearTimeout(autoStartedSession.autoStopTimer);
+    showMeetingEndedNotification(autoStartedSession.appName);
     autoStartedSession.autoStopTimer = setTimeout(() => {
       autoStartedSession.autoStopTimer = null;
       sendDebugLog(`[auto-detect] auto-stopping ended meeting: ${autoStartedSession.appName}`);
@@ -7359,6 +7553,34 @@ function autoStopEndedMeeting() {
     mainWindow.webContents.send('auto-summarise-requested', {});
   }
   clearAutoStartedSession();
+}
+
+// "Call ended" notice with a way out, shown when the auto-stop countdown starts.
+async function showMeetingEndedNotification(appName) {
+  try {
+    if (!(await notificationsEnabled())) return;
+    const notif = new Notification({
+      title: 'Call ended',
+      body: `${appName} closed the call. Finishing your note in ${MEETING_END_AUTOSTOP_GRACE_MS / 1000} seconds.`,
+      actions: [{ type: 'button', text: 'Keep recording' }],
+    });
+    notif.on('action', () => keepRecordingAfterCallEnd());
+    trackNotificationLifecycle(notif, 'meeting_ended');
+    notif.show();
+  } catch (e) {
+    sendDebugLog(`[auto-detect] meeting-ended notification failed: ${e.message}`);
+  }
+}
+
+function keepRecordingAfterCallEnd() {
+  if (!autoStartedSession) return;
+  autoStopDeclined = true;
+  const wasPaused = autoStartedSession.paused;
+  clearAutoStartedSession();
+  if (wasPaused && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('auto-resume-requested');
+  }
+  sendDebugLog('[auto-detect] user kept recording after the call ended; auto-stop off for this recording');
 }
 
 function clearAutoStartedSession() {
@@ -8538,7 +8760,16 @@ ipcMain.handle('pull-parakeet-model', async (event, modelId) => {
 // tray) deliberately stay in main.js until that domain's own extraction.
 registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog });
 registerPersonSampleIpc({ ipcMain, runPythonScript });
-registerSpeakerIpc({ ipcMain, runPythonScript, parsePythonFailureJson });
+registerSpeakerIpc({
+  ipcMain, runPythonScript, parsePythonFailureJson, sendDebugLog,
+  contacts: require('./person-contacts').createPersonContacts(getUserDataDir),
+  meetingCalendar: async (summaryFile, meetingStem) => {
+    if (typeof summaryFile !== 'string'
+      || path.basename(summaryFile) !== `${meetingStem}_summary.md`
+      || !validateSafeFilePath(summaryFile, getAllowedBaseDirs())) return null;
+    return (await appleCalendar.ensureMeetingCalendar(summaryFile))?.event || null;
+  },
+});
 
 // Fired by the renderer's silence detector. The renderer has already
 // asked main to stop the recording via pause/stop; this just surfaces
@@ -9263,6 +9494,18 @@ function getAiEnv() {
   return env;
 }
 
+async function runRequestedBenchmark(argv) {
+  if (!IS_CUSTOM_BUILD) return;
+  try {
+    await require('./transcription-benchmark').launchBenchmark(argv, {
+      backend: getBackendPath, cwd: getBackendCwd,
+      getEnv: (extra) => getBackendEnv({ ...extra, STENOAI_DIARIZE_MODEL_DIR: path.join(getUserDataDir(), 'models', 'speaker-diarization') }),
+      credentials: getTranscriptionEnv,
+      busy: () => isProcessing || activeReprocessJobs.size > 0 || systemAudioRecordingActive || currentRecordingProcess !== null,
+    });
+  } catch (error) { console.error('Benchmark launch rejected:', error.message); }
+}
+
 function getBackendEnv(extra = {}) {
   return { ...withoutOpenAiAsrKey(require('process').env), ...extra };
 }
@@ -9273,6 +9516,10 @@ function getBackendEnv(extra = {}) {
 function getTranscriptionEnv() {
   const env = {};
   if (loadTranscriptionEngine() !== 'openai-asr') return env;
+  // Custom batch scheduler: short, overlapped windows; at most six requests
+  // across both channels. Python retains finite deadlines and ordered merging.
+  env.STENOAI_OAI_PARALLELISM = '6';
+  env.STENOAI_OAI_CHUNK_SECONDS = '180';
   // A legacy plaintext key must be secured before this first cloud job. The
   // deletion itself is async (via the locked Python config writer), but this
   // sync path can safely use the encrypted copy immediately.
@@ -10510,7 +10757,7 @@ ipcMain.handle('check-for-updates', async () => {
   // tag and waiting for the next scheduled interval. Same guards as
   // setupAutoUpdater(): no-op (and network-free) in e2e/dev, and never on a
   // Mac below the launch floor, which must not download a build it can't run (#432).
-  if (!IS_E2E && app.isPackaged && osEligible) {
+  if (!IS_E2E && !IS_CUSTOM_BUILD && app.isPackaged && osEligible) {
     autoUpdater.checkForUpdates().catch(() => {});
   }
   // A check that just succeeded and found nothing settles an earlier FAILED
@@ -10581,6 +10828,21 @@ ipcMain.handle('open-external', async (event, url) => {
     }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { success: false, error: 'unsupported scheme' };
+    }
+    // Teams meeting links open the Teams app directly (msteams: deep link)
+    // instead of a browser tab that then asks to launch Teams. Only this exact
+    // host + path is rewritten; anything else opens as given.
+    if (
+      parsed.protocol === 'https:'
+      && parsed.hostname === 'teams.microsoft.com'
+      && parsed.pathname.startsWith('/l/meetup-join/')
+    ) {
+      try {
+        await shell.openExternal(`msteams:${parsed.pathname}${parsed.search}`);
+        return { success: true };
+      } catch {
+        // Teams not installed: fall through to the browser
+      }
     }
     await shell.openExternal(url);
     return { success: true };
@@ -11795,6 +12057,9 @@ function normalizeCalendarEvent(event) {
 
 ipcMain.handle('get-calendar-events', async () => {
   try {
+    const appleEvents = await appleCalendar.fetchEvents();
+    if (appleEvents) return { success: true, events: appleEvents };
+
     // Check which provider is connected (only one at a time)
     const googleToken = await getValidAccessToken();
     if (googleToken) {
@@ -11882,16 +12147,18 @@ async function getCalendarEventForNow(timeoutMs = 1500) {
   const signal = controller.signal;
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    let events = null;
-    const googleToken = await getValidAccessToken();
-    if (googleToken) {
-      const raw = await fetchCalendarEvents(googleToken, 50, signal);
-      events = raw.map(normalizeCalendarEvent).filter(Boolean);
-    } else {
-      const outlookToken = await getValidOutlookAccessToken();
-      if (outlookToken) {
-        const raw = await fetchOutlookCalendarEvents(outlookToken, 50, signal);
+    let events = await appleCalendar.fetchEvents();
+    if (!events) {
+      const googleToken = await getValidAccessToken();
+      if (googleToken) {
+        const raw = await fetchCalendarEvents(googleToken, 50, signal);
         events = raw.map(normalizeCalendarEvent).filter(Boolean);
+      } else {
+        const outlookToken = await getValidOutlookAccessToken();
+        if (outlookToken) {
+          const raw = await fetchOutlookCalendarEvents(outlookToken, 50, signal);
+          events = raw.map(normalizeCalendarEvent).filter(Boolean);
+        }
       }
     }
     if (!events) return null;
@@ -11933,6 +12200,8 @@ async function fetchCalendarEventsForScheduler(timeoutMs = 4000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const appleEvents = await appleCalendar.fetchEvents();
+    if (appleEvents) return appleEvents;
     const googleToken = await getValidAccessToken();
     if (googleToken) {
       const raw = await fetchCalendarEvents(googleToken, 50, controller.signal);
