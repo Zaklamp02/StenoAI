@@ -90,7 +90,9 @@ print(json.dumps({'segments':[{'start':0,'end':8,'speakerId':'SPEAKER_0'},{'star
       steno_output_dir: path.join(userDataDir, 'output'), settle_seconds: 0, link_from_daily_notes: false }));
     const sync = () => {
       const result = spawnSync('/usr/bin/python3', [path.resolve('..', 'custom', 'obsidian_sync.py')], {
-        env: { PATH: process.env.PATH!, STENOAI_USER_DATA_DIR: userDataDir, STENOAI_SYNC_CONFIG_DIR: syncDir }, encoding: 'utf8',
+        env: { PATH: process.env.PATH!, STENOAI_USER_DATA_DIR: userDataDir, STENOAI_SYNC_CONFIG_DIR: syncDir,
+          // Use the backend under test, never an installed app in /Applications.
+          STENOAI_BACKEND_PATH: path.resolve('..', 'dist', 'stenoai', 'stenoai') }, encoding: 'utf8',
       });
       expect(result.status, result.stderr).toBe(0);
       return `${result.stdout}\n${result.stderr}`;
