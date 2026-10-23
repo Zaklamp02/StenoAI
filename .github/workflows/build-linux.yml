@@ -27,6 +27,7 @@ permissions:
 
 jobs:
   build-linux:
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: ubuntu-latest
 
     steps:

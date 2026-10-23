@@ -37,6 +37,7 @@ jobs:
   # self-contained Windows build like e2e.yml's build-backend-windows does.
   long-meeting-windows:
     name: T3 long-meeting (parakeet onnx, Windows)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: windows-latest
     needs: suite
     steps:
@@ -128,6 +129,7 @@ jobs:
   # Metal backend even for a zero-GPU request and exits 500 before inference.
   summarize-real-windows:
     name: T2 real-summarize (llama3.2:1b, Windows CPU)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: windows-latest
     needs: suite
     steps:

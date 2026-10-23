@@ -80,9 +80,10 @@ test('capture diagnostics omit titles when copied and saved', async ({ launchApp
   await expect.poll(() => existsSync(diagnosticPath)).toBe(true);
   expect(readFileSync(diagnosticPath, 'utf8')).not.toContain('CONFIDENTIAL_BOARD_FIXTURE');
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
-  const copied = await app.evaluate(({ clipboard }) => clipboard.readText());
-  expect(copied).toContain('[sysaudio]');
-  expect(copied).not.toContain('CONFIDENTIAL_BOARD_FIXTURE');
+  // The copy lands asynchronously; wait for it instead of reading once.
+  const readClipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
+  await expect.poll(readClipboard).toContain('[sysaudio]');
+  expect(await readClipboard()).not.toContain('CONFIDENTIAL_BOARD_FIXTURE');
 });
 
 

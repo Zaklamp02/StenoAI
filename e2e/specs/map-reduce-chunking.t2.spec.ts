@@ -104,7 +104,9 @@ test.describe('Map-reduce summarization @map-reduce', () => {
 
       // PROGRESS: lines must arrive in order.
       const summarizeLines = progressLines.filter((l) => l.startsWith('PROGRESS:summarize:'));
+      // The stage-progress UI opens the summary stage with a `start` event.
       expect(summarizeLines).toEqual([
+        'PROGRESS:summarize:start',
         'PROGRESS:summarize:1/4',
         'PROGRESS:summarize:2/4',
         'PROGRESS:summarize:3/4',

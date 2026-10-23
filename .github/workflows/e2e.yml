@@ -457,6 +457,7 @@ jobs:
   # ---------------------------------------------------------------------------
   build-backend-windows:
     name: Build backend bundle (Windows)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -664,6 +665,7 @@ jobs:
   # branch-protection context is a separate maintainer decision.
   linux-loopback-pipewire:
     name: Linux loopback (real PipeWire)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: ubuntu-latest
 
     steps:
@@ -806,6 +808,7 @@ jobs:
 
   build-backend-linux:
     name: Build backend bundle (Linux)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

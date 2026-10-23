@@ -93,9 +93,12 @@ print(json.dumps({'segments':[{'start':0,'end':8,'speakerId':'SPEAKER_0'},{'star
         env: { PATH: process.env.PATH!, STENOAI_USER_DATA_DIR: userDataDir, STENOAI_SYNC_CONFIG_DIR: syncDir }, encoding: 'utf8',
       });
       expect(result.status, result.stderr).toBe(0);
+      return `${result.stdout}\n${result.stderr}`;
     };
-    sync();
+    const firstSync = sync();
     const transcriptDir = path.join(vault, 'StenoAI', 'Transcripts');
+    // The exporter logs why it held a note back; show that instead of ENOENT.
+    expect(existsSync(transcriptDir), `vault export wrote no transcript:\n${firstSync}`).toBe(true);
     const vaultTranscript = path.join(transcriptDir, readdirSync(transcriptDir)[0]);
     expect(readFileSync(vaultTranscript, 'utf8')).toContain('alpha');
     const confirmed = await page.evaluate(params => (window as any).stenoai.speakers.confirm(params), {

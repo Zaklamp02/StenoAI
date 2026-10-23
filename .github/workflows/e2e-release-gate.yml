@@ -44,6 +44,7 @@ jobs:
   # for a gate (you don't tag on a partial pass anyway).
   long-meeting-windows:
     name: T3 long-meeting (parakeet onnx, Windows)
+    if: github.repository == 'stenolabs/stenoai'  # Windows/Linux and upstream publishing only run upstream; this fork ships Apple Silicon
     runs-on: windows-latest
     needs: suite
     steps:
