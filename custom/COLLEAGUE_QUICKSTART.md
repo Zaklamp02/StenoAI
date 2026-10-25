@@ -50,7 +50,7 @@ private key. The bootstrap checks prerequisites, downloads the upstream version
 pinned in `custom/BASE`, verifies its Steno Labs signature/notarization, stages
 its native helpers, installs locked npm packages, builds the Python backend and
 Calendar helper, and produces `app/dist/mac-arm64/StenoAI.app`. Installing is a
-separate step and keeps a rollback copy. If Python is not on PATH, pass
+separate step; it keeps no copy of the app it replaces. If Python is not on PATH, pass
 `PYTHON311=/absolute/path/to/python3.11 custom/bootstrap.sh`.
 
 Allow several GB of free space for build dependencies, the upstream helper

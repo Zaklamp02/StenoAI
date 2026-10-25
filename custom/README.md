@@ -187,5 +187,8 @@ this Mac; these builds are not notarized for distribution.
 
 ```bash
 ditto ~/Documents/StenoAI/.local/official/StenoAI.app /Applications/StenoAI.app   # official 0.8.0
-ditto ~/Documents/StenoAI/.local/previous/StenoAI.app /Applications/StenoAI.app   # previous build
 ```
+
+`install.sh` keeps no copy of the app it replaces. To go back to an earlier
+custom build, check out that commit and run `custom/build.sh` and
+`custom/install.sh` again.
