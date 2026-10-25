@@ -1818,6 +1818,36 @@ class OpenAiAsrTests(unittest.TestCase):
             [("Hello there.", 0.0, 0.6), ("Hi.", 0.7, 0.9)],
         )
 
+    def test_empty_turn_confirmation_ignores_provider_timing(self):
+        # A confirmation only decides whether a turn had words; its text is
+        # kept with the original turn bounds. Overlapping diarized speakers or
+        # a segment ending past a padded one-second turn must not fail the
+        # meeting, while the same reply still fails a normal request.
+        payload = {
+            "text": "Ja. Precies.",
+            "segments": [
+                {"type": "transcript.text.segment", "id": "seg_0",
+                 "text": "Ja.", "start": 0.0, "end": 0.9, "speaker": "A"},
+                {"type": "transcript.text.segment", "id": "seg_1",
+                 "text": "Precies.", "start": 0.4, "end": 1.6, "speaker": "B"},
+            ],
+            "duration": 1.6,
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio = Path(tmp_dir) / "turn.wav"
+            _write_pcm_wav(audio, frame_count=16000)
+            transcriber = _build_transcriber()
+            transcriber._openai_asr_model = "gpt-4o-transcribe-diarize"
+            with patch("urllib.request.build_opener", return_value=_FakeOpener([_json_response(payload)])):
+                result = transcriber._run_openai_asr(audio, language="nl", _confirm_empty_turn=True)
+            self.assertEqual(result["text"], "Ja. Precies.")
+            self.assertEqual(result["duration_seconds"], 1.0)
+            transcriber = _build_transcriber()
+            transcriber._openai_asr_model = "gpt-4o-transcribe-diarize"
+            with patch("urllib.request.build_opener", return_value=_FakeOpener([_json_response(payload)])), \
+                    self.assertRaisesRegex(RuntimeError, "timestamps exceed request duration"):
+                transcriber._run_openai_asr(audio, language="nl")
+
     def test_non_diarize_model_keeps_verbose_json(self):
         transcriber = _build_transcriber()
         opener = _FakeOpener([

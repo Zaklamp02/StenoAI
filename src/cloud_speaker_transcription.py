@@ -15,23 +15,37 @@ _DIARIZATION_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
+# The acoustic model splits one person's speech at every short pause, which
+# made a 32-minute meeting ~775 requests of 1.6 s median. Tiny windows give the
+# cloud model little context and often come back empty. Join a speaker's
+# consecutive turns across short pauses, and let short silences between two
+# speakers belong to their neighbours instead of becoming windows of their own.
+SAME_SPEAKER_JOIN_S = 3.0
+SHORT_GAP_S = 3.0
+
+
 def plan_windows(segments, frames, rate):
     """Partition every sample, including uncovered gaps; split long speaker turns."""
     duration = frames / rate
     spans = []
-    for segment in segments:
+    for segment in sorted(segments, key=lambda item: float(item['start'])):
         start = max(0.0, min(duration, float(segment['start'])))
         end = max(start, min(duration, float(segment['end'])))
-        if end > start:
+        if end <= start:
+            continue
+        if (spans and spans[-1][2] == segment['speaker']
+                and start - spans[-1][1] <= SAME_SPEAKER_JOIN_S):
+            spans[-1][1] = max(spans[-1][1], end)
+        else:
             spans.append([start, end, segment['speaker']])
     for i in range(len(spans) - 1):
         gap = spans[i + 1][0] - spans[i][1]
-        if 0 <= gap <= 1.0:
+        if 0 <= gap <= SHORT_GAP_S:
             midpoint = (spans[i + 1][0] + spans[i][1]) / 2
             spans[i][1] = spans[i + 1][0] = midpoint
-    if spans and spans[0][0] <= 1.0:
+    if spans and spans[0][0] <= SHORT_GAP_S:
         spans[0][0] = 0.0
-    if spans and duration - spans[-1][1] <= 1.0:
+    if spans and duration - spans[-1][1] <= SHORT_GAP_S:
         spans[-1][1] = duration
     partitions = []
     cursor = 0

@@ -2974,7 +2974,8 @@ class WhisperTranscriber:
                 request_duration, has_signal = analysis
                 provider_duration = result.get("duration_seconds")
                 if (
-                    provider_duration is not None
+                    not _confirm_empty_turn
+                    and provider_duration is not None
                     and provider_duration
                     > request_duration + OPENAI_ASR_TIMESTAMP_TOLERANCE_SECONDS
                 ):
@@ -2983,7 +2984,12 @@ class WhisperTranscriber:
                     )
                 previous_start = 0.0
                 previous_end = 0.0
-                for segment in timed_segments:
+                # An empty-turn confirmation only answers "were there words?":
+                # its text is kept with the original turn's bounds, so its
+                # provider timing (overlapping diarized speakers, or a segment
+                # ending just past a padded sub-second turn) is never used and
+                # must not fail the meeting.
+                for segment in ([] if _confirm_empty_turn else timed_segments):
                     start = segment["start"]
                     end = segment["end"]
                     if (

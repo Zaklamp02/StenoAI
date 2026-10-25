@@ -23,6 +23,29 @@ class CloudSpeakerTests(unittest.TestCase):
                             for start, end, speaker in windows))
         self.assertEqual(sum(end - start for start, end, _ in windows), 200 * rate)
 
+    def test_short_pauses_join_a_speakers_turns_and_long_gaps_stay_unowned(self):
+        rate = 16000
+        windows = plan_windows([
+            {'start': 0.0, 'end': 2.0, 'speaker': 'A'},
+            {'start': 4.5, 'end': 6.0, 'speaker': 'A'},   # 2.5 s pause: same window
+            {'start': 7.0, 'end': 8.0, 'speaker': 'B'},   # 1 s gap: shared at midpoint
+            {'start': 9.5, 'end': 10.0, 'speaker': 'A'},  # 1.5 s gap: shared
+            {'start': 20.0, 'end': 22.0, 'speaker': 'A'},  # 10 s gap stays unowned
+        ], 22 * rate, rate)
+        self.assertEqual([(s / rate, e / rate, who) for s, e, who in windows], [
+            (0.0, 6.5, 'A'), (6.5, 8.75, 'B'), (8.75, 10.0, 'A'),
+            (10.0, 20.0, None), (20.0, 22.0, 'A'),
+        ])
+
+    def test_a_different_speaker_between_turns_prevents_joining(self):
+        rate = 16000
+        windows = plan_windows([
+            {'start': 0.0, 'end': 2.0, 'speaker': 'A'},
+            {'start': 2.2, 'end': 2.6, 'speaker': 'B'},
+            {'start': 3.0, 'end': 5.0, 'speaker': 'A'},
+        ], 5 * rate, rate)
+        self.assertEqual([who for *_, who in windows], ['A', 'B', 'A'])
+
     def test_gaps_are_transcribed_not_dropped_and_out_of_order_results_keep_provenance(self):
         calls = []
         class ASR:
@@ -36,20 +59,21 @@ class CloudSpeakerTests(unittest.TestCase):
                 # under an unknown identity, not get attributed to a neighbour.
                 return {'text': 'speech outside segmentation' if _speaker_gap and start == 4
                         else None if _speaker_gap else f'turn {start}'}
+        # Gaps longer than SHORT_GAP_S stay unowned windows of their own.
         diarization = ([{'start': 1, 'end': 4, 'speaker': 'A'},
-                        {'start': 6, 'end': 10, 'speaker': 'B'}], {})
+                        {'start': 8, 'end': 12, 'speaker': 'B'}], {})
         with tempfile.TemporaryDirectory() as folder:
             audio = Path(folder) / 'audio.wav'
             with wave.open(str(audio), 'wb') as w:
                 w.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
-                for second in range(12):
+                for second in range(16):
                     w.writeframes(struct.pack('<h', 1000 + second) * 16000)
             with patch.dict(os.environ, {'STENOAI_OAI_PARALLELISM': '3'}), \
                     patch('src.transcriber._run_steno_diarize', return_value=diarization) as native, \
                     patch('src.cloud_speaker_transcription.report_progress') as progress:
                 result = transcribe_speaker_channel(ASR(), audio, audio, 'nl', 'You')
         native.assert_called_once()
-        self.assertEqual([s['start'] for s in result['segments']], [0, 4, 6])
+        self.assertEqual([s['start'] for s in result['segments']], [0, 4, 8])
         self.assertEqual([s['diarization_speaker_id'] for s in result['segments']], ['A', None, 'B'])
         self.assertIn('speech outside segmentation', result['text'])
         self.assertTrue(all(not path.exists() for _, _, path in calls))
