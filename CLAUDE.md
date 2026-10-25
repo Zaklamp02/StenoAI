@@ -19,7 +19,7 @@ The app is a thin Electron shell over a PyInstaller-bundled Python CLI. There is
 ## Development Commands
 
 ### Backend (Python)
-- Build the bundled backend: `source venv/bin/activate && pyinstaller stenoai.spec --noconfirm`
+- Build the bundled backend: `source .venv/bin/activate && pyinstaller stenoai.spec --noconfirm` (`custom/build.sh` creates `.venv` with the pinned versions; run Python tests with `.venv/bin/python` too, as a system or Anaconda Python may carry an onnxruntime built for NumPy 1.x)
 - Inspect CLI surface: `dist/stenoai/stenoai --help`
 - Most relevant CLI commands for debugging: `status`, `setup-check`, `list_failed`, `reprocess path/to/summary.json`, `query transcript.txt`, `pipeline filename.wav`
 - Ad-hoc Python lint: `ruff check .`

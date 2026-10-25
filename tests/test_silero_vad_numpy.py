@@ -1,10 +1,25 @@
 import importlib.util
+import subprocess
+import sys
 import unittest
 
 import numpy as np
 
 from src import silero_vad
 from src.silero_vad import VAD_CHUNK_SAMPLES, VAD_SAMPLE_RATE, _NumpySilero
+
+
+def _onnxruntime_usable() -> bool:
+    """Installed AND working. Probed in a child process: an onnxruntime built
+    for NumPy 1.x half-imports under NumPy 2 (errors on stderr, exit 0), then
+    fails on first use and can crash later tests in the same interpreter."""
+    if not importlib.util.find_spec("onnxruntime"):
+        return False
+    probe = subprocess.run(
+        [sys.executable, "-c", "from src.silero_vad import _OnnxSilero; _OnnxSilero()"],
+        capture_output=True, text=True,
+    )
+    return probe.returncode == 0 and "Error" not in probe.stderr
 
 
 def _signal(seconds: float = 6.0) -> np.ndarray:
@@ -42,7 +57,7 @@ class NumpySileroTests(unittest.TestCase):
         self.assertEqual(state.shape, (2, 1, 128))
         self.assertEqual(state.dtype, np.float32)
 
-    @unittest.skipUnless(importlib.util.find_spec("onnxruntime"), "onnxruntime not installed")
+    @unittest.skipUnless(_onnxruntime_usable(), "onnxruntime not installed or not importable")
     def test_matches_onnxruntime(self):
         audio = _signal()
         ref, ref_state = _probs(silero_vad._OnnxSilero(), audio)
