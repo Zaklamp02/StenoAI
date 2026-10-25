@@ -1255,6 +1255,19 @@ def benchmark_transcription_cmd(job_file):
     run_job(job_file)
 
 
+def _recorded_at_override():
+    """When the audio was recorded, for a file from a watched folder.
+
+    Electron passes STENOAI_RECORDED_AT (local ISO time) so a phone recording
+    synced days later is dated when it happened, not when it was processed.
+    """
+    raw = os.environ.get("STENOAI_RECORDED_AT", "")
+    try:
+        return datetime.fromisoformat(raw).isoformat() if raw else None
+    except ValueError:
+        return None
+
+
 @cli.command(name='process-streaming')
 @click.argument('audio_file', default='')
 @click.option('--name', '-n', default='Recording', help='Session name')
@@ -1510,7 +1523,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             )
             audio_path = Path(audio_file)
             summary_path = recorder.output_dir / f"{audio_path.stem}_summary.md"
-            processed_at = datetime.now().isoformat()
+            processed_at = _recorded_at_override() or datetime.now().isoformat()
             md_meta = {
                 'title': name,
                 'date': processed_at,
@@ -1630,7 +1643,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
 
         # Save as .md only (primary format for new meetings)
         summary_path = summary_path.with_suffix('.md')
-        processed_at = datetime.now().isoformat()
+        processed_at = _recorded_at_override() or datetime.now().isoformat()
         md_meta = {
             'title': session_name,
             'date': processed_at,

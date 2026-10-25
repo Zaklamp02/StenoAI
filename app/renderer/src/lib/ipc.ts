@@ -1062,6 +1062,34 @@ export interface MeetingTransferImportedEvent {
   duplicate: boolean;
 }
 
+// ---------- watched recording folders ----------
+export interface WatchedFolder {
+  id: string;
+  path: string;
+  name: string;
+  autoTranscribe: boolean;
+  /** False while the folder can't be read (e.g. an unmounted drive). */
+  available: boolean;
+}
+
+/** syncing: still arriving; processing: queued or running; failed: no note came of it. */
+export type WatchedFileStatus = 'syncing' | 'new' | 'dismissed' | 'processing' | 'done' | 'failed';
+
+export interface WatchedFile {
+  id: string;
+  folderId: string;
+  name: string;
+  relPath: string;
+  size: number;
+  mtimeMs: number;
+  /** Local wall-clock ISO, from the filename timestamp or the file's mtime. */
+  recordedAt: string;
+  status: WatchedFileStatus;
+  summaryFile?: string;
+}
+
+export type WatchedFoldersListing = { folders: WatchedFolder[]; files: WatchedFile[] };
+
 // ---------- bridge shape ----------
 type RequestFn<Args extends unknown[], Res> = (...args: Args) => Promise<Res>;
 type SendFn<Args extends unknown[]> = (...args: Args) => void;
@@ -1222,6 +1250,19 @@ export interface StenoaiBridge {
       Result<Record<string, never>>
     >;
     deleteReport: RequestFn<[summaryFile: string, reportId: string], Result<Record<string, never>>>;
+  };
+
+  watchedFolders: {
+    list: RequestFn<[], Result<WatchedFoldersListing>>;
+    /** Opens the folder picker; `cancelled` when the user closed it. */
+    add: RequestFn<[testPath?: string], Result<WatchedFoldersListing & { cancelled?: boolean }>>;
+    remove: RequestFn<[id: string], Result<WatchedFoldersListing>>;
+    setAutoTranscribe: RequestFn<[id: string, enabled: boolean], Result<WatchedFoldersListing>>;
+    transcribe: RequestFn<[ids: string[]], Result<WatchedFoldersListing>>;
+    dismiss: RequestFn<[ids: string[]], Result<WatchedFoldersListing>>;
+    restore: RequestFn<[ids: string[]], Result<WatchedFoldersListing>>;
+    /** The first two minutes as WAV (base64) for the inbox's play button. */
+    preview: RequestFn<[id: string], Result<{ audioBase64: string }>>;
   };
 
   meetingTransfer: {
@@ -1535,6 +1576,7 @@ export interface StenoaiBridge {
     autoPauseRequested: Subscribe<void>;
     autoResumeRequested: Subscribe<void>;
     keychainState: Subscribe<{ state: KeychainState }>;
+    watchedFoldersChanged: Subscribe<void>;
     autoSummariseRequested: Subscribe<void>;
     /** Main asks the renderer to generate notes for a transcript-only note in
      *  the background (from the "Generate notes" action on the transcript-ready

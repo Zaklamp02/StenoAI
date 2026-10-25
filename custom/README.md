@@ -26,6 +26,7 @@ are shared with the official app, so switching back and forth is safe.
 | Vault sync status line per note (reads `~/.config/stenoai-sync/state.json`) | `app/vault-sync-status.js`, `VaultSyncStatusLine.tsx`, `custom/obsidian_sync.py` | custom only |
 | Auto-stop for any recording paired with a call app; ignores mic use under 60 s; 30 s grace with Keep recording | `app/main.js` (auto-detect section) | candidate PR |
 | Cloud ASR channels use an in-process level match instead of ffmpeg loudnorm (49 s → <1 s per channel) | `src/transcriber.py` (`_fast_level_normalize`) | candidate PR |
+| Watched recording folders (Settings → Integrations) and a Recordings inbox, shown only once a folder is set: pick files to transcribe, or auto-transcribe new ones once they finish syncing; source files are never changed and meetings are dated by recording time | `app/watched-folders.js`, `watched-folders-ipc.js`, `Recordings.tsx`, `WatchedFoldersSection.tsx`, `simple_recorder.py` (`STENOAI_RECORDED_AT`), tests | candidate PR |
 | This folder: build / install / update scripts | `custom/` | custom only |
 
 Summary models were already flexible: Settings → AI lists the provider's models

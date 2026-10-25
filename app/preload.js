@@ -190,6 +190,18 @@ const stenoai = {
       invoke('export-note-pdf', defaultFilename, html),
   },
 
+  // Watched recording folders + the Recordings inbox (watched-folders.js).
+  watchedFolders: {
+    list: () => invoke('watched-folders-list'),
+    add: (testPath) => invoke('watched-folders-add', testPath),
+    remove: (id) => invoke('watched-folders-remove', id),
+    setAutoTranscribe: (id, enabled) => invoke('watched-folders-set-auto', id, enabled),
+    transcribe: (ids) => invoke('watched-folders-transcribe', ids),
+    dismiss: (ids) => invoke('watched-folders-dismiss', ids),
+    restore: (ids) => invoke('watched-folders-restore', ids),
+    preview: (id) => invoke('watched-folders-preview', id),
+  },
+
   meetingTransfer: {
     importPackage: (filePath) => invoke('import-meeting-package', filePath),
     exportPackage: (summaryFile) => invoke('export-meeting-package', summaryFile),
@@ -489,6 +501,7 @@ const stenoai = {
     showQuitDialog: (cb) => subscribe('show-quit-dialog', cb),
     showNotification: (cb) => subscribe('show-notification', cb),
     keychainState: (cb) => subscribe('keychain-state', cb),
+    watchedFoldersChanged: (cb) => subscribe('watched-folders-changed', cb),
   },
 
   subscribeQueryStream,

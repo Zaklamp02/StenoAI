@@ -4,6 +4,7 @@ import {
   CalendarDays,
   ChevronDown,
   Blocks,
+  FileAudio,
   Globe,
   HelpCircle,
   Home as HomeIcon,
@@ -25,6 +26,7 @@ import { useUpdateFolderIcon } from '@/hooks/useFolders';
 import { useOrgLogout, useOrgSession, useSharedNotesGate } from '@/hooks/useOrg';
 import { useCommandPalette } from '@/components/CommandPalette';
 import { AGENTS_COPY } from '@/lib/agentSkills';
+import { useWatchedFolders } from '@/hooks/useWatchedFolders';
 
 export interface SidebarMeeting {
   summaryFile: string;
@@ -188,6 +190,10 @@ export function Sidebar({
   // `enabled` stays false until policy resolves, so the tab doesn't flash in
   // then vanish for an org that has the feature turned off.
   const sharedNotes = useSharedNotesGate(orgSignedIn);
+  // The Recordings inbox only exists once a watched folder is configured.
+  const watched = useWatchedFolders();
+  const hasWatchedFolders = (watched.data?.folders.length ?? 0) > 0;
+  const newRecordings = watched.data?.files.filter((f) => f.status === 'new').length ?? 0;
   // Malformed % escapes throw URIError. Guard so a bad route can't crash
   // the entire sidebar render.
   const activeFolderId = React.useMemo<string | null>(() => {
@@ -382,6 +388,23 @@ export function Sidebar({
               )}
             </button>
           </div>
+
+          {hasWatchedFolders && (
+            <button
+              type="button"
+              className={cn('sb-row', currentRoute === '/recordings' && 'active')}
+              aria-current={currentRoute === '/recordings' ? 'page' : undefined}
+              onClick={() => navigate('/recordings')}
+            >
+              <FileAudio className="size-[14px]" />
+              <span className="flex-1 truncate">{t('watchedFolders.nav')}</span>
+              {newRecordings > 0 && (
+                <span className="text-xs tabular-nums" style={{ color: 'var(--fg-muted)' }} data-testid="recordings-new-count">
+                  {newRecordings}
+                </span>
+              )}
+            </button>
+          )}
 
           <button
             type="button"

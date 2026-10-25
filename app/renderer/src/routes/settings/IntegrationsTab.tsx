@@ -11,6 +11,7 @@ import {
   useSetObsidianVaultPath,
 } from '@/hooks/useSettings';
 import { COMPACT_BTN } from './primitives';
+import { WatchedFoldersSection } from './WatchedFoldersSection';
 import { useMutation } from '@tanstack/react-query';
 import { ipc } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
@@ -117,6 +118,7 @@ export function IntegrationsTab() {
         {retry.error && <p role="alert" className="mt-2 text-sm">{retry.error.message}</p>}
         {retry.isSuccess && <p className="mt-2 text-sm">{t('integrationsTab.sync_checked_per_note_status_shows_any')}</p>}
       </div>}
+      <WatchedFoldersSection />
     </section>
   );
 }

@@ -8,6 +8,8 @@ import { Chat } from '@/routes/Chat';
 import { Agents } from '@/routes/Agents';
 import { People } from '@/routes/People';
 import { Calendar } from '@/routes/Calendar';
+import { Recordings } from '@/routes/Recordings';
+import { useWatchedFolders } from '@/hooks/useWatchedFolders';
 import { ChatConversation } from '@/routes/ChatConversation';
 import { StreamingProvider } from '@/hooks/useStreamingQuery';
 import { Home } from '@/routes/Home';
@@ -232,6 +234,7 @@ export function App() {
     route === '/agents' ||
     route === '/people' ||
     route === '/calendar' ||
+    route === '/recordings' ||
     route === '/settings' ||
     route.startsWith('/settings?') ||
     route === '/setup' ||
@@ -337,6 +340,14 @@ function RouteView({ route }: { route: string }) {
     }
   }, [onOrgSharedRoute, sharedNotes.resolved, sharedNotes.enabled]);
 
+  // The Recordings inbox exists only while a watched folder is configured;
+  // once the last folder is removed, a stale route goes Home.
+  const watched = useWatchedFolders();
+  const noWatchedFolders = watched.isSuccess && watched.data.folders.length === 0;
+  React.useEffect(() => {
+    if (route === '/recordings' && noWatchedFolders) navigate('/');
+  }, [route, noWatchedFolders]);
+
   if (route === '/dev' || route.startsWith('/dev/')) return <Sandbox />;
   // Match deep-links like /settings?tab=organisation too — the Settings
   // component reads the tab param off the route on mount.
@@ -347,6 +358,7 @@ function RouteView({ route }: { route: string }) {
   if (route === '/agents') return <Agents />;
   if (route === '/people') return <People />;
   if (route === '/calendar') return <Calendar />;
+  if (route === '/recordings') return noWatchedFolders ? <Home mode="home" /> : <Recordings />;
   if (route.startsWith('/chat/')) {
     const sessionId = safeDecode(route.slice('/chat/'.length));
     return <ChatConversation sessionId={sessionId} />;

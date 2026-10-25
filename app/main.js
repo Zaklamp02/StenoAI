@@ -2445,6 +2445,9 @@ if (!gotSingleInstanceLock) {
     // keys off _cachedCustomStoragePath, so sweeping earlier would scan the
     // default dir and miss a custom-storage user's recordings/ entirely.
     await sweepStaleImportMarkers();
+    // After the storage path load, for the same reason: the watched-folder
+    // guard compares against resolveRecordingsDir() / getOutputDir().
+    watchedFolders.start();
 
     // Instant-stop recovery: clear any `processing: true` left on a note by an
     // app quit mid-pipeline (the child died with it). No queue is active at
@@ -2478,6 +2481,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('will-quit', async () => {
     globalShortcut.unregisterAll();
+    watchedFolders.stop();
     if (tray) {
       tray.destroy();
       tray = null;
@@ -5860,6 +5864,7 @@ async function processNextInQueue() {
     const queueEnv = getBackendEnv({
       ...queueAiEnv,
       ...noteLanguages.env(currentProcessingJob.appendTo || currentProcessingJob.summaryFile || currentProcessingJob.audioFile),
+      ...(currentProcessingJob.recordedAt ? { STENOAI_RECORDED_AT: currentProcessingJob.recordedAt } : {}),
     });
     const processArgs = ['process-streaming', currentProcessingJob.audioFile, '--name', currentProcessingJob.sessionName];
     if (currentProcessingJob.notesFile && fs.existsSync(currentProcessingJob.notesFile)) {
@@ -6419,15 +6424,17 @@ async function prepareMeetingCalendar(job) {
   }
 }
 
-function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile) {
+// options.recordedAt dates the meeting when it was recorded (watched folders);
+// options.external marks a job that is not the recording just stopped.
+function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile, options = {}) {
   recordingJournal.update(audioFile, 'queued', { sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile: summaryFile || summaryFileForAudio(audioFile) });
   // A language picked on the recording screen belongs to this meeting only.
-  if (pendingRecordingLanguage) {
+  if (pendingRecordingLanguage && !options.external) {
     try { noteLanguages.set(appendTo || summaryFile || audioFile, pendingRecordingLanguage); }
     catch (e) { sendDebugLog(`Meeting language not saved: ${e.message}`); }
     pendingRecordingLanguage = null;
   }
-  processingQueue.push({ audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile });
+  processingQueue.push({ audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile, recordedAt: options.recordedAt });
   console.log(`📋 Added to processing queue: ${sessionName} (Queue size: ${processingQueue.length})`);
   processNextInQueue();
 }
@@ -8369,6 +8376,42 @@ registerFoldersIpc({
   onNoteFoldersChanged: (summaryPath) => {
     try { obsidianSync.syncNoteBySummaryPath(summaryPath); } catch (_) {}
   },
+});
+
+// Watched recording folders (Settings → Integrations → Recording folders): a
+// picked file goes through the same copy-then-queue path as an import.
+const watchedFolders = require('./watched-folders').createWatchedFolders({
+  getUserDataDir,
+  audioExtensions: IMPORT_AUDIO_EXTENSIONS,
+  enqueue: async (filePath, { title, recordedAt, previousAudioFile }) => {
+    // A failed earlier attempt left its copy in recordings/; retry on that.
+    const reuse = previousAudioFile && path.dirname(previousAudioFile) === resolveRecordingsDir()
+      && fs.existsSync(previousAudioFile);
+    const audioFile = reuse ? previousAudioFile : await copyImportIntoRecordings(await fs.promises.realpath(filePath));
+    addToProcessingQueue(audioFile, title, null, undefined, undefined, undefined, { recordedAt, external: true });
+    return { audioFile, summaryFile: summaryFileForAudio(audioFile) };
+  },
+  noteExists: (summaryFile) => Boolean(summaryFile)
+    && [summaryFile, summaryFile.replace(/\.md$/, '.json')].some((f) => fs.existsSync(f)),
+  isJobPending: (audioFile) => Boolean(audioFile)
+    && (currentProcessingJob?.audioFile === audioFile || processingQueue.some((job) => job.audioFile === audioFile)),
+  isRecording: () => currentRecordingProcess !== null || systemAudioRecordingActive,
+  forbiddenDirs: () => [getUserDataDir(), path.dirname(resolveRecordingsDir()), getOutputDir()],
+  previewAudio: (filePath) => new Promise((resolve, reject) => {
+    const ffmpeg = path.join(path.dirname(getBackendPath()), '_internal', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+    const proc = spawn(ffmpeg, ['-v', 'error', '-t', '120', '-i', filePath, '-ac', '1', '-ar', '16000', '-f', 'wav', 'pipe:1']);
+    const chunks = [];
+    proc.stdout.on('data', (c) => chunks.push(c));
+    proc.on('error', reject);
+    proc.on('close', (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error('Could not read this recording'))));
+  }),
+  onChange: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('watched-folders-changed');
+  },
+  onLog: (message) => sendDebugLog(message),
+});
+require('./watched-folders-ipc').registerWatchedFoldersIpc({
+  ipcMain, watchedFolders, dialog, getMainWindow: () => mainWindow, allowPathArg: IS_E2E,
 });
 
 // Obsidian vault sync IPC (#413): config toggle + vault picker + conflicts read.
