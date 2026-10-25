@@ -66,6 +66,28 @@ test('restart discovers unfinished audio and dismissal keeps it', async ({ launc
 });
 
 
+test('a recording whose retry copy became a note is not offered for recovery', async ({ launchApp, userDataDir }) => {
+  seed(userDataDir);
+  const old = new Date(Date.now() - 60 * 60 * 1000);
+  const processed = path.join(userDataDir, 'recordings', 'sysaudio-1792058617597-Note.webm');
+  const unprocessed = path.join(userDataDir, 'recordings', 'sysaudio-1792141118993-Note.webm');
+  for (const file of [processed, unprocessed]) {
+    writeFileSync(file, Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3]));
+    utimesSync(file, old, old);
+  }
+  // The retry processed a copy (<stem>-1); its note exists, the original's doesn't.
+  writeFileSync(path.join(userDataDir, 'output', 'sysaudio-1792058617597-Note-1_summary.md'), '---\ntitle: "Done"\n---\n');
+  const { page } = await launchApp({ releaseHighlightsSeen: true });
+  const pending = await page.evaluate(() => window.stenoai.recording.recoverable());
+  if (!pending.success) throw new Error('No recovery response');
+  expect(pending.recordings).toHaveLength(1);
+  expect(pending.recordings[0].recordedAt).toBe(new Date(1792141118993).toISOString());
+  const card = page.getByRole('region', { name: 'Recording recovery' });
+  await expect(card).toBeVisible();
+  await expect(card.locator('[data-recovery-entry]')).toHaveCount(1);
+  expect(existsSync(processed)).toBe(true);
+});
+
 test('capture diagnostics omit titles when copied and saved', async ({ launchApp, userDataDir }) => {
   seed(userDataDir);
   const diagnosticPath = path.join(userDataDir, 'diagnostics.txt');

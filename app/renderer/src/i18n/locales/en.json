@@ -68,7 +68,7 @@
   "meetingLanguageSelect.meeting_language": "Meeting language",
   "recordingRecovery.recording_recovery": "Recording recovery",
   "recordingRecovery.unfinished_recordings": "Unfinished recordings",
-  "recordingRecovery.audio_was_kept_recover_uses_your_current": "Audio was kept. Recover uses your current transcription settings, including your cloud provider if selected. Dismiss keeps the audio file.",
+  "recordingRecovery.audio_was_kept_recover_uses_your_current": "These recordings never became notes. Recover processes them with your current transcription settings. Dismiss hides them; the audio stays on disk.",
   "recordingRecovery.recover_recording": "Recover recording",
   "recordingRecovery.dismiss": "Dismiss",
   "sidebar.calendar": "Calendar",

@@ -1114,7 +1114,7 @@ export interface StenoaiBridge {
   };
 
   recording: {
-    recoverable: RequestFn<[], Result<{ recordings: { id: string; name: string; updatedAt: string; bytes: number }[] }>>;
+    recoverable: RequestFn<[], Result<{ recordings: { id: string; name: string; updatedAt: string; recordedAt?: string; bytes: number }[] }>>;
     recover: RequestFn<[id: string], Result<Record<string, never>>>;
     dismissRecovery: RequestFn<[id: string], Result<Record<string, never>>>;
     /** trigger: analytics source (manual/hotkey/tray/…). appendTo: path of an
