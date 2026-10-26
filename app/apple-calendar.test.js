@@ -52,3 +52,58 @@ test('calendar retries failures, refreshes invitees, keeps occurrence identity, 
   assert.equal(JSON.parse(fs.readFileSync(sidecar)).detached, true);
   assert.equal((await handlers['meeting-calendar']({}, '/elsewhere_summary.md')).success, false);
 });
+
+const { pickEventForRecording } = require('./apple-calendar');
+
+// 26 Oct 2026, 13:00 local: three meetings start at once and two more follow
+// at 13:30. The recording of "Safety products" started at 13:00:49 and ran
+// 44 min, overrunning its 30-min slot.
+const at = (hhmm) => `2026-10-26T${hhmm}:00+01:00`;
+const overlapping = [
+  { id: 'struyk', title: 'Struyk Verwo Infra Block ', start: at('13:00'), end: at('16:00'), response_status: 'accepted' },
+  { id: 'nbs', title: 'NBS + AM + Solutions team + Marketing', start: at('13:00'), end: at('14:30'), response_status: 'accepted' },
+  { id: 'safety', title: 'Safety products - Bespreken scope fase 1 incl. resterende feedback', start: at('13:00'), end: at('13:30'), response_status: 'accepted' },
+  { id: 'jc', title: 'Youwe & JC-Electronics | JContinuity+', start: at('13:30'), end: at('14:00'), response_status: 'unknown' },
+];
+const recordedAt = Date.parse(at('13:00')) + 49734;
+
+test('a recording named after an invitation links that invitation', () => {
+  const safeName = 'Safety_products_-_Bespreken_scope_fase_1_incl__resterende_feedba';
+  // Even when it ran 85 min, which fits the NBS slot best, in any event order.
+  for (const events of [overlapping, [...overlapping].reverse()]) {
+    const durationMs = 85 * 60000;
+    assert.equal(pickEventForRecording(events, { startMs: recordedAt, durationMs, safeName }).id, 'safety');
+    assert.equal(pickEventForRecording(events, { startMs: recordedAt, durationMs, safeName: 'Note' }).id, 'nbs');
+  }
+});
+
+test('an unnamed recording links the meeting whose time span fits it best', () => {
+  const pick = (durationMin, events = overlapping) => pickEventForRecording(events, {
+    startMs: recordedAt, durationMs: durationMin * 60000, safeName: 'Note',
+  }).id;
+  assert.equal(pick(44), 'safety');
+  assert.equal(pick(85), 'nbs');
+  assert.equal(pick(175), 'struyk');
+});
+
+test('without a length, the closest start wins and ties go to the shorter accepted meeting', () => {
+  const pick = (events, startMs = recordedAt) => pickEventForRecording(events, { startMs })?.id ?? null;
+  assert.equal(pick(overlapping), 'safety');
+  const tentative = overlapping.map((e) => (e.id === 'safety' ? { ...e, response_status: 'tentative' } : e));
+  assert.equal(pick(tentative), 'nbs');
+  // Joining a few minutes early picks the meeting about to start, not the one ending.
+  const back = [
+    { id: 'before', title: 'Before', start: at('12:00'), end: at('13:00'), response_status: 'accepted' },
+    { id: 'next', title: 'Next', start: at('13:00'), end: at('13:30'), response_status: 'accepted' },
+  ];
+  assert.equal(pick(back, Date.parse(at('12:57'))), 'next');
+});
+
+test('all-day, declined and out-of-window events are never linked', () => {
+  const events = [
+    { id: 'allday', title: 'Holiday', start: '2026-10-26', end: '2026-10-27', is_all_day: true },
+    { id: 'declined', title: 'Declined', start: at('13:00'), end: at('14:00'), response_status: 'declined' },
+    { id: 'later', title: 'Later', start: at('13:20'), end: at('14:00'), response_status: 'accepted' },
+  ];
+  assert.equal(pickEventForRecording(events, { startMs: recordedAt }), null);
+});

@@ -16,6 +16,59 @@ const HELPER_TIMEOUT_MS = 8000;
 // The prompt waits for the user to click Allow.
 const ACCESS_TIMEOUT_MS = 130000;
 const EVENTS_CACHE_MS = 30000;
+// A recording may start this long before its meeting does.
+const LEAD_MS = 10 * 60 * 1000;
+// The session name a recording was started with ('Note' when none was given).
+const DEFAULT_SESSION_NAME = 'Note';
+
+/** A title as main.js puts a session name in the recording's file name. */
+function fileSafeName(title) {
+  return String(title || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+}
+
+/** The event a recording belongs to, among several that overlap it.
+ *  Candidates run at the recording's start (or start within LEAD_MS after
+ *  it) and are neither all-day nor declined. A recording started from an
+ *  invitation is named after it, so an event whose title matches the
+ *  session name wins. Otherwise, and among same-named events, the event
+ *  whose time span best matches the recording's wins (shared time over
+ *  combined span, which also handles a meeting that overruns its slot);
+ *  without a known length, the closest start. Ties prefer a meeting you
+ *  accepted or organize, then the shorter event. */
+function pickEventForRecording(events, { startMs, durationMs = null, safeName = null }) {
+  const candidates = [];
+  for (const event of events || []) {
+    if (event.is_all_day || event.response_status === 'declined') continue;
+    const start = Date.parse(event.start);
+    const end = Date.parse(event.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (startMs < start - LEAD_MS || startMs >= end) continue;
+    candidates.push({ event, start, end });
+  }
+  const named = safeName && safeName !== DEFAULT_SESSION_NAME
+    ? candidates.filter((c) => fileSafeName(c.event.title) === safeName)
+    : [];
+  const pool = named.length > 0 ? named : candidates;
+  const recordingEnd = durationMs > 0 ? startMs + durationMs : null;
+  const fit = (c) => {
+    if (recordingEnd === null) return -Math.abs(c.start - startMs);
+    const shared = Math.min(recordingEnd, c.end) - Math.max(startMs, c.start);
+    const span = Math.max(recordingEnd, c.end) - Math.min(startMs, c.start);
+    return Math.max(0, shared) / span;
+  };
+  const committed = (c) => (c.event.response_status === 'accepted' || c.event.response_status === 'organizer' ? 1 : 0);
+  const rank = (c) => [fit(c), committed(c), c.start - c.end];
+  const better = (a, b) => {
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  };
+  let best = null;
+  for (const c of pool) {
+    const r = rank(c);
+    if (!best || better(r, best.rank)) best = { c, rank: r };
+  }
+  return best ? best.c.event : null;
+}
 
 function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isAllowedSummaryPath }) {
   let cache = { at: 0, events: null };
@@ -105,35 +158,38 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     };
   });
 
-  /** The calendar event a recording that started at `timeMs` belongs to:
-   *  running at that moment (or starting within 10 min after it), not
-   *  all-day, not declined; the closest start wins. Used to offer attendees
-   *  when naming speakers, also for past meetings. */
-  async function eventAt(timeMs) {
+  /** The calendar event a recording that started at `timeMs` belongs to,
+   *  from events that run at that moment (or start within 10 min after it),
+   *  not all-day, not declined. See pickEventForRecording for the choice
+   *  between overlapping meetings. Used to link a note to its invitation and
+   *  to offer attendees when naming speakers, also for past meetings. */
+  async function eventAt(timeMs, hints = {}) {
     if (process.platform !== 'darwin' || !isEnabled()) return null;
     const isoAt = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
     const res = await runHelper([
       'events', '--from', isoAt(timeMs - 6 * 3600 * 1000), '--to', isoAt(timeMs + 3600 * 1000),
     ]);
     if (!res.success) throw new Error('Calendar lookup failed. Check access and try again.');
-    const LEAD_MS = 10 * 60 * 1000;
-    let best = null;
-    for (const event of res.events || []) {
-      if (event.is_all_day || event.response_status === 'declined') continue;
-      const start = Date.parse(event.start);
-      const end = Date.parse(event.end);
-      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-      if (timeMs < start - LEAD_MS || timeMs >= end) continue;
-      const distance = Math.abs(start - timeMs);
-      if (!best || distance < best.distance) best = { event, distance };
-    }
-    return best ? best.event : null;
+    return pickEventForRecording(res.events, { startMs: timeMs, ...hints });
   }
 
   /** Recording start from the note's stem (`sysaudio-1792058617597-Note`). */
   function recordingStartMs(summaryPath) {
     const m = path.basename(summaryPath).match(/(?:^|-)(\d{13})(?:-|_)/);
     return m ? Number(m[1]) : null;
+  }
+
+  /** What else the note says about its recording: the session name it was
+   *  started with (file-safe, from the stem) and its length (frontmatter). */
+  function recordingHints(summaryPath) {
+    const m = path.basename(summaryPath).match(/^(?:[a-z]+-)?\d{13}-(.+)_summary\.md$/);
+    let durationMs = null;
+    try {
+      const front = fs.readFileSync(summaryPath, 'utf8').split('\n---', 1)[0];
+      const seconds = Number((front.match(/^duration_seconds:\s*"?([\d.]+)/m) || [])[1]);
+      if (Number.isFinite(seconds) && seconds > 0) durationMs = seconds * 1000;
+    } catch { /* no summary yet: time-only matching */ }
+    return { safeName: m ? m[1] : null, durationMs };
   }
 
   const MEETING_CACHE_MS = 5 * 60 * 1000;
@@ -171,7 +227,7 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     } else {
       const start = recordingStartMs(summaryPath);
       if (start === null) return previous;
-      event = await eventAt(start);
+      event = await eventAt(start, recordingHints(summaryPath));
     }
     // A user unlink/rematch or a newer lookup wins over this in-flight refresh.
     const latest = readRecord(summaryPath);
@@ -211,7 +267,7 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
         const previous = readRecord(summaryFile);
         if (previous?.detached) {
           const start = recordingStartMs(summaryFile);
-          const event = start === null ? null : await eventAt(start);
+          const event = start === null ? null : await eventAt(start, recordingHints(summaryFile));
           if (JSON.stringify(readRecord(summaryFile)) !== JSON.stringify(previous)) throw new Error('The invitation changed. Try again.');
           record = saveRecord(summaryFile, { checked_at: new Date().toISOString(), event });
         } else record = await ensureMeetingCalendar(summaryFile, { force: true });
@@ -237,4 +293,4 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
   return { isEnabled, fetchEvents, ensureMeetingCalendar };
 }
 
-module.exports = { registerAppleCalendar };
+module.exports = { registerAppleCalendar, pickEventForRecording };
