@@ -235,9 +235,38 @@ def _non_asr_subprocess_env(extra_env: Optional[dict[str, str]] = None) -> dict[
     }
 
 
+_DIARIZATION_MODELS_READY: dict[str, bool] = {}
+
+
+def _diarization_models_ready(engine: str) -> bool:
+    """Whether the sidecar reports ``engine``'s models on disk (cached).
+
+    ``model-status`` only checks files, so it is cheap; the cache keeps it to
+    once per engine per CLI process. Any failure reads as not ready.
+    """
+    if engine not in _DIARIZATION_MODELS_READY:
+        binary = _resolve_steno_diarize()
+        ready = False
+        if binary:
+            try:
+                result = subprocess.run(
+                    [binary, "model-status"],
+                    capture_output=True,
+                    timeout=15,
+                    check=False,
+                    env=_non_asr_subprocess_env({"STENOAI_DIARIZE_ENGINE": engine}),
+                )
+                ready = result.returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                ready = False
+        _DIARIZATION_MODELS_READY[engine] = ready
+    return _DIARIZATION_MODELS_READY[engine]
+
+
 def _steno_diarize_env(
     extra_env: Optional[dict[str, str]] = None,
     engine: Optional[str] = None,
+    fallback_when_missing: bool = False,
 ) -> dict[str, str]:
     """Environment for every steno-diarize invocation.
 
@@ -249,14 +278,34 @@ def _steno_diarize_env(
     override), then the persisted ``diarization_engine`` setting. A config
     read failure leaves the variable unset, which the sidecar resolves to its
     Sortformer default.
+
+    ``fallback_when_missing`` (meeting processing only) swaps a saved engine
+    whose models are missing for Sortformer when Sortformer's are present:
+    processing never downloads, and without the swap the meeting would lose
+    speaker separation entirely. Model commands keep the saved engine, so
+    setup still downloads and reports the engine the user is on.
     """
     engine_env: dict[str, str] = {}
     if engine:
         engine_env["STENOAI_DIARIZE_ENGINE"] = engine
     elif not os.environ.get("STENOAI_DIARIZE_ENGINE", "").strip():
         try:
-            from src.config import get_config
-            engine_env["STENOAI_DIARIZE_ENGINE"] = get_config().get_diarization_engine()
+            from src.config import Config, get_config
+            saved = get_config().get_diarization_engine()
+            fallback = Config.FALLBACK_DIARIZATION_ENGINE
+            if (
+                fallback_when_missing
+                and saved != fallback
+                and not _diarization_models_ready(saved)
+                and _diarization_models_ready(fallback)
+            ):
+                logger.info(
+                    "Speaker detection models for %s are not downloaded; "
+                    "using %s for this meeting",
+                    saved, fallback,
+                )
+                saved = fallback
+            engine_env["STENOAI_DIARIZE_ENGINE"] = saved
         except Exception as exc:
             # get_config() already recovers from a corrupt file, so anything
             # landing here is unexpected -- log it, because the fallback
@@ -1272,7 +1321,7 @@ def _run_steno_diarize(
         proc = subprocess.Popen(
             [binary, "diarize", str(channel_path)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=_steno_diarize_env(extra_env),
+            env=_steno_diarize_env(extra_env, fallback_when_missing=True),
             **process_group_options,
         )
         stdout_chunks: list[bytes] = []

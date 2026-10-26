@@ -35,13 +35,13 @@ type Bridge = {
 };
 type StenoWindow = Window & { stenoai: Bridge };
 
-test('a fresh install diarizes with Sortformer', async ({ launchApp }) => {
+test('a fresh install diarizes with Nemotron 3', async ({ launchApp }) => {
   const { page } = await launchApp();
 
   const res = await page.evaluate(() => (window as StenoWindow).stenoai.diarizationEngine.get());
   expect(res).toMatchObject({
     success: true,
-    engine: 'sortformer',
+    engine: 'nemotron3',
     valid_engines: ['sortformer', 'nemotron3'],
   });
 });
@@ -51,6 +51,8 @@ test('Nemotron 3 is refused while its models are missing; config untouched', asy
   userDataDir,
 }) => {
   const realDirBefore = fileSig(realUserDataDir());
+  // Seeded before launch: a user who switched to Sortformer.
+  writeUserConfig(userDataDir, { diarization_engine: 'sortformer' });
   // A developer's STENOAI_DIARIZE_MODEL_DIR pointing at a populated cache
   // would make Nemotron 3 ready and the refusal below vacuous; the sidecar
   // treats an empty value as unset, so the isolated user-data cache is used.
@@ -60,7 +62,7 @@ test('Nemotron 3 is refused while its models are missing; config untouched', asy
     (window as StenoWindow).stenoai.diarizationEngine.set('nemotron3'),
   );
   expect(res.success).toBe(false);
-  expect(readUserConfig(userDataDir).diarization_engine ?? 'sortformer').toBe('sortformer');
+  expect(readUserConfig(userDataDir).diarization_engine).toBe('sortformer');
 
   const after = await page.evaluate(() => (window as StenoWindow).stenoai.diarizationEngine.get());
   expect(after).toMatchObject({ success: true, engine: 'sortformer' });
@@ -96,7 +98,7 @@ test('an unknown engine is rejected at the IPC boundary', async ({ launchApp, us
     (window as StenoWindow).stenoai.diarizationEngine.set('--help'),
   );
   expect(res).toMatchObject({ success: false, error: 'Unknown speaker detection engine' });
-  expect(readUserConfig(userDataDir).diarization_engine ?? 'sortformer').toBe('sortformer');
+  expect(readUserConfig(userDataDir).diarization_engine ?? 'nemotron3').toBe('nemotron3');
 });
 
 /** Seed a complete compiled bundle with the artifacts the sidecar's
@@ -135,8 +137,9 @@ test('a Sortformer cache from before the FluidAudio 0.17 upgrade reads as missin
   }
   const { page } = await launchApp({ env: { STENOAI_DIARIZE_MODEL_DIR: '' } });
 
+  // Asked for Sortformer by name: the saved engine defaults to Nemotron 3.
   const status = await page.evaluate(() =>
-    (window as StenoWindow).stenoai.setup.speakerModelsStatus(),
+    (window as StenoWindow).stenoai.setup.speakerModelsStatus('sortformer'),
   );
   // Skip ONLY when the sidecar is genuinely absent (a dev build without it).
   // Any other failure -- a crashing or unparseable bundled sidecar -- must

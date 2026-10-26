@@ -147,6 +147,7 @@ class SpeakerModelEngineTests(unittest.TestCase):
     def test_prepare_engine_option_overrides_the_saved_engine(self):
         # prepare streams progress, so it runs through the progress runner
         # rather than subprocess.run; the engine must reach it all the same.
+        self.config.set_diarization_engine("sortformer")
         with patch("src.transcriber._resolve_steno_diarize", return_value="/fake/steno-diarize"), \
              patch.object(
                  simple_recorder, "_run_sidecar_with_progress", return_value=_status_result(True)
@@ -193,6 +194,7 @@ class SpeakerModelEngineTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_set_nemotron3_is_refused_until_its_models_are_ready(self):
+        self.config.set_diarization_engine("sortformer")
         result, run = self._invoke(
             simple_recorder.set_diarization_engine_cmd, ["nemotron3"], _status_result(False, returncode=3)
         )

@@ -334,10 +334,16 @@ class ConfigMicrophoneTests(unittest.TestCase):
 
 
 class ConfigDiarizationEngineTests(unittest.TestCase):
-    def test_default_diarization_engine_is_sortformer(self):
+    def test_default_diarization_engine_is_nemotron3(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = Config(config_path=Path(tmp_dir) / "config.json")
-            self.assertEqual(config.get_diarization_engine(), "sortformer")
+            self.assertEqual(config.get_diarization_engine(), "nemotron3")
+
+    def test_config_without_the_key_uses_the_default(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            config._config.pop("diarization_engine", None)
+            self.assertEqual(config.get_diarization_engine(), "nemotron3")
 
     def test_set_diarization_engine_persists_known_engine(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -352,13 +358,13 @@ class ConfigDiarizationEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = Config(config_path=Path(tmp_dir) / "config.json")
             self.assertFalse(config.set_diarization_engine("pyannote"))
-            self.assertEqual(config.get_diarization_engine(), "sortformer")
+            self.assertEqual(config.get_diarization_engine(), "nemotron3")
 
     def test_get_diarization_engine_falls_back_when_stored_value_invalid(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = Config(config_path=Path(tmp_dir) / "config.json")
-            config._config["diarization_engine"] = "NEMOTRON3"
-            self.assertEqual(config.get_diarization_engine(), "sortformer")
+            config._config["diarization_engine"] = "SORTFORMER"
+            self.assertEqual(config.get_diarization_engine(), "nemotron3")
 
 
 class ConfigWhisperModelTests(unittest.TestCase):

@@ -459,9 +459,15 @@ class Config:
 
     VALID_TRANSCRIPTION_ENGINES = ("parakeet", "whisper", "openai-asr")
     # Speaker-diarization engines the macOS steno-diarize sidecar accepts
-    # (its STENOAI_DIARIZE_ENGINE values). Sortformer (4 speaker slots) is the
-    # default; Nemotron 3 (8 slots) is opt-in and needs its own model download.
+    # (its STENOAI_DIARIZE_ENGINE values). This fork defaults to Nemotron 3
+    # (8 speaker slots): on real meetings it matched Sortformer's speaker
+    # attribution on 1:1 and small calls, separated more voices on 10-person
+    # dailies, and ran faster. Sortformer (4 slots) stays selectable, and is
+    # the processing fallback while Nemotron 3's models are not on disk (see
+    # src.transcriber._steno_diarize_env).
     VALID_DIARIZATION_ENGINES = ("sortformer", "nemotron3")
+    DEFAULT_DIARIZATION_ENGINE = "nemotron3"
+    FALLBACK_DIARIZATION_ENGINE = "sortformer"
 
     def __init__(self, config_path: Optional[Path] = None):
         """
@@ -1106,9 +1112,9 @@ class Config:
             "whisper_model": "large-v3-turbo",
             "transcription_engine": "parakeet",
             # macOS speaker diarization engine, see VALID_DIARIZATION_ENGINES.
-            # Settings -> Transcribe only persists "nemotron3" after its
-            # models are prepared, because meeting processing never downloads.
-            "diarization_engine": "sortformer",
+            # Meeting processing never downloads models; it falls back to
+            # Sortformer while the default engine's models are missing.
+            "diarization_engine": self.DEFAULT_DIARIZATION_ENGINE,
             # OpenAI-compatible ASR endpoint settings.
             # api_url: base URL of any OpenAI Speech-to-Text compatible server
             #   (e.g. https://api.openai.com/v1 or Groq).
@@ -2272,12 +2278,15 @@ class Config:
     def get_diarization_engine(self) -> str:
         """Return the macOS speaker-diarization engine.
 
-        One of VALID_DIARIZATION_ENGINES. Falls back to 'sortformer' for
-        missing or unknown values so a hand-edited config can never select a
-        backend the sidecar rejects (it fails loudly on unknown engines).
+        One of VALID_DIARIZATION_ENGINES. Falls back to
+        DEFAULT_DIARIZATION_ENGINE for missing or unknown values so a
+        hand-edited config can never select a backend the sidecar rejects (it
+        fails loudly on unknown engines).
         """
-        value = self._config.get("diarization_engine", "sortformer")
-        return value if value in self.VALID_DIARIZATION_ENGINES else "sortformer"
+        value = self._config.get("diarization_engine", self.DEFAULT_DIARIZATION_ENGINE)
+        if value in self.VALID_DIARIZATION_ENGINES:
+            return value
+        return self.DEFAULT_DIARIZATION_ENGINE
 
     def set_diarization_engine(self, engine: str) -> bool:
         """Persist the speaker-diarization engine. Validates against

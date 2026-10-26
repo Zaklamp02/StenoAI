@@ -41,6 +41,9 @@ test('recommended cloud transcription retains speaker provenance and manual nami
   writeFileSync(sidecar, `#!/usr/bin/python3
 import json,sys
 from pathlib import Path
+if sys.argv[1] == 'model-status':
+    print(json.dumps({'ready':True,'cache_directory':'','required_models':[],'missing_models':[]}))
+    sys.exit(0)
 with open(${JSON.stringify(countFile)}, 'a') as stream: stream.write('call\\n')
 mic = 'ch0_' in sys.argv[-1]
 def embedding(index):

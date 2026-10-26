@@ -2749,5 +2749,71 @@ class StenoDiarizeEngineEnvTests(unittest.TestCase):
         self.assertNotIn("STENOAI_OAI_API_KEY", env)
 
 
+class StenoDiarizeEngineFallbackTests(unittest.TestCase):
+    """Meeting processing never downloads models, so a saved engine whose
+    models are missing falls back to Sortformer instead of losing speakers."""
+
+    def setUp(self):
+        env = patch.dict(os.environ, {}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("STENOAI_DIARIZE_ENGINE", None)
+        cache = patch.dict(transcriber_mod._DIARIZATION_MODELS_READY, {}, clear=True)
+        cache.start()
+        self.addCleanup(cache.stop)
+        config = patch("src.config.get_config")
+        self.get_config = config.start()
+        self.addCleanup(config.stop)
+        self.get_config.return_value.get_diarization_engine.return_value = "nemotron3"
+
+    def _with_ready(self, ready_engines):
+        statuses = []
+
+        def fake_run(args, env, **_kwargs):
+            engine = env["STENOAI_DIARIZE_ENGINE"]
+            statuses.append(engine)
+            return subprocess.CompletedProcess(args, 0 if engine in ready_engines else 3)
+
+        return statuses, patch.multiple(
+            transcriber_mod,
+            _resolve_steno_diarize=Mock(return_value="/fake/steno-diarize"),
+        ), patch("src.transcriber.subprocess.run", side_effect=fake_run)
+
+    def test_missing_default_models_fall_back_to_sortformer_for_a_meeting(self):
+        statuses, resolve, run = self._with_ready({"sortformer"})
+        with resolve, run, self.assertLogs(transcriber_mod.logger, level="INFO") as logs:
+            env = transcriber_mod._steno_diarize_env(fallback_when_missing=True)
+        self.assertEqual(env["STENOAI_DIARIZE_ENGINE"], "sortformer")
+        self.assertEqual(statuses, ["nemotron3", "sortformer"])
+        self.assertIn("using sortformer", logs.output[0])
+
+    def test_ready_default_models_are_used_without_checking_the_fallback(self):
+        statuses, resolve, run = self._with_ready({"nemotron3", "sortformer"})
+        with resolve, run:
+            env = transcriber_mod._steno_diarize_env(fallback_when_missing=True)
+        self.assertEqual(env["STENOAI_DIARIZE_ENGINE"], "nemotron3")
+        self.assertEqual(statuses, ["nemotron3"])
+
+    def test_saved_engine_is_kept_when_neither_engine_is_ready(self):
+        _statuses, resolve, run = self._with_ready(set())
+        with resolve, run:
+            env = transcriber_mod._steno_diarize_env(fallback_when_missing=True)
+        self.assertEqual(env["STENOAI_DIARIZE_ENGINE"], "nemotron3")
+
+    def test_model_commands_keep_the_saved_engine(self):
+        statuses, resolve, run = self._with_ready({"sortformer"})
+        with resolve, run:
+            env = transcriber_mod._steno_diarize_env()
+        self.assertEqual(env["STENOAI_DIARIZE_ENGINE"], "nemotron3")
+        self.assertEqual(statuses, [])
+
+    def test_readiness_is_checked_once_per_engine(self):
+        statuses, resolve, run = self._with_ready({"sortformer"})
+        with resolve, run:
+            transcriber_mod._steno_diarize_env(fallback_when_missing=True)
+            transcriber_mod._steno_diarize_env(fallback_when_missing=True)
+        self.assertEqual(statuses, ["nemotron3", "sortformer"])
+
+
 if __name__ == '__main__':
     unittest.main()

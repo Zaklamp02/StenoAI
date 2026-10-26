@@ -326,7 +326,7 @@ export function SpeakerSeparationSetting() {
   const { progress, clearProgress, download } = useDownloadDiarizationModels();
   const models = useDiarizationModelsState(engine.data);
   const pending = setEngine.isPending || download.isPending;
-  const value = (setEngine.isPending ? setEngine.variables : engine.data) ?? 'sortformer';
+  const value = (setEngine.isPending ? setEngine.variables : engine.data) ?? 'nemotron3';
   const ready = models.data === 'ready';
   // Only a missing sidecar means "not on this Mac"; a failed or timed-out
   // check still offers the download, which re-checks when it finishes.
