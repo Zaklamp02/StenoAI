@@ -6,9 +6,10 @@ import { unwrap } from '@/lib/result';
 const watchedKey = ['watchedFolders'] as const;
 
 /**
- * Watched recording folders and their files (Settings → Integrations, the
- * Recordings inbox). Refreshes when main sees files arrive or change, and when
- * a meeting finishes so a processed file flips to "done".
+ * Watched recording folders and their files (Settings → Integrations, and
+ * the not-yet-transcribed audio in All notes). Refreshes when main sees files
+ * arrive or change, and when a meeting finishes so a processed file flips to
+ * "done" and leaves the list for its note.
  */
 export function useWatchedFolders() {
   const qc = useQueryClient();

@@ -4,10 +4,13 @@ import { cn, isMac } from '@/lib/utils';
 import { MeetingsShell } from '@/components/MeetingsShell';
 import { UpcomingCard } from '@/components/home/UpcomingCard';
 import { PreviousRow } from '@/components/home/PreviousRow';
+import { AudioRow, type AudioAction } from '@/components/home/AudioRow';
 import { Button } from '@/components/ui/button';
 import { AppIcon } from '@/components/ui/app-icon';
 import { KbdKey } from '@/components/ui/kbd';
 import { useMeetings } from '@/hooks/useMeetings';
+import { useWatchedFolderAction, useWatchedFolders } from '@/hooks/useWatchedFolders';
+import { useBlobAudioPlayback } from '@/hooks/useBlobAudioPlayback';
 import { useRecording } from '@/hooks/useRecording';
 import {
   useCalendarEvents,
@@ -16,7 +19,9 @@ import {
 } from '@/hooks/useCalendarEvents';
 import { useFolders } from '@/hooks/useFolders';
 import { useRecordHotkeySetting } from '@/hooks/useSettings';
-import { ipc, type CalendarEvent, type Meeting } from '@/lib/ipc';
+import { ipc, type CalendarEvent, type Meeting, type WatchedFile } from '@/lib/ipc';
+import { unwrap } from '@/lib/result';
+import { t } from '@/i18n';
 import { pickInProgressEvent } from '@/lib/calendar';
 import { heroHeadline, heroSubtitle } from '@/lib/hero';
 import { searchNotes } from '@/lib/noteSearch';
@@ -41,7 +46,39 @@ export function Home({ mode }: HomeProps) {
   const hotkeyEnabled =
     (recordHotkey.data?.enabled ?? true) && recordHotkey.data?.registered !== false;
 
-  const emptyState = !meetings.data?.length;
+  // Audio from watched folders that is not a note yet sits in the same list
+  // as the notes: waiting to be transcribed (or auto-transcribing, per the
+  // folder's setting), syncing, processing or failed. A transcribed file is
+  // its note, so it is not listed again; dismissed files fold away below.
+  const watched = useWatchedFolders();
+  const audioAction = useWatchedFolderAction();
+  const audioPlayback = useBlobAudioPlayback(
+    async (id: string) => unwrap(await ipc().watchedFolders.preview(id)).audioBase64,
+  );
+  const watchedFolderNames = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const f of watched.data?.folders ?? []) map.set(f.id, f.name);
+    return map;
+  }, [watched.data]);
+  const autoFolderIds = React.useMemo(
+    () => new Set((watched.data?.folders ?? []).filter((f) => f.autoTranscribe).map((f) => f.id)),
+    [watched.data],
+  );
+  const { pendingAudio, dismissedAudio, newAudio, unavailableFolders } = React.useMemo(() => {
+    const files = watched.data?.files ?? [];
+    const pending = files.filter((f) => f.status !== 'done' && f.status !== 'dismissed');
+    return {
+      pendingAudio: pending,
+      dismissedAudio: files.filter((f) => f.status === 'dismissed'),
+      newAudio: pending.filter((f) => f.status === 'new'),
+      unavailableFolders: (watched.data?.folders ?? []).filter((f) => !f.available),
+    };
+  }, [watched.data]);
+  const [showDismissed, setShowDismissed] = React.useState(false);
+  const runAudioAction = (type: AudioAction, ids: string[]) => audioAction.mutate({ type, ids });
+
+  // Dismissed audio keeps the list up too: its toggle is the way to restore it.
+  const emptyState = !meetings.data?.length && pendingAudio.length === 0 && dismissedAudio.length === 0;
   const isRecording = recording.status === 'recording' || recording.status === 'paused';
   // Empty-state CTA: start a new recording AND open the live-note editor
   // (/recording) so the user can write notes while it records; a previous note
@@ -219,7 +256,13 @@ export function Home({ mode }: HomeProps) {
     if (!search.trim()) return previous;
     return searchNotes(previous, search);
   }, [mode, previous, search]);
-  const groups = React.useMemo(() => groupPrevious(filtered), [filtered]);
+  const filteredAudio = React.useMemo(() => {
+    const needle = mode === 'meetings' ? search.trim().toLowerCase() : '';
+    if (!needle) return pendingAudio;
+    return pendingAudio.filter((f) =>
+      `${watchedFolderNames.get(f.folderId) ?? ''} ${f.relPath}`.toLowerCase().includes(needle));
+  }, [mode, search, pendingAudio, watchedFolderNames]);
+  const groups = React.useMemo(() => groupPrevious(filtered, filteredAudio), [filtered, filteredAudio]);
 
   // Calendar-connect nudge: most new users don't realise Steno can
   // surface their meetings until something tells them. Show a small
@@ -475,6 +518,21 @@ export function Home({ mode }: HomeProps) {
     day: 'numeric',
   });
 
+  const renderAudioRow = (file: WatchedFile) => (
+    <AudioRow
+      key={file.id}
+      file={file}
+      folderName={watchedFolderNames.get(file.folderId) ?? ''}
+      folderAuto={autoFolderIds.has(file.folderId)}
+      busy={audioAction.isPending}
+      isRecording={isRecording}
+      onAction={(type) => runAudioAction(type, [file.id])}
+      playState={audioPlayback.pendingKey === file.id ? 'loading' : audioPlayback.playingKey === file.id ? 'playing' : 'idle'}
+      playFailed={audioPlayback.errorKey === file.id}
+      onPlay={() => { void audioPlayback.toggle(file.id); }}
+    />
+  );
+
   return (
     <MeetingsShell
       activeSummaryFile={null}
@@ -710,6 +768,20 @@ export function Home({ mode }: HomeProps) {
               count={mode === 'meetings' ? filtered.length : previous.length}
               action={
                 mode === 'meetings' ? (
+                  <div className="flex items-center gap-2">
+                  {newAudio.length > 1 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-[26px] px-2.5 text-[12.5px]"
+                      disabled={isRecording || audioAction.isPending}
+                      title={isRecording ? t('watchedFolders.recordingBlocked') : undefined}
+                      onClick={() => runAudioAction('transcribe', newAudio.map((f) => f.id))}
+                      data-testid="transcribe-all-audio"
+                    >
+                      {t('watchedFolders.transcribeAll', { count: newAudio.length })}
+                    </Button>
+                  )}
                   <div className="relative">
                     <Search
                       className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 size-[12px]"
@@ -744,9 +816,20 @@ export function Home({ mode }: HomeProps) {
                       </button>
                     )}
                   </div>
+                  </div>
                 ) : undefined
               }
             />
+            {audioAction.error && (
+              <p role="alert" className="pb-2 text-[13px]" style={{ color: 'var(--fg-2)' }}>
+                {audioAction.error.message}
+              </p>
+            )}
+            {unavailableFolders.map((f) => (
+              <p key={f.id} className="pb-2 text-[12.5px]" style={{ color: 'var(--fg-muted)' }}>
+                {t('watchedFolders.unavailableNamed', { folder: f.name })}
+              </p>
+            ))}
             {groups.length === 0 && mode === 'meetings' && search.trim() ? (
               <div
                 className="px-6 py-12 text-center text-[13px]"
@@ -764,16 +847,35 @@ export function Home({ mode }: HomeProps) {
                     {g.label}
                   </div>
                   <div>
-                    {g.items.map((m) => (
-                      <PreviousRow
-                        key={m.session_info.summary_file}
-                        meeting={m}
-                        folderName={firstFolderName(m, folderName)}
-                      />
-                    ))}
+                    {g.items.map((item) =>
+                      item.kind === 'note' ? (
+                        <PreviousRow
+                          key={item.meeting.session_info.summary_file}
+                          meeting={item.meeting}
+                          folderName={firstFolderName(item.meeting, folderName)}
+                        />
+                      ) : (
+                        renderAudioRow(item.file)
+                      ),
+                    )}
                   </div>
                 </div>
               ))
+            )}
+            {dismissedAudio.length > 0 && (
+              <div className="pt-4">
+                <button
+                  type="button"
+                  className="-mx-1 rounded px-1 py-0.5 text-xs transition-colors hover:bg-[color:var(--surface-hover)]"
+                  style={{ color: 'var(--fg-muted)' }}
+                  aria-expanded={showDismissed}
+                  onClick={() => setShowDismissed((v) => !v)}
+                  data-testid="dismissed-audio-toggle"
+                >
+                  {t('watchedFolders.dismissedCount', { count: dismissedAudio.length })}
+                </button>
+                {showDismissed && <div className="pt-1">{dismissedAudio.map(renderAudioRow)}</div>}
+              </div>
             )}
           </section>
         </>
@@ -861,28 +963,38 @@ function firstFolderName(
   return folderName.get(id);
 }
 
+type ListItem =
+  | { kind: 'note'; meeting: Meeting; at: string | undefined }
+  | { kind: 'audio'; file: WatchedFile; at: string };
+
 interface Group {
   label: string;
-  items: Meeting[];
+  items: ListItem[];
 }
 
-function groupPrevious(meetings: Meeting[]): Group[] {
-  const groups: Record<string, Meeting[]> = {};
+/** Notes and not-yet-transcribed audio, newest first, grouped by day. Audio
+ *  is dated by when it was recorded, as its note will be. */
+function groupPrevious(meetings: Meeting[], audio: WatchedFile[] = []): Group[] {
+  const groups: Record<string, ListItem[]> = {};
   const order: string[] = [];
   const now = new Date();
-  const sorted = [...meetings].sort((a, b) => {
-    const ta = new Date(a.session_info.processed_at ?? a.session_info.updated_at ?? 0).getTime();
-    const tb = new Date(b.session_info.processed_at ?? b.session_info.updated_at ?? 0).getTime();
-    return tb - ta;
-  });
-  for (const m of sorted) {
-    const raw = m.session_info.processed_at ?? m.session_info.updated_at;
-    const label = raw ? groupLabel(new Date(raw), now) : 'Earlier';
+  const items: ListItem[] = [
+    ...meetings.map((meeting): ListItem => ({
+      kind: 'note',
+      meeting,
+      at: meeting.session_info.processed_at ?? meeting.session_info.updated_at,
+    })),
+    ...audio.map((file): ListItem => ({ kind: 'audio', file, at: file.recordedAt })),
+  ];
+  const time = (item: ListItem) => new Date(item.at ?? 0).getTime() || 0;
+  const sorted = items.sort((a, b) => time(b) - time(a));
+  for (const item of sorted) {
+    const label = item.at ? groupLabel(new Date(item.at), now) : 'Earlier';
     if (!groups[label]) {
       groups[label] = [];
       order.push(label);
     }
-    groups[label].push(m);
+    groups[label].push(item);
   }
   return order.map((label) => ({ label, items: groups[label] }));
 }

@@ -190,7 +190,7 @@ const stenoai = {
       invoke('export-note-pdf', defaultFilename, html),
   },
 
-  // Watched recording folders + the Recordings inbox (watched-folders.js).
+  // Watched recording folders and their audio in All notes (watched-folders.js).
   watchedFolders: {
     list: () => invoke('watched-folders-list'),
     add: (testPath) => invoke('watched-folders-add', testPath),

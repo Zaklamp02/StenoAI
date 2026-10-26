@@ -6,8 +6,8 @@ const crypto = require('crypto');
 
 // Watched recording folders (Settings → Integrations): folders another tool
 // fills with audio — e.g. a phone voice recorder synced by Syncthing. Each
-// file shows in the Recordings inbox, where the user picks what becomes a
-// meeting; a folder can also auto-transcribe new files. The source files are
+// file not yet transcribed shows in All notes, where the user picks what
+// becomes a meeting; a folder can also auto-transcribe new files. The source files are
 // never moved, renamed or deleted (a Syncthing receive-only folder flags any
 // local change), so per-file state lives in watched-folders.json instead.
 

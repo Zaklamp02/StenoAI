@@ -5,12 +5,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 
 /**
- * T2 — watched recording folders + the Recordings inbox. Model-free: nothing is
- * transcribed (auto-transcribe and queueing are covered in
- * app/watched-folders.test.js). Asserts the inbox is hidden until a folder is
- * configured, that a file only becomes "new" once complete, that dismiss and
- * restore never touch the source, and that removing the last folder hides the
- * inbox again.
+ * T2 — watched recording folders and their audio in All notes. Model-free:
+ * nothing is transcribed (auto-transcribe and queueing are covered in
+ * app/watched-folders.test.js). Asserts that audio not yet transcribed is
+ * listed among the notes once a folder is configured, that a file only becomes
+ * "new" once complete, that dismiss and restore never touch the source, that
+ * the old Recordings route lands in All notes, and that removing the last
+ * folder takes its audio out of the list again.
  */
 
 type Listing = {
@@ -30,7 +31,7 @@ type StenoWindow = Window & {
   };
 };
 
-test('a watched folder adds the Recordings inbox; files can be dismissed and restored', async ({
+test('watched-folder audio is listed in All notes; files can be dismissed and restored', async ({
   launchApp,
   userDataDir,
 }) => {
@@ -41,9 +42,9 @@ test('a watched folder adds the Recordings inbox; files can be dismissed and res
   const source = path.join(phone, 'Spraak 261017_191302.m4a');
 
   const { page } = await launchApp({ releaseHighlightsSeen: true });
-  const nav = page.locator('nav').getByRole('button', { name: /^Recordings/ });
   await expect(page.locator('nav').getByRole('button', { name: /^Home/ })).toBeVisible();
-  await expect(nav).toHaveCount(0);
+  // There is no separate Recordings tab any more.
+  await expect(page.locator('nav').getByRole('button', { name: /^Recordings/ })).toHaveCount(0);
 
   const refused = await page.evaluate(
     (p) => (window as StenoWindow).stenoai.watchedFolders.add(p),
@@ -53,18 +54,20 @@ test('a watched folder adds the Recordings inbox; files can be dismissed and res
 
   const added = await page.evaluate((p) => (window as StenoWindow).stenoai.watchedFolders.add(p), phone);
   expect(added.success).toBe(true);
-  await expect(nav).toBeVisible();
 
   // Syncthing's hidden temp file is never listed; the finished file is.
   writeFileSync(path.join(phone, '.syncthing.Spraak 261017_191302.m4a.tmp'), 'partial');
   makeWav(source, { seconds: 1 });
 
-  await nav.click();
+  // An old link to the Recordings inbox lands in All notes.
+  await page.evaluate(() => { window.location.hash = '#/recordings'; });
+  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/meetings');
   const row = page.locator('[data-watched-file="Spraak 261017_191302.m4a"]');
   await expect(row).toHaveAttribute('data-status', /syncing|new/);
   await expect(row).toHaveAttribute('data-status', 'new', { timeout: 30_000 });
+  await expect(row).toContainText('Not transcribed');
   await expect(page.locator('[data-watched-file]')).toHaveCount(1);
-  await expect(page.getByTestId('recordings-new-count')).toHaveText('1');
+  await expect(page.getByTestId('recordings-new-count')).toHaveText('1 new');
 
   // The play button gets a WAV transcode from the bundled ffmpeg.
   const [listed] = (await page.evaluate(() => (window as StenoWindow).stenoai.watchedFolders.list())).files;
@@ -74,9 +77,11 @@ test('a watched folder adds the Recordings inbox; files can be dismissed and res
   await row.getByRole('button', { name: 'Play the first two minutes' }).click();
   await expect(row.getByRole('button', { name: 'Stop' })).toBeVisible();
 
+  // Dismissed audio folds away under its own toggle, and can be restored.
   await row.getByRole('button', { name: 'Dismiss' }).click();
   await expect(row).toHaveCount(0);
-  await page.getByRole('tab', { name: 'All' }).click();
+  await expect(page.getByTestId('recordings-new-count')).toHaveCount(0);
+  await page.getByTestId('dismissed-audio-toggle').click();
   await expect(row).toHaveAttribute('data-status', 'dismissed');
   await row.getByRole('button', { name: 'Restore' }).click();
   await expect(row).toHaveAttribute('data-status', 'new');
@@ -97,12 +102,11 @@ test('a watched folder adds the Recordings inbox; files can be dismissed and res
   const listing = await page.evaluate(() => (window as StenoWindow).stenoai.watchedFolders.list());
   expect(listing.files.map((f) => f.status)).toEqual(['new']);
 
-  // Removing the last folder hides the inbox and sends a stale route Home.
+  // Removing the last folder takes its audio out of the notes list.
   await folderRow.getByRole('button', { name: 'Remove' }).click();
   await expect(folderRow).toHaveCount(0);
-  await expect(nav).toHaveCount(0);
-  await page.evaluate(() => { window.location.hash = '#/recordings'; });
-  await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('#/');
+  await page.evaluate(() => { window.location.hash = '#/meetings'; });
+  await expect(page.locator('[data-watched-file]')).toHaveCount(0);
   expect(existsSync(source)).toBe(true);
 
   expect(fileSig(realUserDataDir())).toEqual(realDirBefore);

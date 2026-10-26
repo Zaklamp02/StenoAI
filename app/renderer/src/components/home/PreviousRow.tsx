@@ -162,7 +162,7 @@ function LiveBadge() {
   );
 }
 
-function ProcessingBadge() {
+export function ProcessingBadge() {
   return (
     <span
       className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium"
@@ -178,7 +178,7 @@ function ProcessingBadge() {
   );
 }
 
-function formatTime(iso?: string): string | undefined {
+export function formatTime(iso?: string): string | undefined {
   if (!iso) return undefined;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return undefined;

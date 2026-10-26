@@ -4,7 +4,6 @@ import {
   CalendarDays,
   ChevronDown,
   Blocks,
-  FileAudio,
   Globe,
   HelpCircle,
   Home as HomeIcon,
@@ -190,9 +189,9 @@ export function Sidebar({
   // `enabled` stays false until policy resolves, so the tab doesn't flash in
   // then vanish for an org that has the feature turned off.
   const sharedNotes = useSharedNotesGate(orgSignedIn);
-  // The Recordings inbox only exists once a watched folder is configured.
+  // Watched-folder audio waiting to be transcribed is listed in All notes;
+  // the row says how many there are.
   const watched = useWatchedFolders();
-  const hasWatchedFolders = (watched.data?.folders.length ?? 0) > 0;
   const newRecordings = watched.data?.files.filter((f) => f.status === 'new').length ?? 0;
   // Malformed % escapes throw URIError. Guard so a bad route can't crash
   // the entire sidebar render.
@@ -381,6 +380,16 @@ export function Sidebar({
             >
               <Inbox className="size-[14px]" />
               <span className="flex-1 truncate">All notes</span>
+              {newRecordings > 0 && (
+                <span
+                  className="rounded px-1.5 text-[11px] font-medium tabular-nums"
+                  style={{ background: 'var(--surface-sunken)', color: 'var(--fg-1)' }}
+                  title={t('watchedFolders.newCountTitle', { count: newRecordings })}
+                  data-testid="recordings-new-count"
+                >
+                  {t('watchedFolders.newCount', { count: newRecordings })}
+                </span>
+              )}
               {totalMeetings > 0 && (
                 <span className="text-xs tabular-nums" style={{ color: 'var(--fg-muted)' }}>
                   {totalMeetings}
@@ -388,23 +397,6 @@ export function Sidebar({
               )}
             </button>
           </div>
-
-          {hasWatchedFolders && (
-            <button
-              type="button"
-              className={cn('sb-row', currentRoute === '/recordings' && 'active')}
-              aria-current={currentRoute === '/recordings' ? 'page' : undefined}
-              onClick={() => navigate('/recordings')}
-            >
-              <FileAudio className="size-[14px]" />
-              <span className="flex-1 truncate">{t('watchedFolders.nav')}</span>
-              {newRecordings > 0 && (
-                <span className="text-xs tabular-nums" style={{ color: 'var(--fg-muted)' }} data-testid="recordings-new-count">
-                  {newRecordings}
-                </span>
-              )}
-            </button>
-          )}
 
           <button
             type="button"
