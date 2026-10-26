@@ -40,6 +40,7 @@ from src.transcriber import (
     _cluster_channel_labels,
     _cluster_channel_label_plan,
     _diarised_split_timeout,
+    _fold_same_channel_fragments,
     _format_timestamp,
     _identity_matching_enabled,
     _merge_close_diar_segments,
@@ -303,7 +304,7 @@ class TranscribeDiarisedMultiSpeakerTests(unittest.TestCase):
             {"start": 5.0, "end": 8.0, "speaker": "SPEAKER_0"},
         ]
         system_diar = [{"start": 9.0, "end": 9.5, "speaker": "SPEAKER_0"}]
-        mic_embeddings = {"SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.3, 0.4]}
+        mic_embeddings = {"SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.4, -0.2]}
         system_embeddings = {"SPEAKER_0": [0.5, 0.6]}
         with patch("src.transcriber._identity_matching_enabled", return_value=True), \
              patch("src.config.get_config") as mock_get_config, \
@@ -324,7 +325,7 @@ class TranscribeDiarisedMultiSpeakerTests(unittest.TestCase):
         clusters = result["speaker_clusters"]
         self.assertEqual(clusters["mic"]["recording_type"], "in_person")
         self.assertEqual(set(clusters["mic"]["clusters"].keys()), {"SPEAKER_0", "SPEAKER_1"})
-        self.assertEqual(clusters["mic"]["clusters"]["SPEAKER_1"]["embedding"], [0.3, 0.4])
+        self.assertEqual(clusters["mic"]["clusters"]["SPEAKER_1"]["embedding"], [0.4, -0.2])
         # The system channel's diarization result here is a single trivial
         # cluster (see the sibling test above) -- _cluster_channel_labels
         # correctly treats that as "no real second speaker" and the
@@ -1528,6 +1529,11 @@ class ResolveSpeakerPlaceholdersTests(unittest.TestCase):
         # channel/raw_sid pass through untouched -- only label is rewritten.
 
 
+def _unit_at(angle):
+    """Unit vector in the x/y plane, ``angle`` radians from [1, 0, 0]."""
+    return [math.cos(angle), math.sin(angle), 0.0]
+
+
 class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
     @staticmethod
     def _cluster(embedding):
@@ -1581,10 +1587,14 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
         )
 
     def test_ambiguous_near_ties_are_not_merged(self):
+        # Both system clusters sit 20 degrees either side of the mic cluster:
+        # equally close to it (0.06) but too far apart (0.23) to be fragments
+        # of one voice, so the tie stays ambiguous.
+        angle = math.radians(20)
         mic_clusters = {"SPEAKER_0": self._cluster([1.0, 0.0])}
         system_clusters = {
-            "SPEAKER_0": self._cluster([1.0, 0.0]),
-            "SPEAKER_1": self._cluster([1.0, 0.0]),
+            "SPEAKER_0": self._cluster([math.cos(angle), math.sin(angle)]),
+            "SPEAKER_1": self._cluster([math.cos(angle), -math.sin(angle)]),
         }
         tagged = [
             (0.0, "You", "mic", "mic", "SPEAKER_0"),
@@ -1688,6 +1698,149 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
         self.assertEqual(mic_out["SPEAKER_0"]["segments"], [{"start": 0.0, "end": 3.0}])
         self.assertEqual(mic_out["SPEAKER_0"]["speech_duration_seconds"], 3.0)
         self.assertEqual(mic_out["SPEAKER_0"]["segment_count"], 4)
+
+
+    def test_same_channel_fragments_fold_before_cross_channel_matching(self):
+        # One remote voice split into two system slots (0.06 apart), echoed on
+        # the mic. Unfolded, the second fragment is the mic cluster's
+        # runner-up within the margin and blocks the merge.
+        mic_clusters = {
+            "SPEAKER_0": self._cluster([0.0, 1.0, 0.0]),
+            "SPEAKER_1": self._cluster([1.0, 0.0, 0.0]),
+        }
+        system_clusters = {
+            "SPEAKER_1": self._cluster(_unit_at(math.acos(0.96))),
+            "SPEAKER_3": self._cluster(_unit_at(math.acos(0.92))),
+            "SPEAKER_2": self._cluster([0.0, 0.0, 1.0]),
+        }
+        tagged = [
+            (0.0, "You", "local", "mic", "SPEAKER_0"),
+            (1.0, "__diar__You__SPEAKER_1", "echo", "mic", "SPEAKER_1"),
+            (2.0, "__diar__Others__SPEAKER_1", "the direct remote turn", "system", "SPEAKER_1"),
+            (3.0, "__diar__Others__SPEAKER_3", "more of that voice", "system", "SPEAKER_3"),
+            (4.0, "__diar__Others__SPEAKER_2", "another remote person", "system", "SPEAKER_2"),
+        ]
+
+        reconciled, mic_out, system_out = _reconcile_cross_channel_speakers(
+            tagged, mic_clusters, system_clusters,
+        )
+
+        self.assertEqual(set(mic_out), {"SPEAKER_0"})
+        self.assertEqual(set(system_out), {"SPEAKER_1", "SPEAKER_2"})
+        self.assertEqual(
+            [turn[3:] for turn in reconciled[1:4]],
+            [("system", "SPEAKER_1")] * 3,
+        )
+        self.assertEqual(
+            {turn[1] for turn in _resolve_speaker_placeholders(reconciled)},
+            {"You", "Speaker 2", "Speaker 3"},
+        )
+
+    def _echo_pair(self, distance, mic_segments, system_segments):
+        mic_clusters = {
+            "SPEAKER_0": self._cluster([0.0, 0.0, 1.0]),
+            "SPEAKER_1": {
+                **self._cluster([1.0, 0.0, 0.0]),
+                "segments": mic_segments,
+            },
+        }
+        system_clusters = {
+            "SPEAKER_0": {
+                **self._cluster(_unit_at(math.acos(1.0 - distance))),
+                "segments": system_segments,
+            },
+        }
+        tagged = [
+            (0.0, "You", "local", "mic", "SPEAKER_0"),
+            (1.0, "__diar__You__SPEAKER_1", "echo", "mic", "SPEAKER_1"),
+            (2.0, "Others", "the direct remote turn", "system", "SPEAKER_0"),
+        ]
+        return tagged, mic_clusters, system_clusters
+
+    def test_speaker_echo_beyond_fragment_threshold_merges_when_speech_coincides(self):
+        segments = [{"start": 10.0 * i, "end": 10.0 * i + 6.0} for i in range(5)]
+        tagged, mic_clusters, system_clusters = self._echo_pair(
+            0.16,
+            [{"start": s["start"] + 0.2, "end": s["end"] + 0.2} for s in segments],
+            segments,
+        )
+
+        reconciled, mic_out, system_out = _reconcile_cross_channel_speakers(
+            tagged, mic_clusters, system_clusters,
+        )
+
+        self.assertEqual(set(mic_out), {"SPEAKER_0"})
+        self.assertEqual(set(system_out), {"SPEAKER_0"})
+        self.assertEqual(reconciled[1][1:], ("Others", "echo", "system", "SPEAKER_0"))
+
+    def test_similar_voices_that_never_coincide_are_not_merged(self):
+        tagged, mic_clusters, system_clusters = self._echo_pair(
+            0.16,
+            [{"start": 10.0 * i, "end": 10.0 * i + 4.0} for i in range(5)],
+            [{"start": 10.0 * i + 5.0, "end": 10.0 * i + 9.0} for i in range(5)],
+        )
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+    def test_coinciding_speech_does_not_merge_distinct_voices(self):
+        segments = [{"start": 10.0 * i, "end": 10.0 * i + 6.0} for i in range(5)]
+        tagged, mic_clusters, system_clusters = self._echo_pair(0.55, segments, segments)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+    def test_a_few_seconds_of_coinciding_speech_is_not_echo_evidence(self):
+        segments = [{"start": 0.0, "end": 4.0}]
+        tagged, mic_clusters, system_clusters = self._echo_pair(0.16, segments, segments)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+
+class FoldSameChannelFragmentsTests(unittest.TestCase):
+    def test_fragments_fold_into_the_legacy_label_with_weighted_embedding(self):
+        clusters = {
+            "SPEAKER_0": {
+                "embedding": [1.0, 0.0],
+                "speech_duration_seconds": 3.0,
+                "segment_count": 1,
+                "segments": [{"start": 0.0, "end": 3.0}],
+            },
+            "SPEAKER_1": {
+                "embedding": _unit_at(math.acos(0.95))[:2],
+                "speech_duration_seconds": 1.0,
+                "segment_count": 2,
+                "segments": [{"start": 2.0, "end": 4.0}],
+            },
+            "SPEAKER_2": {
+                "embedding": [0.0, 1.0],
+                "speech_duration_seconds": 5.0,
+                "segment_count": 1,
+            },
+        }
+        tagged = [
+            (0.0, "__diar__You__SPEAKER_0", "a long fragment turn", "mic", "SPEAKER_0"),
+            (2.0, "You", "short", "mic", "SPEAKER_1"),
+            (5.0, "__diar__You__SPEAKER_2", "someone else", "mic", "SPEAKER_2"),
+            (6.0, "Others", "untouched", "system", "SPEAKER_0"),
+        ]
+
+        folded_tagged, out = _fold_same_channel_fragments(tagged, clusters, "mic")
+
+        self.assertEqual(set(out), {"SPEAKER_1", "SPEAKER_2"})
+        self.assertEqual(folded_tagged[0][1:], ("You", "a long fragment turn", "mic", "SPEAKER_1"))
+        self.assertEqual(folded_tagged[2:], tagged[2:])
+        merged = out["SPEAKER_1"]
+        self.assertEqual(merged["segments"], [{"start": 0.0, "end": 4.0}])
+        self.assertEqual(merged["speech_duration_seconds"], 4.0)
+        self.assertEqual(merged["segment_count"], 3)
+        self.assertAlmostEqual(math.hypot(*merged["embedding"]), 1.0)
+        # Weighted 3:1 toward SPEAKER_0's direction.
+        self.assertLess(merged["embedding"][1], 0.2)
 
 
 class AssembleDiarisedTurnsTests(unittest.TestCase):

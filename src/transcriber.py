@@ -142,6 +142,21 @@ STENO_DIARIZE_MERGE_GAP_S = 0.3
 # cutoff.
 CROSS_CHANNEL_SPEAKER_MATCH_MARGIN = 0.05
 
+# A remote voice played through laptop speakers and re-captured by the mic
+# goes through speaker EQ and room reverb, so its mic-side centroid lands
+# further from the system-side one than the same-meeting fragment threshold
+# allows. Such a pair is accepted only with independent evidence of echo: the
+# two clusters speak at the same moments. Across 16 real recordings, echo
+# pairs measured 0.04-0.35 apart and overlapped 86-100% of the shorter
+# cluster's speech; distinct people were never closer than 0.56 and
+# overlapped <=20% (crosstalk). The speech floor keeps a few seconds of
+# stray audio, which trivially sits inside someone's speech, from counting
+# as evidence. The pad absorbs playback latency and diarizer boundary jitter.
+CROSS_CHANNEL_ECHO_MAX_DISTANCE = 0.40
+CROSS_CHANNEL_ECHO_MIN_OVERLAP = 0.60
+CROSS_CHANNEL_ECHO_MIN_SPEECH_S = 10.0
+CROSS_CHANNEL_ECHO_PAD_S = 0.5
+
 # Floor for the steno-diarize subprocess timeout. Real measured runtime
 # varies a lot with recording length: single-digit-to-tens-of-seconds for
 # short/typical meetings, but a real ~3.5h recording measured ~18 minutes
@@ -1966,6 +1981,177 @@ def _resolve_speaker_placeholders(
     return resolved
 
 
+def _cluster_speech_intervals(*clusters: dict) -> list[list[float]]:
+    """Sorted union of the clusters' finite, positive-length segments."""
+    segments = []
+    for cluster in clusters:
+        for segment in cluster.get("segments") or []:
+            try:
+                start = float(segment["start"])
+                end = float(segment["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(start) and math.isfinite(end) and end > start:
+                segments.append((start, end))
+    merged: list[list[float]] = []
+    for start, end in sorted(segments):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def _cluster_speech_overlap_ratio(
+    a: dict, b: dict, pad: float, min_speech: float = 0.0,
+) -> float:
+    """Share of the shorter cluster's speech that coincides with the other's.
+
+    ``b``'s intervals are widened by ``pad`` on both sides. Returns 0.0 when
+    the shorter cluster has less than ``min_speech`` seconds of speech.
+    """
+    a_intervals = _cluster_speech_intervals(a)
+    b_intervals = _cluster_speech_intervals(
+        {"segments": [
+            {"start": start - pad, "end": end + pad}
+            for start, end in _cluster_speech_intervals(b)
+        ]}
+    )
+    shorter = min(
+        sum(end - start for start, end in a_intervals),
+        sum(end - start for start, end in _cluster_speech_intervals(b)),
+    )
+    if shorter < min_speech or shorter <= 0:
+        return 0.0
+    shared = 0.0
+    j = 0
+    for start, end in a_intervals:
+        while j < len(b_intervals) and b_intervals[j][1] <= start:
+            j += 1
+        k = j
+        while k < len(b_intervals) and b_intervals[k][0] < end:
+            shared += min(end, b_intervals[k][1]) - max(start, b_intervals[k][0])
+            k += 1
+    return min(1.0, shared / shorter)
+
+
+def _fold_same_channel_fragments(
+    tagged: list[tuple[float, str, str, str, Optional[str]]],
+    clusters: dict,
+    channel: str,
+) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict]:
+    """Collapse one channel's diarizer fragments of a single voice.
+
+    Sortformer can split one continuous speaker across slots in a long
+    recording. Clusters joined (transitively) at or below
+    SAME_MEETING_MERGE_DISTANCE_THRESHOLD -- the threshold speaker review
+    already uses for the same fragments -- become one cluster. The canonical
+    member keeps a legacy channel label ("You"/"Others") when one exists,
+    otherwise it is the member with the most transcript text. Its embedding
+    becomes the duration-weighted, re-normalized mean of the members.
+    """
+    if len(clusters) < 2:
+        return tagged, clusters
+
+    from src.voiceprint import cosine_distance
+
+    sids = [
+        sid for sid, cluster in clusters.items()
+        if isinstance(cluster, dict) and cluster.get("embedding")
+    ]
+    parent = {sid: sid for sid in sids}
+
+    def find(sid: str) -> str:
+        while parent[sid] != sid:
+            parent[sid] = parent[parent[sid]]
+            sid = parent[sid]
+        return sid
+
+    for i, a in enumerate(sids):
+        for b in sids[i + 1:]:
+            try:
+                distance = cosine_distance(clusters[a]["embedding"], clusters[b]["embedding"])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(distance) and distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
+                parent[find(a)] = find(b)
+
+    groups: dict[str, list[str]] = {}
+    for sid in sids:
+        groups.setdefault(find(sid), []).append(sid)
+    groups = {root: members for root, members in groups.items() if len(members) > 1}
+    if not groups:
+        return tagged, clusters
+
+    text_weights: dict[str, int] = {}
+    labels: dict[str, str] = {}
+    for _start, label, text, line_channel, raw_sid in tagged:
+        if line_channel != channel or raw_sid is None:
+            continue
+        text_weights[raw_sid] = text_weights.get(raw_sid, 0) + len((text or "").strip())
+        labels.setdefault(raw_sid, label)
+
+    out = dict(clusters)
+    aliases: dict[str, tuple[str, str]] = {}
+    for members in groups.values():
+        canonical = max(
+            members,
+            key=lambda sid: (
+                labels.get(sid) in ("You", "Others"),
+                text_weights.get(sid, 0),
+                float(clusters[sid].get("speech_duration_seconds") or 0.0),
+            ),
+        )
+        canonical_label = labels.get(canonical) or next(
+            (labels[sid] for sid in members if sid in labels), None,
+        )
+        member_clusters = [clusters[sid] for sid in members]
+        intervals = _cluster_speech_intervals(*member_clusters)
+
+        weights = [
+            max(float(cluster.get("speech_duration_seconds") or 0.0), 0.0)
+            for cluster in member_clusters
+        ]
+        if sum(weights) <= 0:
+            weights = [1.0] * len(member_clusters)
+        dim = len(clusters[canonical]["embedding"])
+        embedding = [0.0] * dim
+        for cluster, weight in zip(member_clusters, weights):
+            if len(cluster["embedding"]) != dim:
+                continue
+            for k, value in enumerate(cluster["embedding"]):
+                embedding[k] += float(value) * weight
+        norm = math.sqrt(sum(value * value for value in embedding))
+        if norm > 1e-9:
+            embedding = [value / norm for value in embedding]
+
+        folded = dict(clusters[canonical])
+        folded["embedding"] = embedding
+        folded["segments"] = [{"start": start, "end": end} for start, end in intervals]
+        folded["speech_duration_seconds"] = sum(end - start for start, end in intervals)
+        folded["segment_count"] = sum(
+            int(cluster.get("segment_count") or 0) for cluster in member_clusters
+        )
+        out[canonical] = folded
+        for sid in members:
+            if sid == canonical:
+                continue
+            out.pop(sid, None)
+            if canonical_label is not None:
+                aliases[sid] = (canonical, canonical_label)
+        logger.info(
+            "Same-channel fragment fold (%s): %s -> %s",
+            channel, ", ".join(sid for sid in members if sid != canonical), canonical,
+        )
+
+    folded_tagged = []
+    for start, label, text, line_channel, raw_sid in tagged:
+        if line_channel == channel and raw_sid in aliases:
+            raw_sid, label = aliases[raw_sid]
+        folded_tagged.append((start, label, text, line_channel, raw_sid))
+    return folded_tagged, out
+
+
 def _reconcile_cross_channel_speakers(
     tagged: list[tuple[float, str, str, str, Optional[str]]],
     mic_clusters: dict,
@@ -1980,9 +2166,13 @@ def _reconcile_cross_channel_speakers(
     those channel-local IDs into two visible people and speaker review exposes
     two rows for one person.
 
-    WeSpeaker centroids from the same recording are safe enough for a narrow,
-    conservative merge: require a mutual-nearest pair at or below the existing
-    same-meeting fragment threshold and a clear runner-up margin on both sides.
+    Each channel's own diarizer fragments are folded first (see
+    _fold_same_channel_fragments). WeSpeaker centroids from the same recording
+    are then safe enough for a narrow, conservative merge: require a
+    mutual-nearest pair with a clear runner-up margin on both sides, at or
+    below the same-meeting fragment threshold -- or, for speaker playback
+    re-captured by the mic, within CROSS_CHANNEL_ECHO_MAX_DISTANCE when the
+    two clusters also speak at the same moments.
     The channel retaining more post-bleed transcript text is canonical. Alias
     turns inherit its label and provenance, and the duplicate sidecar cluster
     is removed. Ambiguous, malformed, or unmatched clusters stay untouched.
@@ -1992,7 +2182,16 @@ def _reconcile_cross_channel_speakers(
 
     from src.voiceprint import cosine_distance
 
+    # Fold each channel's diarizer fragments first. Otherwise a fragment of
+    # the matched person counts as the runner-up, the margin check reads it as
+    # ambiguity, and the echo pair is never merged.
+    tagged, mic_clusters = _fold_same_channel_fragments(tagged, mic_clusters, "mic")
+    tagged, system_clusters = _fold_same_channel_fragments(
+        tagged, system_clusters, "system",
+    )
+
     distances: dict[tuple[str, str], float] = {}
+    overlaps: dict[tuple[str, str], float] = {}
     for mic_sid, mic_cluster in mic_clusters.items():
         mic_embedding = mic_cluster.get("embedding") if isinstance(mic_cluster, dict) else None
         if not mic_embedding:
@@ -2009,9 +2208,21 @@ def _reconcile_cross_channel_speakers(
                 continue
             if math.isfinite(distance):
                 distances[(mic_sid, system_sid)] = distance
+                overlaps[(mic_sid, system_sid)] = _cluster_speech_overlap_ratio(
+                    mic_cluster, system_cluster, CROSS_CHANNEL_ECHO_PAD_S,
+                    CROSS_CHANNEL_ECHO_MIN_SPEECH_S,
+                )
 
     if not distances:
         return tagged, mic_clusters, system_clusters
+
+    def _eligible(pair: tuple[str, str], distance: float) -> bool:
+        if distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
+            return True
+        return (
+            distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE
+            and overlaps.get(pair, 0.0) >= CROSS_CHANNEL_ECHO_MIN_OVERLAP
+        )
 
     def _confident_nearest(
         sid: str,
@@ -2029,7 +2240,8 @@ def _reconcile_cross_channel_speakers(
         if not candidates:
             return None
         best_distance, best_sid = candidates[0]
-        if best_distance > SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
+        pair = (sid, best_sid) if from_mic else (best_sid, sid)
+        if not _eligible(pair, best_distance):
             return None
         if (
             len(candidates) > 1
@@ -2098,23 +2310,8 @@ def _reconcile_cross_channel_speakers(
             # Transcript provenance is rewritten to the canonical cluster, so
             # retain the alias time ranges there as well. This keeps review
             # clips placeable without double-counting overlapping echo ranges.
-            segments = []
-            for cluster in (canonical_cluster, alias_cluster):
-                for segment in cluster.get("segments") or []:
-                    try:
-                        start = float(segment["start"])
-                        end = float(segment["end"])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    if math.isfinite(start) and math.isfinite(end) and end > start:
-                        segments.append((start, end))
-            if segments:
-                merged_segments: list[list[float]] = []
-                for start, end in sorted(segments):
-                    if merged_segments and start <= merged_segments[-1][1]:
-                        merged_segments[-1][1] = max(merged_segments[-1][1], end)
-                    else:
-                        merged_segments.append([start, end])
+            merged_segments = _cluster_speech_intervals(canonical_cluster, alias_cluster)
+            if merged_segments:
                 canonical_cluster = dict(canonical_cluster)
                 canonical_cluster["segments"] = [
                     {"start": start, "end": end} for start, end in merged_segments
