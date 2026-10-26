@@ -47,17 +47,26 @@ Per-channel acoustic speaker diarization (splitting multiple speakers sharing
 one side of a call — e.g. two people around one mic, or multiple remote
 participants on system audio) runs through `bin/steno-diarize`, a Swift/
 CoreML sidecar (`diarize-sidecar/`) wrapping FluidAudio's diarizers —
-Sortformer (default) or Nemotron 3, an 8-speaker streaming model (streaming
+Nemotron 3 (this fork's default), an 8-speaker streaming model (streaming
 preset via `STENOAI_DIARIZE_NEMOTRON_PRESET`, default `c128-split-w8a8`, the
-100%-ANE-resident split-graph build). The user picks the engine in
+100%-ANE-resident split-graph build), or Sortformer (4 speakers, upstream's
+default). The user picks the engine in
 Settings -> Transcribe ("Speaker detection"), persisted as the
 `diarization_engine` config key; `src.transcriber._steno_diarize_env()`
 turns it into the sidecar's `STENOAI_DIARIZE_ENGINE` for every invocation
 (`diarize`, `model-status`, `prepare-models`), and an already-set
 `STENOAI_DIARIZE_ENGINE` still wins as a developer override. Because
 meeting processing never downloads models, `set-diarization-engine` refuses
-a non-default engine until its models are ready; the renderer prepares them
-first via `prepare-speaker-models --engine nemotron3`. The stdout JSON contract is
+Nemotron 3 until its models are ready (the renderer prepares them first via
+`prepare-speaker-models --engine nemotron3`), and a meeting whose saved
+engine has no models on disk runs Sortformer when Sortformer's are present
+(`_steno_diarize_env(fallback_when_missing=True)`); model commands keep the
+saved engine, so onboarding and the post-upgrade re-download fetch it.
+After diarization, `_consolidate_speakers` folds each channel's fragments
+of one voice and merges mic/system copies of a voice played through the
+speakers (close centroids plus coinciding speech). It uses the meeting's
+embeddings in memory whether or not speaker identification is on; they are
+persisted only when it is on. The stdout JSON contract is
 identical for both engines, so Python never branches on engine.
 Invoked from Python (`src.transcriber._run_steno_diarize`) — never
 from Electron, since the batch pipeline is entirely Python-orchestrated.
@@ -141,7 +150,7 @@ overrides an agent's own test-level defaults.
     (auth-status from a local token file + auto-detect-meetings toggle) /
     `notifications.t2` (the notifications_enabled toggle gating the note-ready /
     silence notifications via the `shown` signal), `diarization-engine.t2` (the
-    Speaker detection setting: Sortformer default, a non-default engine refused
+    Speaker detection setting: Nemotron 3 default, Nemotron 3 refused
     while its models are missing, IPC allowlist, and a pre-0.17 Sortformer
     cache reading as missing on macOS; its UI half, the download-then-save
     picker and the upgrade Download action, is `diarization-engine.t1`), and the onboarding spec

@@ -40,6 +40,7 @@ from src.transcriber import (
     _cluster_channel_labels,
     _cluster_channel_label_plan,
     _diarised_split_timeout,
+    _consolidate_speakers,
     _fold_same_channel_fragments,
     _format_timestamp,
     _identity_matching_enabled,
@@ -402,11 +403,14 @@ class TranscribeDiarisedMultiSpeakerTests(unittest.TestCase):
             {"start": 5.0, "end": 8.0, "speaker": "SPEAKER_0"},
         ]
         system_diar = [{"start": 9.0, "end": 9.5, "speaker": "SPEAKER_0"}]
-        mic_embeddings = {"SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.3, 0.4]}
+        mic_embeddings = {"SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.4, -0.2]}
         system_embeddings = {"SPEAKER_0": [0.5, 0.6]}
-        self_voiceprint = {"is_self": True, "centroid": [0.3, 0.4]}  # matches SPEAKER_1
+        self_voiceprint = {"is_self": True, "centroid": [0.4, -0.2]}  # matches SPEAKER_1
         with patch("src.transcriber._identity_matching_enabled", return_value=False), \
-             patch("src.transcriber._reconcile_cross_channel_speakers") as reconcile, \
+             patch(
+                "src.transcriber._reconcile_cross_channel_speakers",
+                side_effect=lambda tagged, mic, system: (tagged, mic, system),
+             ) as reconcile, \
              patch(
                 "src.transcriber._run_steno_diarize",
                 side_effect=[(mic_diar, mic_embeddings), (system_diar, system_embeddings)],
@@ -422,8 +426,10 @@ class TranscribeDiarisedMultiSpeakerTests(unittest.TestCase):
                 {"text": "Ok.", "segments": [{"text": "Ok.", "start": 9.2, "end": 9.4}]},
             ])
             result = self.transcriber.transcribe_diarised(self.audio_path)
+        # Nothing is persisted, but this meeting's duplicate identities are
+        # still merged in memory.
         self.assertEqual(result["speaker_clusters"], {})
-        reconcile.assert_not_called()
+        reconcile.assert_called_once()
         # Dominant-by-duration labeling survives untouched: SPEAKER_1 stays
         # "Speaker 2", it is NOT re-anchored to "You" despite matching the
         # self voiceprint above -- proving self-matching never ran.
@@ -1721,7 +1727,7 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
             (4.0, "__diar__Others__SPEAKER_2", "another remote person", "system", "SPEAKER_2"),
         ]
 
-        reconciled, mic_out, system_out = _reconcile_cross_channel_speakers(
+        reconciled, mic_out, system_out = _consolidate_speakers(
             tagged, mic_clusters, system_clusters,
         )
 
@@ -1795,6 +1801,19 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
     def test_a_few_seconds_of_coinciding_speech_is_not_echo_evidence(self):
         segments = [{"start": 0.0, "end": 4.0}]
         tagged, mic_clusters, system_clusters = self._echo_pair(0.16, segments, segments)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+
+    def test_padding_cannot_turn_a_talkative_speaker_into_an_echo(self):
+        # Many short system turns (12 s) between a talkative mic voice's
+        # turns, 0.3 s apart: padding must neither count more mic speech than
+        # the system cluster contains nor bridge the turn gaps.
+        system_segments = [{"start": 6.0 * i, "end": 6.0 * i + 0.5} for i in range(24)]
+        mic_segments = [{"start": 6.0 * i + 0.8, "end": 6.0 * i + 5.7} for i in range(24)]
+        tagged, mic_clusters, system_clusters = self._echo_pair(0.16, mic_segments, system_segments)
 
         result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
 
@@ -2758,7 +2777,7 @@ class StenoDiarizeEngineFallbackTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("STENOAI_DIARIZE_ENGINE", None)
-        cache = patch.dict(transcriber_mod._DIARIZATION_MODELS_READY, {}, clear=True)
+        cache = patch.object(transcriber_mod, "_DIARIZATION_MODELS_READY", set())
         cache.start()
         self.addCleanup(cache.stop)
         config = patch("src.config.get_config")
@@ -2807,12 +2826,14 @@ class StenoDiarizeEngineFallbackTests(unittest.TestCase):
         self.assertEqual(env["STENOAI_DIARIZE_ENGINE"], "nemotron3")
         self.assertEqual(statuses, [])
 
-    def test_readiness_is_checked_once_per_engine(self):
+    def test_only_ready_engines_are_cached(self):
+        # Missing models are re-checked each meeting, so a download that
+        # finishes mid-process is picked up; a ready engine is checked once.
         statuses, resolve, run = self._with_ready({"sortformer"})
         with resolve, run:
             transcriber_mod._steno_diarize_env(fallback_when_missing=True)
             transcriber_mod._steno_diarize_env(fallback_when_missing=True)
-        self.assertEqual(statuses, ["nemotron3", "sortformer"])
+        self.assertEqual(statuses, ["nemotron3", "sortformer", "nemotron3"])
 
 
 if __name__ == '__main__':

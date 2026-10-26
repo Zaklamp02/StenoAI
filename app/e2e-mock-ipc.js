@@ -332,7 +332,8 @@ function install({ ipcMain }) {
     remoteUrl: '', // remote Ollama URL (empty = not configured)
     autoInstallWhenIdle: true, // idle auto-install toggle (config default on)
     transcriptionEngine: process.env.STENOAI_E2E_MOCK_ENGINE || 'parakeet',
-    diarizationEngine: 'sortformer',
+    // The saved engine; defaults like the backend's (nemotron3 in this fork).
+    diarizationEngine: process.env.STENOAI_E2E_MOCK_DIARIZATION_ENGINE || 'nemotron3',
     // STENOAI_E2E_SPEAKER_MODELS_MISSING=1 simulates an upgraded install whose
     // speaker models predate the current cache layout: every engine reports
     // its models missing until setup-speaker-models prepares THAT engine.

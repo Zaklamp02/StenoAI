@@ -146,16 +146,17 @@ CROSS_CHANNEL_SPEAKER_MATCH_MARGIN = 0.05
 # goes through speaker EQ and room reverb, so its mic-side centroid lands
 # further from the system-side one than the same-meeting fragment threshold
 # allows. Such a pair is accepted only with independent evidence of echo: the
-# two clusters speak at the same moments. Across 16 real recordings, echo
-# pairs measured 0.04-0.35 apart and overlapped 86-100% of the shorter
-# cluster's speech; distinct people were never closer than 0.56 and
-# overlapped <=20% (crosstalk). The speech floor keeps a few seconds of
-# stray audio, which trivially sits inside someone's speech, from counting
-# as evidence. The pad absorbs playback latency and diarizer boundary jitter.
+# shorter cluster's speech coincides with the other's. Across 18 real
+# recordings, echo pairs measured 0.04-0.35 apart with 83-100% of the shorter
+# cluster's speech covered; distinct voices were never closer than 0.56.
+# Overlap alone is no proof (a 12 s stray cluster sitting inside someone's
+# speech reached 0.88), which is why both are required, and why the speech
+# floor applies. The pad absorbs diarizer boundary jitter; it stays well
+# below a conversational turn gap so it cannot bridge two people's turns.
 CROSS_CHANNEL_ECHO_MAX_DISTANCE = 0.40
 CROSS_CHANNEL_ECHO_MIN_OVERLAP = 0.60
 CROSS_CHANNEL_ECHO_MIN_SPEECH_S = 10.0
-CROSS_CHANNEL_ECHO_PAD_S = 0.5
+CROSS_CHANNEL_ECHO_PAD_S = 0.25
 
 # Floor for the steno-diarize subprocess timeout. Real measured runtime
 # varies a lot with recording length: single-digit-to-tens-of-seconds for
@@ -235,32 +236,36 @@ def _non_asr_subprocess_env(extra_env: Optional[dict[str, str]] = None) -> dict[
     }
 
 
-_DIARIZATION_MODELS_READY: dict[str, bool] = {}
+_DIARIZATION_MODELS_READY: set[str] = set()
 
 
 def _diarization_models_ready(engine: str) -> bool:
-    """Whether the sidecar reports ``engine``'s models on disk (cached).
+    """Whether the sidecar reports ``engine``'s models on disk.
 
-    ``model-status`` only checks files, so it is cheap; the cache keeps it to
-    once per engine per CLI process. Any failure reads as not ready.
+    ``model-status`` only checks files, so it is cheap. Only a ready answer
+    is cached (models are never removed while the app runs), so a download
+    that finishes mid-process is picked up by the next meeting. Any failure
+    reads as not ready.
     """
-    if engine not in _DIARIZATION_MODELS_READY:
-        binary = _resolve_steno_diarize()
-        ready = False
-        if binary:
-            try:
-                result = subprocess.run(
-                    [binary, "model-status"],
-                    capture_output=True,
-                    timeout=15,
-                    check=False,
-                    env=_non_asr_subprocess_env({"STENOAI_DIARIZE_ENGINE": engine}),
-                )
-                ready = result.returncode == 0
-            except (OSError, subprocess.TimeoutExpired):
-                ready = False
-        _DIARIZATION_MODELS_READY[engine] = ready
-    return _DIARIZATION_MODELS_READY[engine]
+    if engine in _DIARIZATION_MODELS_READY:
+        return True
+    binary = _resolve_steno_diarize()
+    if not binary:
+        return False
+    try:
+        result = subprocess.run(
+            [binary, "model-status"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+            env=_non_asr_subprocess_env({"STENOAI_DIARIZE_ENGINE": engine}),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    _DIARIZATION_MODELS_READY.add(engine)
+    return True
 
 
 def _steno_diarize_env(
@@ -2085,37 +2090,38 @@ def _cluster_speech_intervals(*clusters: dict) -> list[list[float]]:
     return merged
 
 
-def _cluster_speech_overlap_ratio(
-    a: dict, b: dict, pad: float, min_speech: float = 0.0,
+def _speech_overlap_ratio(
+    a_intervals: list[list[float]],
+    b_intervals: list[list[float]],
+    pad: float,
+    min_speech: float = 0.0,
 ) -> float:
-    """Share of the shorter cluster's speech that coincides with the other's.
+    """Share of the shorter cluster's speech covered by the other's speech.
 
-    ``b``'s intervals are widened by ``pad`` on both sides. Returns 0.0 when
-    the shorter cluster has less than ``min_speech`` seconds of speech.
+    Takes the clusters' unioned intervals (_cluster_speech_intervals). The
+    longer cluster's intervals are widened by ``pad`` on both sides and
+    re-unioned, so the result never exceeds the shorter cluster's own speech.
+    Returns 0.0 when the shorter cluster has less than ``min_speech`` seconds.
     """
-    a_intervals = _cluster_speech_intervals(a)
-    b_intervals = _cluster_speech_intervals(
-        {"segments": [
-            {"start": start - pad, "end": end + pad}
-            for start, end in _cluster_speech_intervals(b)
-        ]}
-    )
-    shorter = min(
-        sum(end - start for start, end in a_intervals),
-        sum(end - start for start, end in _cluster_speech_intervals(b)),
-    )
-    if shorter < min_speech or shorter <= 0:
+    a_total = sum(end - start for start, end in a_intervals)
+    b_total = sum(end - start for start, end in b_intervals)
+    shorter, longer = (a_intervals, b_intervals) if a_total <= b_total else (b_intervals, a_intervals)
+    shorter_total = min(a_total, b_total)
+    if shorter_total <= 0 or shorter_total < min_speech:
         return 0.0
+    padded = _cluster_speech_intervals(
+        {"segments": [{"start": start - pad, "end": end + pad} for start, end in longer]}
+    )
     shared = 0.0
     j = 0
-    for start, end in a_intervals:
-        while j < len(b_intervals) and b_intervals[j][1] <= start:
+    for start, end in shorter:
+        while j < len(padded) and padded[j][1] <= start:
             j += 1
         k = j
-        while k < len(b_intervals) and b_intervals[k][0] < end:
-            shared += min(end, b_intervals[k][1]) - max(start, b_intervals[k][0])
+        while k < len(padded) and padded[k][0] < end:
+            shared += min(end, padded[k][1]) - max(start, padded[k][0])
             k += 1
-    return min(1.0, shared / shorter)
+    return shared / shorter_total
 
 
 def _fold_same_channel_fragments(
@@ -2126,43 +2132,37 @@ def _fold_same_channel_fragments(
     """Collapse one channel's diarizer fragments of a single voice.
 
     Sortformer can split one continuous speaker across slots in a long
-    recording. Clusters joined (transitively) at or below
-    SAME_MEETING_MERGE_DISTANCE_THRESHOLD -- the threshold speaker review
-    already uses for the same fragments -- become one cluster. The canonical
-    member keeps a legacy channel label ("You"/"Others") when one exists,
-    otherwise it is the member with the most transcript text. Its embedding
-    becomes the duration-weighted, re-normalized mean of the members.
+    recording. Groups come from speaker review's own
+    merge_same_channel_fragments (transitive, at or below
+    SAME_MEETING_MERGE_DISTANCE_THRESHOLD), so the transcript and the
+    Speakers panel agree on who is one person, and so does the merged
+    duration-weighted centroid. The canonical member keeps a legacy channel
+    label ("You"/"Others") when one exists, otherwise it is the member with
+    the most transcript text.
     """
-    if len(clusters) < 2:
-        return tagged, clusters
+    from src.speaker_suggestions import ClusterContext, merge_same_channel_fragments
 
-    from src.voiceprint import cosine_distance
-
-    sids = [
-        sid for sid, cluster in clusters.items()
+    contexts = {
+        sid: (
+            cluster["embedding"],
+            ClusterContext(
+                meeting_id="",
+                diarization_speaker_id=sid,
+                recording_type="",
+                speech_duration_seconds=float(cluster.get("speech_duration_seconds") or 0.0),
+                segment_count=int(cluster.get("segment_count") or 0),
+            ),
+        )
+        for sid, cluster in clusters.items()
         if isinstance(cluster, dict) and cluster.get("embedding")
-    ]
-    parent = {sid: sid for sid in sids}
-
-    def find(sid: str) -> str:
-        while parent[sid] != sid:
-            parent[sid] = parent[parent[sid]]
-            sid = parent[sid]
-        return sid
-
-    for i, a in enumerate(sids):
-        for b in sids[i + 1:]:
-            try:
-                distance = cosine_distance(clusters[a]["embedding"], clusters[b]["embedding"])
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if math.isfinite(distance) and distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
-                parent[find(a)] = find(b)
-
+    }
+    if len(contexts) < 2:
+        return tagged, clusters
+    merged, id_resolution = merge_same_channel_fragments(contexts)
     groups: dict[str, list[str]] = {}
-    for sid in sids:
-        groups.setdefault(find(sid), []).append(sid)
-    groups = {root: members for root, members in groups.items() if len(members) > 1}
+    for sid, primary in id_resolution.items():
+        groups.setdefault(primary, []).append(sid)
+    groups = {primary: members for primary, members in groups.items() if len(members) > 1}
     if not groups:
         return tagged, clusters
 
@@ -2176,7 +2176,7 @@ def _fold_same_channel_fragments(
 
     out = dict(clusters)
     aliases: dict[str, tuple[str, str]] = {}
-    for members in groups.values():
+    for primary, members in groups.items():
         canonical = max(
             members,
             key=lambda sid: (
@@ -2191,25 +2191,8 @@ def _fold_same_channel_fragments(
         member_clusters = [clusters[sid] for sid in members]
         intervals = _cluster_speech_intervals(*member_clusters)
 
-        weights = [
-            max(float(cluster.get("speech_duration_seconds") or 0.0), 0.0)
-            for cluster in member_clusters
-        ]
-        if sum(weights) <= 0:
-            weights = [1.0] * len(member_clusters)
-        dim = len(clusters[canonical]["embedding"])
-        embedding = [0.0] * dim
-        for cluster, weight in zip(member_clusters, weights):
-            if len(cluster["embedding"]) != dim:
-                continue
-            for k, value in enumerate(cluster["embedding"]):
-                embedding[k] += float(value) * weight
-        norm = math.sqrt(sum(value * value for value in embedding))
-        if norm > 1e-9:
-            embedding = [value / norm for value in embedding]
-
         folded = dict(clusters[canonical])
-        folded["embedding"] = embedding
+        folded["embedding"] = list(merged[primary][0])
         folded["segments"] = [{"start": start, "end": end} for start, end in intervals]
         folded["speech_duration_seconds"] = sum(end - start for start, end in intervals)
         folded["segment_count"] = sum(
@@ -2235,6 +2218,24 @@ def _fold_same_channel_fragments(
     return folded_tagged, out
 
 
+def _consolidate_speakers(
+    tagged: list[tuple[float, str, str, str, Optional[str]]],
+    mic_clusters: dict,
+    system_clusters: dict,
+) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict, dict]:
+    """Merge one meeting's duplicate speaker identities.
+
+    Folds each channel's diarizer fragments, then merges cross-channel
+    copies of one voice. Folding comes first: otherwise a fragment of the
+    matched person counts as the runner-up and the cross-channel margin
+    check reads it as ambiguity. Uses the meeting's embeddings in memory
+    only; persisting them stays gated on speaker identification.
+    """
+    tagged, mic_clusters = _fold_same_channel_fragments(tagged, mic_clusters, "mic")
+    tagged, system_clusters = _fold_same_channel_fragments(tagged, system_clusters, "system")
+    return _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+
 def _reconcile_cross_channel_speakers(
     tagged: list[tuple[float, str, str, str, Optional[str]]],
     mic_clusters: dict,
@@ -2249,9 +2250,8 @@ def _reconcile_cross_channel_speakers(
     those channel-local IDs into two visible people and speaker review exposes
     two rows for one person.
 
-    Each channel's own diarizer fragments are folded first (see
-    _fold_same_channel_fragments). WeSpeaker centroids from the same recording
-    are then safe enough for a narrow, conservative merge: require a
+    Expects each channel's fragments already folded (_consolidate_speakers).
+    WeSpeaker centroids from the same recording are safe enough for a narrow, conservative merge: require a
     mutual-nearest pair with a clear runner-up margin on both sides, at or
     below the same-meeting fragment threshold -- or, for speaker playback
     re-captured by the mic, within CROSS_CHANNEL_ECHO_MAX_DISTANCE when the
@@ -2265,14 +2265,12 @@ def _reconcile_cross_channel_speakers(
 
     from src.voiceprint import cosine_distance
 
-    # Fold each channel's diarizer fragments first. Otherwise a fragment of
-    # the matched person counts as the runner-up, the margin check reads it as
-    # ambiguity, and the echo pair is never merged.
-    tagged, mic_clusters = _fold_same_channel_fragments(tagged, mic_clusters, "mic")
-    tagged, system_clusters = _fold_same_channel_fragments(
-        tagged, system_clusters, "system",
-    )
-
+    intervals = {
+        (channel, sid): _cluster_speech_intervals(cluster)
+        for channel, clusters in (("mic", mic_clusters), ("system", system_clusters))
+        for sid, cluster in clusters.items()
+        if isinstance(cluster, dict)
+    }
     distances: dict[tuple[str, str], float] = {}
     overlaps: dict[tuple[str, str], float] = {}
     for mic_sid, mic_cluster in mic_clusters.items():
@@ -2289,11 +2287,13 @@ def _reconcile_cross_channel_speakers(
                 distance = cosine_distance(mic_embedding, system_embedding)
             except (TypeError, ValueError, OverflowError):
                 continue
-            if math.isfinite(distance):
-                distances[(mic_sid, system_sid)] = distance
-                overlaps[(mic_sid, system_sid)] = _cluster_speech_overlap_ratio(
-                    mic_cluster, system_cluster, CROSS_CHANNEL_ECHO_PAD_S,
-                    CROSS_CHANNEL_ECHO_MIN_SPEECH_S,
+            if not math.isfinite(distance):
+                continue
+            distances[(mic_sid, system_sid)] = distance
+            if SAME_MEETING_MERGE_DISTANCE_THRESHOLD < distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE:
+                overlaps[(mic_sid, system_sid)] = _speech_overlap_ratio(
+                    intervals[("mic", mic_sid)], intervals[("system", system_sid)],
+                    CROSS_CHANNEL_ECHO_PAD_S, CROSS_CHANNEL_ECHO_MIN_SPEECH_S,
                 )
 
     if not distances:
@@ -4418,7 +4418,7 @@ class WhisperTranscriber:
                 for start, label, text, raw_sid in _tag_channel_segments(
                     mic_segments, mic_path, duration, "You",
                     allow_self_match=identity_enabled,
-                    clusters_out=mic_clusters if identity_enabled else None,
+                    clusters_out=mic_clusters,
                     precomputed_diarization=(mic_result or {}).get("_speaker_diarization"),
                 )
             )
@@ -4426,7 +4426,7 @@ class WhisperTranscriber:
                 (start or 0.0, label, text, "system", raw_sid, start is not None)
                 for start, label, text, raw_sid in _tag_channel_segments(
                     system_segments, system_path, duration, "Others",
-                    clusters_out=system_clusters if identity_enabled else None,
+                    clusters_out=system_clusters,
                     precomputed_diarization=(sys_result or {}).get("_speaker_diarization"),
                 )
             )
@@ -4434,10 +4434,12 @@ class WhisperTranscriber:
             # Both label helpers preserve turn order and operate on five fields.
             # Keep the cloud-ASR timing flag paired with its original turn.
             label_turns = [item[:5] for item in tagged]
-            if identity_enabled:
-                label_turns, mic_clusters, system_clusters = _reconcile_cross_channel_speakers(
-                    label_turns, mic_clusters, system_clusters,
-                )
+            # Duplicate identities are merged whether or not speaker
+            # identification is on: the embeddings are used in memory for this
+            # meeting only, and are persisted below only when it is on.
+            label_turns, mic_clusters, system_clusters = _consolidate_speakers(
+                label_turns, mic_clusters, system_clusters,
+            )
             resolved_labels = _resolve_speaker_placeholders(label_turns)
             tagged = [
                 (*resolved, original[5])
@@ -4489,8 +4491,8 @@ class WhisperTranscriber:
                 # neither channel diarized. Cross-channel echo aliases were
                 # removed above, so the Speakers panel and exact relabel manifest
                 # share the same canonical cluster ids. See _tag_channel_segments'
-                # clusters_out param. Identity matching off neither collects nor
-                # compares embeddings here.
+                # clusters_out param. Identity matching off keeps embeddings in
+                # memory for this meeting's duplicate merge and persists none.
                 "speaker_clusters": speaker_clusters,
                 # list[{"start", "channel", "diarization_speaker_id"}], one
                 # per turn -- see comment above turn_manifest's construction.
@@ -4543,15 +4545,15 @@ class WhisperTranscriber:
             for start, label, text, raw_sid in _tag_channel_segments(
                 asr_segments, audio_filepath, duration, "You",
                 allow_self_match=identity_enabled,
-                clusters_out=mono_clusters if identity_enabled else None,
+                clusters_out=mono_clusters,
                 precomputed_diarization=result.get("_speaker_diarization"),
             )
         ]
         tagged.sort(key=lambda t: t[0])
-        resolved_labels = _resolve_speaker_placeholders([
-            (start, label, text, channel, raw_sid)
-            for start, label, text, channel, raw_sid, _has_timestamps in tagged
-        ])
+        label_turns, mono_clusters = _fold_same_channel_fragments(
+            [item[:5] for item in tagged], mono_clusters, "mic",
+        )
+        resolved_labels = _resolve_speaker_placeholders(label_turns)
         tagged = [
             (*resolved, original[5])
             for resolved, original in zip(resolved_labels, tagged)
@@ -4563,7 +4565,7 @@ class WhisperTranscriber:
         if assembled.is_diarised:
             result['diarised_text'] = assembled.diarised_text
             result['is_diarised'] = True
-            if mono_clusters:
+            if identity_enabled and mono_clusters:
                 # Same "mic" convention _transcribe_diarised_mono's own
                 # docstring documents: an unlabelled mono recording is
                 # attributed to the device owner, matching the stereo

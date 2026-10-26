@@ -8,7 +8,9 @@ import { test, expect } from '../fixtures/electron';
  * This pins what the picker adds: picking Nemotron 3 prepares its models and
  * then shows it as saved, a failed download says so and leaves Standard
  * selected, and an upgraded install whose models are missing can download
- * them again. macOS-only UI.
+ * them again. The mock starts on the backend's default engine (Nemotron 3);
+ * picker specs that switch to it start from Standard instead.
+ * macOS-only UI.
  */
 
 async function openAiSettings(page: import('@playwright/test').Page) {
@@ -25,7 +27,10 @@ async function chooseNemotron(page: import('@playwright/test').Page) {
 
 test('picking Nemotron 3 prepares its models and saves it', async ({ launchApp }) => {
   test.skip(process.platform !== 'darwin', 'speaker detection engines are macOS-only');
-  const { page } = await launchApp({ mockIpc: true });
+  const { page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_MOCK_DIARIZATION_ENGINE: 'sortformer' },
+  });
   await openAiSettings(page);
 
   const trigger = page.getByTestId('diarization-engine-select');
@@ -46,7 +51,10 @@ test('a failed Nemotron 3 download keeps Standard and says so', async ({ launchA
   test.skip(process.platform !== 'darwin', 'speaker detection engines are macOS-only');
   const { page } = await launchApp({
     mockIpc: true,
-    env: { STENOAI_E2E_SPEAKER_MODEL_FAILURE: '1' },
+    env: {
+      STENOAI_E2E_SPEAKER_MODEL_FAILURE: '1',
+      STENOAI_E2E_MOCK_DIARIZATION_ENGINE: 'sortformer',
+    },
   });
   await openAiSettings(page);
   const status = await page.evaluate(() =>
@@ -85,18 +93,18 @@ test('a failed speaker detection setting read offers a retry', async ({ launchAp
   });
   await retry.click();
   await expect(trigger).toBeEnabled();
-  await expect(trigger).toContainText('Standard');
+  await expect(trigger).toContainText('Nemotron 3');
   await expect(row.getByRole('alert')).toHaveCount(0);
   await expect(retry).toHaveCount(0);
 });
 
-test('an upgraded install can download its missing Standard models again', async ({
+test('an upgraded install can download its default engine models', async ({
   launchApp,
 }) => {
   test.skip(process.platform !== 'darwin', 'speaker detection engines are macOS-only');
-  // FluidAudio 0.17 moved the Sortformer cache to sortformer/v3/fp16/, so a
-  // pre-upgrade install reads as missing until it downloads again. Meeting
-  // processing never downloads, so the row's Download is the way back.
+  // An install onboarded before FluidAudio 0.17 (or before Nemotron 3 became
+  // the default) reads as missing until it downloads. Meeting processing never
+  // downloads, so the row's Download is the way back.
   const { app, page } = await launchApp({
     mockIpc: true,
     env: { STENOAI_E2E_SPEAKER_MODELS_MISSING: '1' },
@@ -114,5 +122,5 @@ test('an upgraded install can download its missing Standard models again', async
 
   await expect(row.getByText('Installed')).toBeVisible();
   await expect(trigger).toBeEnabled();
-  await expect(trigger).toContainText('Standard');
+  await expect(trigger).toContainText('Nemotron 3');
 });
