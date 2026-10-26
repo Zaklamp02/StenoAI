@@ -1,4 +1,4 @@
-import { t, type TranslationKey } from '@/i18n';
+import { t } from '@/i18n';
 import * as React from 'react';
 import { FileAudio, Loader2, Play, Square } from 'lucide-react';
 import { MeetingsShell } from '@/components/MeetingsShell';
@@ -9,11 +9,22 @@ import { unwrap } from '@/lib/result';
 import { useWatchedFolderAction, useWatchedFolders } from '@/hooks/useWatchedFolders';
 import { navigate } from '@/lib/router';
 import { UI_LOCALE } from '@/lib/locale';
-import { ipc, type WatchedFile } from '@/lib/ipc';
+import { ipc, type WatchedFile, type WatchedFileStatus } from '@/lib/ipc';
 
 type Filter = 'new' | 'all';
 
 const SELECTABLE = new Set(['new', 'failed', 'dismissed']);
+const FILTERS = ['new', 'all'] as const;
+
+// Literal keys, so the i18n copy inventory can see every status label.
+const STATUS_LABEL: Record<WatchedFileStatus, () => string> = {
+  syncing: () => t('watchedFolders.status.syncing'),
+  new: () => t('watchedFolders.status.new'),
+  processing: () => t('watchedFolders.status.processing'),
+  done: () => t('watchedFolders.status.done'),
+  failed: () => t('watchedFolders.status.failed'),
+  dismissed: () => t('watchedFolders.status.dismissed'),
+};
 
 function formatSize(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -74,7 +85,7 @@ export function Recordings() {
 
         <div className="mt-6 flex items-center justify-between gap-3">
           <div className="flex gap-1" role="tablist">
-            {(['new', 'all'] as const).map((f) => (
+            {FILTERS.map((f) => (
               <Button
                 key={f}
                 role="tab"
@@ -84,7 +95,7 @@ export function Recordings() {
                 className="h-[28px] px-3 text-[13px]"
                 onClick={() => setFilter(f)}
               >
-                {t(f === 'new' ? 'watchedFolders.filterNew' : 'watchedFolders.filterAll')}
+                {f === 'new' ? t('watchedFolders.filterNew') : t('watchedFolders.filterAll')}
               </Button>
             ))}
           </div>
@@ -128,7 +139,7 @@ export function Recordings() {
                 <p className="text-sm" style={{ color: 'var(--fg-2)' }}>{t('watchedFolders.unavailable')}</p>
               ) : rows.length === 0 ? (
                 <p className="text-sm" style={{ color: 'var(--fg-2)' }}>
-                  {t(filter === 'new' ? 'watchedFolders.emptyNew' : 'watchedFolders.emptyAll')}
+                  {filter === 'new' ? t('watchedFolders.emptyNew') : t('watchedFolders.emptyAll')}
                 </p>
               ) : (
                 <div className="flex flex-col">
@@ -178,7 +189,6 @@ function RecordingRow({
   onPlay: () => void;
 }) {
   const selectable = SELECTABLE.has(file.status);
-  const statusKey = `watchedFolders.status.${file.status}` as TranslationKey;
   return (
     <div
       className="flex items-center gap-3 py-2.5"
@@ -200,7 +210,7 @@ function RecordingRow({
         style={{ color: 'var(--fg-2)' }}
         disabled={file.status === 'syncing'}
         onClick={onPlay}
-        aria-label={t(playState === 'playing' ? 'watchedFolders.stopPreview' : 'watchedFolders.playPreview')}
+        aria-label={playState === 'playing' ? t('watchedFolders.stopPreview') : t('watchedFolders.playPreview')}
         title={playFailed ? t('watchedFolders.previewFailed') : t('watchedFolders.playPreview')}
       >
         {playState === 'loading' ? <Loader2 className="size-[13px] animate-spin" />
@@ -214,7 +224,7 @@ function RecordingRow({
         </div>
       </div>
       {file.status !== 'new' && (
-        <span className="shrink-0 text-[12px]" style={{ color: 'var(--fg-2)' }}>{t(statusKey)}</span>
+        <span className="shrink-0 text-[12px]" style={{ color: 'var(--fg-2)' }}>{STATUS_LABEL[file.status]()}</span>
       )}
       <div className="flex shrink-0 gap-1">
         {(file.status === 'new' || file.status === 'failed') && (
@@ -226,7 +236,7 @@ function RecordingRow({
             title={isRecording ? t('watchedFolders.recordingBlocked') : undefined}
             onClick={() => onAction('transcribe')}
           >
-            {t(file.status === 'failed' ? 'watchedFolders.retry' : 'watchedFolders.transcribe')}
+            {file.status === 'failed' ? t('watchedFolders.retry') : t('watchedFolders.transcribe')}
           </Button>
         )}
         {(file.status === 'new' || file.status === 'failed') && (
