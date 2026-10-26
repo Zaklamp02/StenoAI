@@ -27,6 +27,18 @@ for f in ffmpeg steno-diarize steno-audio-encode; do
   cp "$INTERNAL/$f" "$BIN/$f"
 done
 
+# Speaker detection defaults to Nemotron 3, which needs a newer steno-diarize
+# than some official releases ship. Use the pinned upstream build until the
+# official helper knows the engine itself.
+if [ -f "$ROOT/custom/DIARIZE_HELPER" ]; then
+  if grep -q nemotron3 "$BIN/steno-diarize"; then
+    echo "Official steno-diarize already supports Nemotron 3; delete custom/DIARIZE_HELPER."
+  else
+    cp "$("$ROOT/custom/fetch-diarize-helper.sh")" "$BIN/steno-diarize"
+    echo "Using the pinned Nemotron-capable steno-diarize (custom/DIARIZE_HELPER)."
+  fi
+fi
+
 official_version=$(defaults read "$OFFICIAL/Contents/Info" CFBundleShortVersionString)
 echo "$official_version" > "$BIN/.official-version"
 echo "Staged binaries from official StenoAI $official_version:"

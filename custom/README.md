@@ -27,6 +27,9 @@ are shared with the official app, so switching back and forth is safe.
 | Auto-stop for any recording paired with a call app; ignores mic use under 60 s; 30 s grace with Keep recording | `app/main.js` (auto-detect section) | candidate PR |
 | Cloud ASR channels use an in-process level match instead of ffmpeg loudnorm (49 s → <1 s per channel) | `src/transcriber.py` (`_fast_level_normalize`) | candidate PR |
 | Watched recording folders (Settings → Integrations) and a Recordings inbox, shown only once a folder is set: pick files to transcribe, or auto-transcribe new ones once they finish syncing; source files are never changed and meetings are dated by recording time | `app/watched-folders.js`, `watched-folders-ipc.js`, `Recordings.tsx`, `WatchedFoldersSection.tsx`, `simple_recorder.py` (`STENOAI_RECORDED_AT`), tests | candidate PR |
+| Duplicate speakers merged: one channel's diarizer fragments of a voice are folded, and a remote voice played through the speakers and re-captured by the mic is merged with its call-audio copy (close voices that also speak at the same moments); also when speaker identification is off, without storing anything | `src/transcriber.py` (`_consolidate_speakers`), tests | candidate PR |
+| Speaker detection defaults to Nemotron 3 (8 speakers; upstream #550, cherry-picked), with Sortformer as the setting's alternative and as the processing fallback while Nemotron's models are not downloaded | `src/config.py`, `src/transcriber.py` (`_steno_diarize_env`), e2e specs | custom only |
+| Nemotron-capable `steno-diarize` pinned by sha256 from upstream CI until an official release ships one; skipped automatically once it does | `custom/DIARIZE_HELPER`, `custom/fetch-diarize-helper.sh`, `custom/stage-official-binaries.sh` | custom only |
 | This folder: build / install / update scripts | `custom/` | custom only |
 
 Summary models were already flexible: Settings → AI lists the provider's models

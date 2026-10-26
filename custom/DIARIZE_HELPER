@@ -1,0 +1,7 @@
+# Nemotron-capable steno-diarize, used instead of the official release's helper
+# until an official release ships one (custom/stage-official-binaries.sh then
+# skips this pin; delete the file). Built by upstream's own CI from main.
+source=stenolabs/stenoai actions run 40192099117, artifact e2e-backend-macos, _internal/steno-diarize (main 0a51558)
+run=40192099117
+artifact=e2e-backend-macos
+sha256=e98d97831c336541a4dd87d4beb00b6b61e70a98452c75a4445b0b0bac6ac11c
