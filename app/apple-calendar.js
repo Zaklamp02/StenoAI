@@ -173,10 +173,20 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     return pickEventForRecording(res.events, { startMs: timeMs, ...hints });
   }
 
-  /** Recording start from the note's stem (`sysaudio-1792058617597-Note`). */
+  /** Recording start from the note's stem (`sysaudio-1792058617597-Note`).
+   *  Imported and synced audio (a phone recording) keeps its own file name,
+   *  so fall back to the note's frontmatter `date`: when it was recorded, in
+   *  local time. Without either there is nothing to match the calendar on. */
   function recordingStartMs(summaryPath) {
     const m = path.basename(summaryPath).match(/(?:^|-)(\d{13})(?:-|_)/);
-    return m ? Number(m[1]) : null;
+    if (m) return Number(m[1]);
+    try {
+      const front = fs.readFileSync(summaryPath, 'utf8').split('\n---', 1)[0];
+      const ms = Date.parse((front.match(/^date:\s*"?([^"\n]+)"?\s*$/m) || [])[1]);
+      return Number.isFinite(ms) ? ms : null;
+    } catch {
+      return null;
+    }
   }
 
   /** What else the note says about its recording: the session name it was

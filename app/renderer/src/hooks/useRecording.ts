@@ -7,6 +7,7 @@ import { speakersKeys } from './useSpeakerSuggestions';
 import { calendarKeys } from './useCalendarEvents';
 import { orgKeys } from './useOrg';
 import { useLiveDraftStore } from './liveDraftStore';
+import { useSwitchRecording } from './switchRecordingStore';
 import { navigate, routeFromHash } from '@/lib/router';
 import { composeShareBody, pickTranscriptForShare } from '@/routes/MeetingDetail';
 import { streamCache } from '@/lib/meetingDetailState';
@@ -357,10 +358,17 @@ export function useRecordingEvents() {
         // Suggested by the mic-monitor auto-detect notification ("Take Notes").
         // Allow start when idle OR when a previous note is still processing
         // — the user explicitly opted in by clicking "Take Notes", and the
-        // background queue handles the previous summary fine. Only skip if
-        // an active recording (recording/paused) is already in progress —
-        // user already manually started or is mid-meeting.
-        if (status === 'recording' || status === 'paused') return;
+        // background queue handles the previous summary fine. While another
+        // recording runs (back-to-back meetings), ask to switch to this one
+        // (SwitchRecordingDialog) rather than ignoring the click.
+        if (status === 'recording' || status === 'paused') {
+          useSwitchRecording.getState().request({
+            name: sessionName ?? undefined,
+            trigger: 'notification_click',
+            afterStart: () => navigate('/recording'),
+          });
+          return;
+        }
         void startRecording(sessionName ?? undefined, 'notification_click');
         // "Take Notes" is an explicit intent to write notes, so open the
         // live-note editor (main already brought the window forward). Mirrors

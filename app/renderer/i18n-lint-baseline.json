@@ -1,5 +1,5 @@
 {
-  "total": 719,
+  "total": 717,
   "files": {
     "renderer/src/components/AskBar.tsx": 21,
     "renderer/src/components/ChatHistoryRow.tsx": 5,
@@ -9,7 +9,7 @@
     "renderer/src/components/ImportDropZone.tsx": 2,
     "renderer/src/components/LiveDock.tsx": 10,
     "renderer/src/components/LiveTranscriptBar.tsx": 29,
-    "renderer/src/components/MainToolbar.tsx": 23,
+    "renderer/src/components/MainToolbar.tsx": 21,
     "renderer/src/components/MeetingsShell.tsx": 12,
     "renderer/src/components/NotificationToast.tsx": 2,
     "renderer/src/components/PrivacyConsentModal.tsx": 8,

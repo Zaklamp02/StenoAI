@@ -42,6 +42,7 @@ import { ipc } from '@/lib/ipc';
 import { primeDebugLogs } from '@/lib/debugLogs';
 import { useMeetingTransferEvents } from '@/hooks/useMeetingTransfer';
 import { WhatsNewProvider } from '@/components/WhatsNew';
+import { SwitchRecordingDialog } from '@/components/SwitchRecordingDialog';
 
 async function hasInstalledTranscriptionModel() {
   const [parakeet, whisper] = await Promise.all([
@@ -254,6 +255,7 @@ export function App() {
       <AskBarProvider>
         <RouteView route={route} />
         <QuitDialog />
+        <SwitchRecordingDialog />
         <KeychainWaitBanner />
         {route !== '/setup' && <RecordingRecovery />}
         <PrivacyConsentModal open={showPrivacyModal} />

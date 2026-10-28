@@ -53,6 +53,31 @@ test('calendar retries failures, refreshes invitees, keeps occurrence identity, 
   assert.equal((await handlers['meeting-calendar']({}, '/elsewhere_summary.md')).success, false);
 });
 
+test('a synced recording without a timestamp in its name links by its frontmatter date', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'calendar-synced-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'apple-calendar.json'), JSON.stringify({ enabled: true }));
+  // A phone recording keeps its own file name; it started 24 min into the meeting.
+  const summary = path.join(dir, 'Veneta martin molenkamp_summary.md');
+  fs.writeFileSync(summary, '---\ntitle: "Koffie"\ndate: "2026-10-27T11:24:00"\nduration_seconds: 4582\n---\n');
+  const meeting = { id: 'veneta', title: 'Koffie, Veneta x AI', start: '2026-10-27T11:00:00', end: '2026-10-27T12:30:00' };
+  const other = { id: 'other', title: 'Later that day', start: '2026-10-27T15:00:00', end: '2026-10-27T16:00:00' };
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'apple-calendar.js'), 'utf8'), {
+    module, __dirname, process: { platform: 'darwin', pid: process.pid },
+    require: name => name === 'child_process'
+      ? { execFile: (_bin, _args, _opts, cb) => cb(null, JSON.stringify({ success: true, events: [meeting, other] })) }
+      : name === 'fs' ? { ...fs, existsSync: p => String(p).endsWith('steno-calendar') || fs.existsSync(p) } : require(name),
+  });
+  const handlers = {};
+  const calendar = module.exports.registerAppleCalendar({ ipcMain: { handle: (n, h) => { handlers[n] = h; } },
+    app: { isPackaged: false }, getUserDataDir: () => dir, sendDebugLog() {}, isAllowedSummaryPath: p => p === summary });
+  assert.equal((await calendar.ensureMeetingCalendar(summary)).event.id, 'veneta');
+  // The manual chooser offers the day's meetings instead of an empty list.
+  const options = await handlers['meeting-calendar-options']({}, summary);
+  assert.equal(options.events.map(e => e.id).join(), 'veneta,other');
+});
+
 const { pickEventForRecording } = require('./apple-calendar');
 
 // 26 Oct 2026, 13:00 local: three meetings start at once and two more follow

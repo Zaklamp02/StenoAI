@@ -1,5 +1,6 @@
+import { t } from '@/i18n';
 import * as React from 'react';
-import { FileArchive, FileAudio, MessageSquare, MoreHorizontal, Monitor, PanelLeftClose, PanelLeftOpen, Plus } from 'lucide-react';
+import { FileArchive, FileAudio, MessageSquare, MoreHorizontal, Monitor, PanelLeftClose, PanelLeftOpen, Plus, Square } from 'lucide-react';
 import type { UseMutationResult } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -18,7 +19,7 @@ import {
 import { useRecording, type RecordingStatus } from '@/hooks/useRecording';
 import { useImportAudio } from '@/hooks/useImportAudio';
 import { useRoute, navigate } from '@/lib/router';
-import { cn, isMac } from '@/lib/utils';
+import { isMac } from '@/lib/utils';
 import { MEETING_TRANSFER_COPY, useImportMeetingPackage } from '@/hooks/useMeetingTransfer';
 
 interface MainToolbarProps {
@@ -111,51 +112,28 @@ export function MainToolbar({
         {!settingsMode && (
           <RecordingOptionsPopover importAudio={importAudio} disabled={isRecording} />
         )}
-        {/* Hidden while idle in Settings — there's nothing to start a new
-            note for there. Stays visible whenever a recording is actually
-            in progress, in Settings or anywhere else, so opening Settings
-            mid-recording never loses the way back to it. */}
-        {(!settingsMode || isRecording) && (
+        {/* While recording: the left segment opens the live note, the red
+            stop button next to it ends the recording in one click. Stays
+            visible in Settings too, so opening Settings mid-recording never
+            loses the way back to it. */}
+        {isRecording && (
+          <RecordingControls
+            isPaused={isPaused}
+            elapsedSeconds={elapsedSeconds}
+            onOpen={onToggleRecording}
+          />
+        )}
+        {/* Hidden while idle in Settings: there's nothing to start a new
+            note for there. */}
+        {!isRecording && !settingsMode && (
           <button
             type="button"
             onClick={showChatPrimary ? () => navigate('/chat') : onToggleRecording}
-            className={cn('record-btn', isRecording && 'is-recording')}
-            aria-label={
-              isRecording
-                ? 'Open recording in progress'
-                : showChatPrimary
-                  ? 'New chat'
-                  : 'New note'
-            }
-            title={
-              isRecording
-                ? 'Open recording in progress'
-                : showChatPrimary
-                  ? 'New chat'
-                  : 'New note'
-            }
+            className="record-btn"
+            aria-label={showChatPrimary ? 'New chat' : 'New note'}
+            title={showChatPrimary ? 'New chat' : 'New note'}
           >
-            {isRecording ? (
-              <>
-                <span style={{ color: '#FFFFFF', display: 'inline-flex' }}>
-                  <AudioWave
-                    active={!isPaused}
-                    paused={isPaused}
-                    bars={5}
-                    height={12}
-                    barWidth={2}
-                    gap={2}
-                  />
-                </span>
-                <span
-                  className="tabular-nums"
-                  style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                >
-                  {formatElapsed(elapsedSeconds)}
-                </span>
-                <span>{isPaused ? 'Paused' : 'Recording'}</span>
-              </>
-            ) : showChatPrimary ? (
+            {showChatPrimary ? (
               <>
                 <MessageSquare className="size-[13px]" />
                 New chat
@@ -169,6 +147,67 @@ export function MainToolbar({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+function RecordingControls({
+  isPaused,
+  elapsedSeconds,
+  onOpen,
+}: {
+  isPaused: boolean;
+  elapsedSeconds: number;
+  onOpen: () => void;
+}) {
+  const recording = useRecording();
+  const [stopping, setStopping] = React.useState(false);
+  const onStop = () => {
+    setStopping(true);
+    // stopRecording lands on the finished note; failures surface there.
+    void recording.stopRecording().catch(() => {}).finally(() => setStopping(false));
+  };
+  return (
+    <div className="record-group" data-testid="toolbar-recording">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="record-btn is-recording"
+        aria-label={t('mainToolbar.openRecording')}
+        title={t('mainToolbar.openRecording')}
+      >
+        <span style={{ color: 'var(--recording)', display: 'inline-flex' }}>
+          <AudioWave
+            active={!isPaused}
+            paused={isPaused}
+            bars={5}
+            height={12}
+            barWidth={2}
+            gap={2}
+          />
+        </span>
+        <span
+          className="tabular-nums"
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}
+        >
+          {formatElapsed(elapsedSeconds)}
+        </span>
+        <span>{isPaused ? 'Paused' : 'Recording'}</span>
+      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={stopping}
+            className="record-stop-btn"
+            aria-label={t('mainToolbar.stopRecording')}
+          >
+            <Square className="size-[11px]" fill="currentColor" stroke="currentColor" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">{t('mainToolbar.stopRecording')}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

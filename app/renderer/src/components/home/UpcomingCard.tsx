@@ -4,7 +4,7 @@ import { Video } from 'lucide-react';
 import type { CalendarEvent } from '@/lib/ipc';
 import { ipc } from '@/lib/ipc';
 import { cn } from '@/lib/utils';
-import { useRecording } from '@/hooks/useRecording';
+import { useStartMeeting } from '@/hooks/useStartMeeting';
 import { UI_LOCALE } from '@/lib/locale';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -23,14 +23,9 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
     ? ({ primary: 'Today', timeRange: '' } as const)
     : formatMeta(event.start, event.end, relative.state);
   const meetingUrl = event.meeting_url?.trim();
-  const recording = useRecording();
+  const startMeeting = useStartMeeting();
   const isLive = relative.state === 'now';
   const urgent = relative.urgent || isLive;
-
-  const onStart = () => {
-    if (recording.status === 'recording' || recording.status === 'paused') return;
-    void recording.startRecording(event.title);
-  };
 
   const onJoin = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -40,9 +35,13 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
 
   const onStartAndJoin = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onStart();
     setDetailsOpen(false);
-    if (meetingUrl) void ipc().shell.openExternal(meetingUrl);
+    // While another meeting records, this asks to switch first; the link
+    // opens only once the user goes ahead.
+    startMeeting({
+      name: event.title,
+      afterStart: meetingUrl ? () => void ipc().shell.openExternal(meetingUrl) : undefined,
+    });
   };
 
   // Use the explicit calendar color if provided by the backend, otherwise default to a pleasant blue
@@ -124,7 +123,6 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
             <button
               type="button"
               onClick={onStartAndJoin}
-              disabled={recording.status === 'recording' || recording.status === 'paused'}
               className="inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-medium transition-transform hover:scale-105 active:scale-95"
               style={{
                 background: 'var(--fg-1)',
@@ -143,7 +141,7 @@ export function UpcomingCard({ event }: UpcomingCardProps) {
         {event.description && <p className="max-h-64 overflow-auto whitespace-pre-wrap text-sm">{event.description}</p>}
         <div className="flex justify-end gap-2">
           {meetingUrl && <Button variant="outline" onClick={onJoin}>{t('upcomingCard.join')}</Button>}
-          <Button disabled={recording.status === 'recording' || recording.status === 'paused'} onClick={onStartAndJoin}>
+          <Button onClick={onStartAndJoin}>
             {meetingUrl ? t('upcomingCard.join_take_notes') : t('upcomingCard.take_notes')}
           </Button>
         </div>

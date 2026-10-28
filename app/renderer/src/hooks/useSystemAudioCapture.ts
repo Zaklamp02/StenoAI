@@ -34,6 +34,33 @@ const SILENCE_SAMPLE_INTERVAL_MS = 1_000;
 /** Pre-flight level meters refresh at 10 Hz during the check window. */
 const CAPTURE_CHECK_SAMPLE_MS = 100;
 
+/** Whether a capture is running or still handing its file off after a stop.
+ *  Switching meetings stops one recording and starts the next; the next must
+ *  wait until the stopped capture has closed its file and handed it to
+ *  processing, since both go through the one main-side write stream. */
+let captureBusy = false;
+let settledWaiters: Array<() => void> = [];
+
+function setCaptureBusy(busy: boolean) {
+  captureBusy = busy;
+  if (busy) return;
+  const waiters = settledWaiters;
+  settledWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+/** Tell main the capture has ended. After this, a successor may start. */
+function reportCaptureEnded(bridge: ReturnType<typeof ipc>) {
+  bridge.recording.reportSystemAudioState(false);
+  setCaptureBusy(false);
+}
+
+/** Resolves once no capture is running or finishing. */
+export function whenCaptureSettled(): Promise<void> {
+  if (!captureBusy) return Promise.resolve();
+  return new Promise((resolve) => settledWaiters.push(resolve));
+}
+
 /**
  * Mounts ONCE at App level. This is the ONLY recording path — whenever the
  * user starts recording it captures the mic (getUserMedia) and, when loopback
@@ -210,6 +237,7 @@ export function useSystemAudioCapture() {
     const startCapture = async () => {
       if (activeRef.current) return;
       activeRef.current = true;
+      setCaptureBusy(true);
       // Capture the start-token so async aborts can detect cancellation:
       // stopCapture (or the unmount cleanup) bumps startTokenRef and we
       // bail at the next checkpoint after stopping any tracks we already
@@ -862,7 +890,7 @@ export function useSystemAudioCapture() {
         // Tell main to drop the stuck "recording" pill — its optimistic
         // systemAudioRecordingActive flag was set on start-recording-ui. Keep
         // this LAST: after it, a successor may start immediately.
-        bridge.recording.reportSystemAudioState(false);
+        reportCaptureEnded(bridge);
       }
     };
 
@@ -877,7 +905,7 @@ export function useSystemAudioCapture() {
       if (!recorder || recorder.state === 'inactive') {
         teardownStreams();
         try { await bridge.recording.disableLoopbackAudio(); } catch { /* */ }
-        bridge.recording.reportSystemAudioState(false);
+        reportCaptureEnded(bridge);
         return;
       }
       // Match useRecording.startRecording's 'Note' placeholder so the
@@ -918,7 +946,7 @@ export function useSystemAudioCapture() {
           } finally {
             teardownStreams();
             try { await bridge.recording.disableLoopbackAudio(); } catch { /* */ }
-            bridge.recording.reportSystemAudioState(false);
+            reportCaptureEnded(bridge);
             resolve();
           }
         };
@@ -1027,7 +1055,7 @@ export function useSystemAudioCapture() {
       if (hadOpenFile) {
         activeRef.current = false;
         void bridge.recording.disableLoopbackAudio();
-        bridge.recording.reportSystemAudioState(false);
+        reportCaptureEnded(bridge);
       }
     };
   }, []);

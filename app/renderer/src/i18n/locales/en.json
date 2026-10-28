@@ -161,5 +161,14 @@
   "watchedFolders.newCount": "{{count}} new",
   "watchedFolders.newCountTitle": "Recordings waiting to be transcribed: {{count}}",
   "watchedFolders.viewProgress": "View progress",
-  "watchedFolders.beforeAuto": "Arrived before auto-transcribe was turned on for this folder"
+  "watchedFolders.beforeAuto": "Arrived before auto-transcribe was turned on for this folder",
+  "switchRecording.title": "Switch to the next meeting?",
+  "switchRecording.description": "The current recording will stop and its note will finish in the background. A new recording starts right away.",
+  "switchRecording.descriptionNext": "The current recording will stop and its note will finish in the background. Recording starts for “{{next}}” right away.",
+  "switchRecording.descriptionNamed": "“{{current}}” will stop recording and its note will finish in the background. Recording starts for “{{next}}” right away.",
+  "switchRecording.confirm": "Stop and switch",
+  "switchRecording.cancel": "Keep recording",
+  "switchRecording.failed": "Could not stop the current recording",
+  "mainToolbar.openRecording": "Open recording in progress",
+  "mainToolbar.stopRecording": "Stop recording"
 }
