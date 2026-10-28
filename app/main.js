@@ -192,6 +192,7 @@ const { URL, URLSearchParams } = require('url');
 const crypto = require('crypto');
 const { EXPORT_CANCELED } = require('./ipc-sentinels');
 const { mayExposeMainWindow } = require('./e2e-window-visibility');
+const { TOAST_WORKSPACE_OPTIONS, activateApp } = require('./mac-window-activation');
 const { PostHog } = require('posthog-node');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
@@ -530,7 +531,7 @@ class Notification extends EventEmitter {
 
     win.once('ready-to-show', () => {
       win.showInactive();
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(true, TOAST_WORKSPACE_OPTIONS);
       win.setAlwaysOnTop(true, 'screen-saver', 1);
 
       // Keep the 15s auto-close (matches the pre-existing pre-meeting toast).
@@ -585,7 +586,10 @@ function exposeMainWindow({ focus = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return false;
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
-  if (focus) mainWindow.focus();
+  if (focus) {
+    activateApp(app);
+    mainWindow.focus();
+  }
   return true;
 }
 
