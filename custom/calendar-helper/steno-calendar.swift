@@ -63,8 +63,12 @@ func hexColor(_ cg: CGColor?) -> String? {
 }
 
 // Teams / Zoom / Meet / Webex links usually live in the notes or location.
+// Teams has two join-link shapes: the long /l/meetup-join/ one and the short
+// /meet/<id>?p=<passcode> one. Invites from other organisations often carry
+// only the short one in plain text (the long one sits inside a Safe Links
+// wrapper), so both are matched, on the old and the teams.cloud.microsoft host.
 let meetingURLPattern = try! NSRegularExpression(
-    pattern: #"https://(?:teams\.microsoft\.com/l/meetup-join|teams\.live\.com/meet|[\w.-]*zoom\.us/(?:j|my)|meet\.google\.com|[\w.-]*webex\.com/(?:meet|join))[^\s<>"']*"#,
+    pattern: #"https://(?:teams\.(?:microsoft\.com|cloud\.microsoft)/(?:l/meetup-join|meet/)|teams\.live\.com/meet|[\w.-]*zoom\.us/(?:j|my)|meet\.google\.com|[\w.-]*webex\.com/(?:meet|join))[^\s<>"']*"#,
     options: [.caseInsensitive])
 
 func meetingURL(_ event: EKEvent) -> String? {
