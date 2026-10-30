@@ -132,3 +132,19 @@ test('all-day, declined and out-of-window events are never linked', () => {
   ];
   assert.equal(pickEventForRecording(events, { startMs: recordedAt }), null);
 });
+
+test('the calendar helper finds every Teams join-link shape in an invite', () => {
+  // The helper is Swift; its pattern is plain ICU syntax that JS reads the same way.
+  const swift = fs.readFileSync(path.join(__dirname, '..', 'custom', 'calendar-helper', 'steno-calendar.swift'), 'utf8');
+  const pattern = new RegExp(swift.match(/pattern: #"(.*)"#/)[1], 'i');
+  const find = text => (text.match(pattern) || [])[0];
+  assert.equal(find('Deelnemen: https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=x'),
+    'https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=x');
+  // External invites: the short link is the only plain one, the long one is Safe Links-wrapped.
+  assert.equal(find('Join: https://teams.microsoft.com/meet/3405056882574670?p=CXqAbc <https://eur03.safelinks.protection.outlook.com/?url=https%3A%2F%2Fteams.microsoft.com%2Fl%2Fmeetup-join%2F19>'),
+    'https://teams.microsoft.com/meet/3405056882574670?p=CXqAbc');
+  assert.equal(find('https://teams.cloud.microsoft/meet/123?p=abc'), 'https://teams.cloud.microsoft/meet/123?p=abc');
+  assert.equal(find('https://teams.live.com/meet/9876'), 'https://teams.live.com/meet/9876');
+  assert.equal(find('Options: https://teams.microsoft.com/meetingOptions/?organizerId=1'), undefined);
+  assert.equal(find('Help: https://aka.ms/JoinTeamsMeeting?omkt=nl-NL'), undefined);
+});
