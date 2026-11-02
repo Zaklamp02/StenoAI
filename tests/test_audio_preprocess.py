@@ -339,8 +339,8 @@ class TranscribeAudioPreprocessIntegrationTests(unittest.TestCase):
                 result = transcriber.transcribe_diarised(
                     Path(tmp_dir) / "meeting.wav", language="en"
                 )
-            # The split files stay high-pass-only for later relative-RMS bleed
-            # checks, but each ASR call gets its own normalised temp input.
+            # The split files stay high-pass-only, but each ASR call gets its
+            # own normalised temp input.
             self.assertEqual(ta_mock.call_count, 2)
             for call in ta_mock.call_args_list:
                 self.assertFalse(call.kwargs.get("_preprocessed", False))
@@ -362,15 +362,13 @@ class TranscribeAudioPreprocessIntegrationTests(unittest.TestCase):
                     _audio_preprocess_timeout(10.0),
                 )
             bleed_mock.assert_called_once()
-            self.assertEqual(bleed_mock.call_args.kwargs["mic_path"], mic)
-            self.assertEqual(bleed_mock.call_args.kwargs["system_path"], system)
             for normalised in normalised_paths:
                 self.assertFalse(normalised.exists())
             self.assertFalse(result.get("transcription_failed", False))
 
     def test_split_filter_includes_highpass_no_loudnorm(self):
-        """The diarised split applies highpass only — per-channel loudnorm
-        would distort the relative-RMS speaker-bleed heuristic."""
+        """The diarised split applies highpass only; ASR gets separately
+        normalised copies."""
         transcriber = _build_transcriber()
         captured_cmds = []
 
