@@ -26,6 +26,14 @@ function fileSafeName(title) {
   return String(title || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
 }
 
+/** EventKit lists attendees in no fixed order. Sort them so a refresh that
+ *  changed nothing writes the same record (the vault export follows it). */
+function withSortedAttendees(event) {
+  if (!event || !Array.isArray(event.attendees)) return event;
+  const key = (a) => String(a?.name || a?.email || '').toLowerCase();
+  return { ...event, attendees: [...event.attendees].sort((a, b) => key(a).localeCompare(key(b))) };
+}
+
 /** The event a recording belongs to, among several that overlap it.
  *  Candidates run at the recording's start (or start within LEAD_MS after
  *  it) and are neither all-day nor declined. A recording started from an
@@ -210,6 +218,7 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
   function saveRecord(summaryPath, record) {
     const dest = summaryPath.replace(/_summary\.md$/, '_calendar.json');
     const tmp = `${dest}.${process.pid}.tmp`;
+    record = { ...record, event: withSortedAttendees(record.event) };
     fs.writeFileSync(tmp, JSON.stringify(record, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, dest);
     return record;
@@ -233,7 +242,13 @@ function registerAppleCalendar({ ipcMain, app, getUserDataDir, sendDebugLog, isA
     let event;
     if (previous?.event?.id) {
       const options = await meetingOptions(summaryPath, previous);
-      event = options.find(e => e.id === previous.event.id && e.start === previous.event.start) || null;
+      // The helper sometimes answers without the linked event although it
+      // still exists (seen with Exchange meetings; cause not pinned down). A
+      // miss is no proof the meeting went away, so keep the linked event:
+      // dropping it flipped the note to "no meeting" until the next refresh
+      // linked it again, every five minutes.
+      // Unlink in the app detaches a note from an event that really is gone.
+      event = options.find(e => e.id === previous.event.id && e.start === previous.event.start) || previous.event;
     } else {
       const start = recordingStartMs(summaryPath);
       if (start === null) return previous;

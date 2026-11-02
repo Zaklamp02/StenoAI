@@ -439,7 +439,8 @@ def frontmatter(stem, meta, kind, counterpart_link, dt):
     lines.append("summary_stale: %s" % ("true" if meta.get("notes_stale") else "false"))
     key = "note" if kind == "transcript" else "transcript"
     if counterpart_link:
-        lines.append('%s: "[[%s]]"' % (key, counterpart_link))
+        # Bare filename survives the move to Archive/ by process-daily-note.
+        lines.append('%s: "[[%s]]"' % (key, os.path.basename(counterpart_link)))
     lines.append("---")
     return "\n".join(lines)
 
@@ -483,6 +484,23 @@ def already_archived(cfg, filename):
     return False
 
 
+def in_archive(cfg, rel):
+    """Archived exports are processed sources: frozen, never refreshed."""
+    return any(rel.startswith(folder.rstrip("/") + "/") for folder in cfg.get("archive_folders") or [])
+
+
+def calendar_fingerprint(calendar_raw):
+    """StenoAI rewrites `checked_at` on every calendar refresh; only the match counts."""
+    try:
+        data = json.loads(calendar_raw) if calendar_raw else None
+    except ValueError:
+        return calendar_raw
+    if not isinstance(data, dict):
+        return calendar_raw
+    data.pop("checked_at", None)
+    return json.dumps(data, sort_keys=True, ensure_ascii=False)
+
+
 def read_text(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -515,6 +533,9 @@ def write_file(path, content, dry_run):
 
 
 AUTO_START = "<!-- stenoai:generated:start -->"
+# Hashes of this many earlier exports per file are kept to tell our own old
+# output from a vault edit.
+RECENT_EXPORTS = 20
 AUTO_END = "<!-- stenoai:generated:end -->"
 MANAGED_KEYS = {"steno_id", "title", "type", "source", "created", "duration_minutes", "language",
                 "attendees", "attendee_emails", "attendees_source", "attendees_unresolved",
@@ -601,12 +622,19 @@ def refresh_managed(current, generated, entry, prefix):
         existing = existing.strip()
         baseline = entry.get(prefix + "_base")
         merged = three_way(baseline, existing, new_body) if baseline is not None else (new_body if sha(existing) == entry.get(prefix + "_managed_hash") else None)
+        if merged is None and sha(existing) in (entry.get(prefix + "_recent") or []):
+            # The block is an earlier export of ours, not a vault edit: a source
+            # that flips back and forth must not stack copies of itself.
+            merged = new_body
         if merged is None:
             # Source stays authoritative; keep the complete user's version
             # outside the generated block rather than dropping conflicting edits.
-            after = after.rstrip() + "\n\n## Preserved vault edits\n\n" + existing + "\n"
             merged = new_body
-            log("  preserved overlapping vault edits outside the refreshed section")
+            # Never stack the same copy again: a second writer or a flapping source
+            # otherwise appends it on every run.
+            if existing not in after:
+                after = after.rstrip() + "\n\n## Preserved vault edits\n\n" + existing + "\n"
+                log("  preserved overlapping vault edits outside the refreshed section")
         result = before + AUTO_START + "\n" + merged.strip() + "\n" + AUTO_END + after
     elif sha(current) == entry.get(prefix + "_hash") or current == generated:
         result = AUTO_START + "\n" + new_body + "\n" + AUTO_END
@@ -709,7 +737,10 @@ def link_from_daily_note(cfg, dt, note_rel_path, title, dry_run):
     local = dt.astimezone()
     daily_path = os.path.join(cfg["vault"], "%s.md" % local.strftime("%Y-%m-%d"))
     heading = cfg["daily_note_link_heading"]
-    link_target = note_rel_path[:-3] if note_rel_path.endswith(".md") else note_rel_path
+    # Bare filename: Obsidian resolves it wherever the note lives, so archiving
+    # the export (process-daily-note) never breaks the link.
+    link_target = os.path.basename(note_rel_path)
+    link_target = link_target[:-3] if link_target.endswith(".md") else link_target
     stamp = local.strftime("%H:%M")
     link = "- %s - [[%s|%s]]" % (stamp, link_target, safe_alias(title))
 
@@ -776,11 +807,11 @@ def rename_for_title(cfg, entry, dt, title, stem, dry_run):
     if entry.get("linked"):
         daily_path = os.path.join(cfg["vault"], "%s.md" % dt.strftime("%Y-%m-%d"))
         daily = read_text(daily_path)
-        old_target = "%s/%s" % (cfg["notes_folder"], old_note[:-3])
+        old_target = old_note[:-3]
         if daily and old_target in daily:
-            new_target = "%s/%s" % (cfg["notes_folder"], new_note[:-3])
+            new_target = new_note[:-3]
             daily = re.sub(
-                r"\[\[%s\|[^\]]*\]\]" % re.escape(old_target),
+                r"\[\[(?:%s/)?%s\|[^\]]*\]\]" % (re.escape(cfg["notes_folder"]), re.escape(old_target)),
                 lambda _m: "[[%s|%s]]" % (new_target, safe_alias(title)),
                 daily,
             )
@@ -803,7 +834,7 @@ def sync_one(cfg, synced, path, dry_run, force):
     speakers_path = path[:-len("_summary.md")] + "_speakers.json"
     sidecar_raw = speaker_source(speakers_path)
     profile_revision = speaker_revision()
-    source_hash = sha(json.dumps(["managed-v3-speakers", raw, calendar_raw, canonical, sidecar_raw, profile_revision]))
+    source_hash = sha(json.dumps(["managed-v3-speakers", raw, calendar_fingerprint(calendar_raw), canonical, sidecar_raw, profile_revision]))
     entry = synced.get(stem) or {}
     if entry.get("source_hash") == source_hash and not force:
         return False
@@ -872,6 +903,8 @@ def sync_one(cfg, synced, path, dry_run, force):
     for kind, paths in (("note", note_paths), ("transcript", tr_paths)):
         prefix = "note" if kind == "note" else "transcript"
         for rel in paths:
+            if in_archive(cfg, rel):
+                continue
             dest = os.path.join(cfg["vault"], rel)
             vault = os.path.realpath(cfg["vault"])
             if os.path.commonpath([vault, os.path.realpath(dest)]) != vault:
@@ -897,6 +930,8 @@ def sync_one(cfg, synced, path, dry_run, force):
             new_entry[prefix + "_hash"] = sha(content)
             new_entry[prefix + "_base"] = baseline
             new_entry[prefix + "_managed_hash"] = sha(baseline)
+            recent = [h for h in (entry.get(prefix + "_recent") or []) if h != sha(baseline)]
+            new_entry[prefix + "_recent"] = (recent + [sha(baseline)])[-RECENT_EXPORTS:]
             new_entry[prefix + "_frontmatter"] = split_document(generated[kind])[0]
     if cfg.get("link_from_daily_notes", True) and note_paths and not entry.get("linked"):
         log("  daily note: %s" % link_from_daily_note(cfg, dt, primary_note, title, dry_run))

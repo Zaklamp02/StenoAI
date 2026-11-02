@@ -78,6 +78,39 @@ test('a synced recording without a timestamp in its name links by its frontmatte
   assert.equal(options.events.map(e => e.id).join(), 'veneta,other');
 });
 
+test('a linked meeting survives an empty calendar answer and keeps a stable attendee order', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'calendar-stable-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'apple-calendar.json'), JSON.stringify({ enabled: true }));
+  const time = Date.parse('2026-10-29T09:31:00+01:00');
+  const summary = path.join(dir, `sysaudio-${time}-_INT__AI_Team_-_Daily_summary.md`);
+  fs.writeFileSync(summary, '---\n---\n');
+  const sidecar = summary.replace('_summary.md', '_calendar.json');
+  const daily = { id: 'daily', title: '[INT] AI Team - Daily', start: '2026-10-29T09:30:00+01:00', end: '2026-10-29T10:00:00+01:00',
+    attendees: [{ name: 'Sebastiaan den Boer', self: true }, { name: 'Antonis Karnavas' }, { name: 'Erik Poolman' }] };
+  let events = [daily];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'apple-calendar.js'), 'utf8'), {
+    module, __dirname, process: { platform: 'darwin', pid: process.pid },
+    require: name => name === 'child_process'
+      ? { execFile: (_bin, _args, _opts, cb) => cb(null, JSON.stringify({ success: true, events })) }
+      : name === 'fs' ? { ...fs, existsSync: p => String(p).endsWith('steno-calendar') || fs.existsSync(p) } : require(name),
+  });
+  const calendar = module.exports.registerAppleCalendar({ ipcMain: { handle() {} },
+    app: { isPackaged: false }, getUserDataDir: () => dir, sendDebugLog() {}, isAllowedSummaryPath: () => true });
+  const names = () => JSON.parse(fs.readFileSync(sidecar)).event.attendees.map(a => a.name).join();
+  assert.equal((await calendar.ensureMeetingCalendar(summary)).event.id, 'daily');
+  const sorted = 'Antonis Karnavas,Erik Poolman,Sebastiaan den Boer';
+  assert.equal(names(), sorted);
+  // The helper reports success with nothing in it: the link stays.
+  events = [];
+  assert.equal((await calendar.ensureMeetingCalendar(summary, { force: true })).event.id, 'daily');
+  // Same meeting, attendees in another order: the saved record does not change.
+  events = [{ ...daily, attendees: [...daily.attendees].reverse() }];
+  await calendar.ensureMeetingCalendar(summary, { force: true });
+  assert.equal(names(), sorted);
+});
+
 const { pickEventForRecording } = require('./apple-calendar');
 
 // 26 Oct 2026, 13:00 local: three meetings start at once and two more follow

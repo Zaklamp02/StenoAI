@@ -109,7 +109,7 @@ class ObsidianSyncTests(unittest.TestCase):
         self.assertIn('[Alex] Canonical full speech.', content)
         self.assertNotIn('[Others]', content)
 
-    def test_archived_renamed_files_are_updated_by_id_without_recreating_inbox(self):
+    def test_archived_files_are_frozen_and_inbox_is_not_recreated(self):
         self.note()
         self.run_sync()
         locations = {}
@@ -120,12 +120,31 @@ class ObsidianSyncTests(unittest.TestCase):
             old.rename(target)
             target.write_text(target.read_text() + '\nVault-only annotation.\n')
             locations[kind] = target
+        archived = locations['transcript'].read_text()
         self.note(transcript='[00:01] [Alex] Updated full speech.')
         self.run_sync()
-        self.assertIn('[Alex] Updated full speech.', locations['transcript'].read_text())
-        self.assertIn('Vault-only annotation.', locations['transcript'].read_text())
+        # Archived exports are processed sources (process-daily-note): never refreshed.
+        self.assertEqual(archived, locations['transcript'].read_text())
         self.assertFalse(list((self.vault / self.cfg['transcripts_folder']).glob('*.md')))
-        self.assertIn('Archive/StenoAI/Meeting notes/renamed-note.md', locations['transcript'].read_text())
+        # Counterpart links are bare file names, so they survive the move.
+        self.assertIn('note: "[[', archived)
+        self.assertNotIn('note: "[[StenoAI/', archived)
+
+    def test_a_flipping_source_never_stacks_copies_of_earlier_exports(self):
+        exports = []
+        for version in range(5):
+            self.note(notes='Version %d.' % version)
+            self.run_sync()
+            exports.append(self.exported('note').read_text())
+            if version:
+                # The file falls back to an earlier export of ours (not a vault edit),
+                # slightly different each time, as with a flipping calendar match.
+                self.exported('note').write_text(exports[-2])
+        self.note(notes='Final.')
+        self.run_sync()
+        content = self.exported('note').read_text()
+        self.assertNotIn('## Preserved vault edits', content)
+        self.assertIn('Final.', content)
 
     def test_edited_legacy_export_is_preserved_while_latest_source_gets_managed_section(self):
         self.note()
