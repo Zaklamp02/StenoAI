@@ -41,6 +41,8 @@ from src.transcriber import (
     _cluster_channel_label_plan,
     _diarised_split_timeout,
     _consolidate_speakers,
+    _drop_per_segment_bleed,
+    _echo_coverage,
     _fold_same_channel_fragments,
     _format_timestamp,
     _identity_matching_enabled,
@@ -211,22 +213,16 @@ class TranscribeDiarisedTimestampTests(unittest.TestCase):
         self.assertNotIn("[00:00]", result["diarised_text"])
 
     def test_discarded_bleed_does_not_lower_retained_channel_coverage(self):
-        for dropped in ("mic", "system"):
-            with self.subTest(dropped=dropped):
-                segment = {"text": "The budget is approved.", "start": 0.0, "end": 1.0}
-                self.transcriber.transcribe_audio = Mock(side_effect=[
-                    {"text": segment["text"], "segments": [dict(segment)],
-                     "window_coverage": 0.2 if dropped == "mic" else 1.0},
-                    {"text": segment["text"], "segments": [dict(segment)],
-                     "window_coverage": 0.2 if dropped == "system" else 1.0},
-                ])
-                with patch("src.transcriber._segment_rms", side_effect=[
-                    0.1 if dropped == "mic" else 1.0,
-                    0.1 if dropped == "system" else 1.0,
-                ]):
-                    result = self.transcriber.transcribe_diarised(self.audio_path)
-                self.assertEqual(result["window_coverage"], 1.0)
-                self.assertFalse(result["is_diarised"])
+        # The mic copy is the echo and is dropped; its low coverage must not
+        # drag down the system channel that is kept.
+        segment = {"text": "The budget is approved.", "start": 0.0, "end": 1.0}
+        self.transcriber.transcribe_audio = Mock(side_effect=[
+            {"text": segment["text"], "segments": [dict(segment)], "window_coverage": 0.2},
+            {"text": segment["text"], "segments": [dict(segment)], "window_coverage": 1.0},
+        ])
+        result = self.transcriber.transcribe_diarised(self.audio_path)
+        self.assertEqual(result["window_coverage"], 1.0)
+        self.assertFalse(result["is_diarised"])
 
     def test_retained_channel_still_contributes_low_coverage(self):
         self.transcriber.transcribe_audio = Mock(side_effect=[
@@ -779,6 +775,71 @@ class TranscribeDiarisedMonoTests(unittest.TestCase):
             result = self.transcriber.transcribe_diarised(self.audio_path)
         mock_diarize.assert_not_called()
         self.assertFalse(result["is_diarised"])
+
+
+class EchoBleedTests(unittest.TestCase):
+    """Per-segment echo removal. The shapes mirror real recordings made
+    without headphones (the text here is made up): ASR writes the remote
+    voice's echo on the mic as long lower-case run-on segments, while the
+    system channel holds the same words as short punctuated sentences."""
+
+    SYSTEM = [
+        {"text": "Ik heb jouw planning bekeken en ik heb het gisteren nog kort even met de buren over gehad, want die gaan ook verbouwen.", "start": 86.5, "end": 91.5},
+        {"text": "En daar ben ik wel benieuwd naar hoe jij dat ziet.", "start": 92.1, "end": 93.7},
+        {"text": "Hoe groot wordt de schuur eigenlijk of wat zijn de regels van de gemeente?", "start": 94.8, "end": 99.2},
+        {"text": "Want ik hoor bijvoorbeeld ook van ja, kan je ons helpen met bijvoorbeeld de vergunning en dat soort zaken.", "start": 99.7, "end": 104.1},
+        {"text": "Wat vinden we lastig?", "start": 104.3, "end": 105.4},
+        {"text": "En hoe moeten we bijvoorbeeld het hout op tijd laten bezorgen en opslaan?", "start": 105.9, "end": 112.1},
+        {"text": "Ik ben benieuwd hoe jij dat ziet.", "start": 113.1, "end": 115.0},
+        {"text": "Want ik kijk ernaar vanuit mijn eigen tuin en de klussen die ik al heb gedaan.", "start": 115.2, "end": 122.6},
+    ]
+    ECHO = {"text": "want ik hoor bijvoorbeeld ook van ja kan je ons helpen met bijvoorbeeld de vergunning en dat soort zaken wat vinden we lastig en hoe moeten we bijvoorbeeld het hout op tijd laten bezorgen en zullen we zeggen opslaan en ik vind het ik ben benieuwd hoe jij dat ziet want ik kijk ernaar vanuit mijn eigen tuin en de klussen die ik al heb gedaan en", "start": 99.5, "end": 122.0}
+
+    def test_long_run_on_echo_is_dropped_and_system_kept(self):
+        own = {"text": "Nou dat is denk ik een stap te ver voor nu.", "start": 60.0, "end": 64.0}
+        mic, system = _drop_per_segment_bleed([own, dict(self.ECHO)], [dict(s) for s in self.SYSTEM])
+        self.assertEqual(mic, [own])
+        self.assertEqual(len(system), len(self.SYSTEM))
+
+    def test_old_segment_pairing_missed_this_echo(self):
+        # The echo spans several system sentences, so no single pair looks
+        # alike; this is why matching runs against the whole time window.
+        best = max(_token_jaccard(self.ECHO["text"], s["text"]) for s in self.SYSTEM)
+        self.assertLess(best, 0.5)
+        window = " ".join(s["text"] for s in self.SYSTEM)
+        self.assertGreaterEqual(_echo_coverage(self.ECHO["text"], window), 0.6)
+
+    def test_interjection_during_remote_turn_is_kept(self):
+        # Shares common words with the remote turn but no phrase of it.
+        for text in (
+            "ja dat is denk ik wel een goed punt eigenlijk",
+            "nee maar dat hebben we toch al met de aannemer besproken",
+        ):
+            with self.subTest(text=text):
+                seg = {"text": text, "start": 100.0, "end": 103.0}
+                mic, _ = _drop_per_segment_bleed([seg], [dict(s) for s in self.SYSTEM])
+                self.assertEqual(mic, [seg])
+
+    def test_same_words_at_another_time_are_kept(self):
+        # The user quoting the remote speaker a minute later is not echo.
+        seg = dict(self.ECHO, start=200.0, end=222.0)
+        mic, _ = _drop_per_segment_bleed([seg], [dict(s) for s in self.SYSTEM])
+        self.assertEqual(mic, [seg])
+
+    def test_short_segments_are_never_dropped(self):
+        seg = {"text": "Wat vinden we", "start": 104.3, "end": 105.0}
+        mic, _ = _drop_per_segment_bleed([seg], [dict(s) for s in self.SYSTEM])
+        self.assertEqual(mic, [seg])
+
+    def test_half_echo_half_own_words_is_kept(self):
+        seg = {"text": "nou dat was het eigenlijk wel zo ongeveer ik heb jouw planning bekeken en ik heb het", "start": 82.3, "end": 89.3}
+        mic, _ = _drop_per_segment_bleed([seg], [dict(s) for s in self.SYSTEM])
+        self.assertEqual(mic, [seg])
+
+    def test_empty_inputs_pass_through(self):
+        self.assertEqual(_drop_per_segment_bleed([], list(self.SYSTEM)), ([], list(self.SYSTEM)))
+        self.assertEqual(_drop_per_segment_bleed([dict(self.ECHO)], []), ([dict(self.ECHO)], []))
+        self.assertEqual(_echo_coverage("", "anything"), 0.0)
 
 
 class TokenJaccardTests(unittest.TestCase):

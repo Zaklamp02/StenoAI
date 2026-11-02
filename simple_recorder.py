@@ -2312,9 +2312,9 @@ class _PendingFinalsCoordinator:
     """Holds each channel's finalised-but-unshown utterance for up to
     ``PER_SEGMENT_BLEED_WINDOW_S`` so a same-instant utterance on the OTHER
     channel has a chance to arrive before either reaches the user — the
-    live equivalent of the batch pipeline's ``_drop_per_segment_bleed``
-    (``src/transcriber.py``), reusing its constants and Jaccard function
-    directly instead of re-deriving them.
+    live counterpart of the batch pipeline's ``_drop_per_segment_bleed``
+    (``src/transcriber.py``), reusing its live-path constants and Jaccard
+    function directly instead of re-deriving them.
 
     An entry releases early, after ``MIN_HOLD_S``, once the other
     channel's VAD is confirmed idle — there's no plausible overlap
@@ -2375,12 +2375,10 @@ class _PendingFinalsCoordinator:
         every OTHER-channel entry in ``entries`` (ready or not — a
         not-yet-ready entry still carries real text and RMS, so there's
         no reason to wait on it before using it as a comparison point).
-        Same rule as batch: Jaccard >= threshold on time-overlapping text
-        means bleed; the lower-RMS side is the echo and gets dropped.
-        Ties always favor mic ('You'), matching src/transcriber.py's
-        _drop_per_segment_bleed default (`if mic_rms >= sys_rms:
-        drop_sys`) — entries are compared from the mic side's
-        perspective regardless of loop/insertion order, so a tie can't
+        Jaccard >= threshold on time-overlapping text means bleed; the
+        lower-RMS side is the echo and gets dropped. Ties always favor mic
+        ('You') — entries are compared from the mic side's perspective
+        regardless of loop/insertion order, so a tie can't
         non-deterministically drop mic depending on which channel
         happened to finalise first."""
         drop_ids = set()
@@ -2477,12 +2475,10 @@ class _PendingFinalsCoordinator:
 
 
 def _samples_rms(samples) -> float:
-    """Mean RMS amplitude of an in-memory float32 sample array. Live
-    analogue of src/transcriber.py's ``_segment_rms`` (which reads the
-    same metric from a WAV file) — the live path already holds each
-    channel's utterance in memory, so there's no file to read. Only used
-    to compare RMS BETWEEN the two channels for the same utterance, so the
-    absolute scale doesn't need to match ``_segment_rms``'s PCM16 scale."""
+    """Mean RMS amplitude of an in-memory float32 sample array. The
+    live path already holds each channel's utterance in memory. Only
+    used to compare RMS BETWEEN the two channels for the same utterance,
+    so the absolute scale doesn't matter."""
     if samples is None or len(samples) == 0:
         return 0.0
     import numpy as np
