@@ -674,7 +674,8 @@ Summary output language: {config.get_language_name(output_language)}
         asr_language = config.get_whisper_language()
 
         # Names from the calendar invitation help the engines that take a prompt.
-        context = _meeting_context_for_note(self.output_dir / f"{audio_path.stem}_summary.md")
+        from src.config import get_data_dirs
+        context = _meeting_context_for_note(get_data_dirs()["output"] / f"{audio_path.stem}_summary.md")
         self.transcriber.vocabulary_prompt = context.vocabulary_prompt() if context else None
 
         # Transcribe with diarisation support (stereo → [You]/[Others])
