@@ -227,6 +227,30 @@ class ThinkingDisabledTests(unittest.TestCase):
         self.assertIs(fake_client.chat.call_args.kwargs.get('think'), False)
 
 
+class JsonSummaryRetryTests(unittest.TestCase):
+    VALID = ('{"overview":"Clean overview","key_points":[],"next_steps":[],'
+             '"discussion_areas":[],"participants":[]}')
+
+    def _run(self, *responses):
+        s = _make_summarizer()
+        with mock.patch.object(s, '_ensure_ollama_ready'):
+            with mock.patch.object(s.client, 'chat', side_effect=[
+                    {"message": {"content": r}} for r in responses]) as mock_chat:
+                result = s.summarize_transcript("some transcript text", 10)
+        return result, mock_chat.call_count
+
+    def test_unreadable_json_is_requested_again(self):
+        result, calls = self._run('{"overview": "cut off', self.VALID)
+        self.assertEqual(calls, 2)
+        self.assertEqual(result.overview, "Clean overview")
+
+    def test_fallback_after_two_unreadable_responses_does_not_blame_the_language(self):
+        result, calls = self._run('{"overview": "cut off', '{"overview": "again')
+        self.assertEqual(calls, 2)
+        self.assertIn("could not be read", result.overview)
+        self.assertNotIn("non-English", result.overview)
+
+
 class ThinkFallbackTests(unittest.TestCase):
     """The ollama>=0.5.0 pin governs only the bundled client; in remote mode the
     request hits the user's own server, which may reject `think`. _chat_no_think
