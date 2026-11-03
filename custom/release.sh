@@ -30,6 +30,13 @@ STAGE="$(mktemp -d)"
 cleanup() { git -C "$ROOT" worktree remove --force "$WORK" >/dev/null 2>&1 || true; rm -rf "$STAGE"; }
 trap cleanup EXIT
 
+# The verified helper cache outlives upstream's expiring CI artifact; the
+# worktree's own .local/ starts empty.
+if [ -d "$ROOT/.local/helpers" ]; then
+  mkdir -p "$WORK/.local"
+  cp -R "$ROOT/.local/helpers" "$WORK/.local/"
+fi
+
 echo "==> Building $TAG from a clean checkout"
 (cd "$WORK" && PYTHON311="$PYTHON311" custom/bootstrap.sh "$OFFICIAL")
 APP="$WORK/app/dist/mac-arm64/StenoAI.app"
