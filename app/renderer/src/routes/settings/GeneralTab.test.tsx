@@ -113,6 +113,8 @@ vi.mock('@/hooks/useSettings', () => {
       q({ enabled: true, minutes: 15, supportedMinutes: [2, 5, 10, 15, 30] }),
     useSetSilenceAutoStopEnabled: m,
     useSetSilenceAutoStopMinutes: m,
+    useKeepRecordingsSetting: () => ({ data: false }),
+    useSetKeepRecordings: m,
     useDockIconSetting: () => q(false),
     useSetDockIcon: m,
     useShowMenuBarIconSetting: () => q(true),
