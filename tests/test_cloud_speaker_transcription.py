@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.cloud_speaker_transcription import plan_windows, tag_speaker_windows, transcribe_speaker_channel
-from tests.test_transcriber_openai_asr import _build_transcriber, _FakeOpener, _json_response, _write_signal_wav
+from tests.test_transcriber_openai_asr import (
+    _build_transcriber, _FakeOpener, _http_error, _json_response, _write_signal_wav,
+)
 
 
 class CloudSpeakerTests(unittest.TestCase):
@@ -121,6 +123,33 @@ class CloudSpeakerTests(unittest.TestCase):
         self.assertIn(b'json', prefix)
         self.assertEqual(result['detected_language'], 'nl')
         self.assertFalse(result['segments'][0]['has_timestamps'])
+
+    def _request_with_vocabulary(self, responses):
+        asr = _build_transcriber()
+        asr._openai_asr_model = 'gpt-transcribe'
+        asr.vocabulary_prompt = 'Weave review. Anna de Vries, Piet Jansen.'
+        opener = _FakeOpener(responses)
+        with tempfile.TemporaryDirectory() as folder:
+            audio = Path(folder) / 'audio.wav'
+            _write_signal_wav(audio, 16000)
+            with patch.dict(os.environ, {'STENOAI_OAI_API_URL': 'https://api.example/v1',
+                                        'STENOAI_OAI_API_ORIGIN': 'https://api.example'}), \
+                    patch('urllib.request.build_opener', return_value=opener):
+                result = asr._run_openai_asr(audio, 'nl')
+        return result, opener
+
+    def test_meeting_vocabulary_is_sent_as_the_prompt(self):
+        result, opener = self._request_with_vocabulary([_json_response({'text': 'goede middag'})])
+        self.assertEqual(len(opener.requests), 1)
+        self.assertIn(b'name="prompt"', opener.requests[0]['prefix'])
+        self.assertIn('Anna de Vries'.encode(), opener.requests[0]['prefix'])
+        self.assertEqual(result['text'], 'goede middag')
+
+    def test_an_endpoint_that_rejects_the_prompt_is_asked_again_without_it(self):
+        result, opener = self._request_with_vocabulary([_http_error(400), _json_response({'text': 'goede middag'})])
+        self.assertEqual(len(opener.requests), 2)
+        self.assertNotIn(b'name="prompt"', opener.requests[1]['prefix'])
+        self.assertEqual(result['text'], 'goede middag')
 
     def test_predicted_speech_keeps_strict_empty_validation_but_acoustic_gap_allows_consensus(self):
         asr = _build_transcriber()

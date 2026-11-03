@@ -90,6 +90,23 @@ class MeetingContext:
                 block += label + _truncate(self.invitation.strip(), room)
         return block
 
+    def vocabulary_prompt(self, max_chars: int = 400) -> str:
+        """Meeting title and participant names for a speech-to-text prompt, so
+        the engine spells them right. No English labels: a prompt's language
+        steers Whisper-style models, and most meetings are not in English.
+        Mailbox-style names ("j.smith") are left out. "" when nothing is known."""
+        names = [n for n in _dedupe(([self.recorder] if self.recorder else []) + self.speakers
+                                    + self.invitees + ([self.organizer] if self.organizer else []))
+                 if not re.search(r"[@._\d]", n)]
+        parts = ([_one_line(self.title, 120)] if self.title else []) + names
+        prompt = ""
+        for i, part in enumerate(parts):
+            sep = "" if i == 0 else (". " if i == 1 and self.title else ", ")
+            if len(prompt) + len(sep) + len(part) + 1 > max_chars:
+                break
+            prompt += sep + part
+        return prompt + "." if prompt else ""
+
     def names_line(self, max_chars: int) -> str:
         """One compact line for the map step of a chunked summary: who may be
         speaking and the meeting date, so owners and due dates survive the
