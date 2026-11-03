@@ -445,6 +445,13 @@ def frontmatter(stem, meta, kind, counterpart_link, dt):
     return "\n".join(lines)
 
 
+def lf(text):
+    """Plain \n line endings. Calendar invitations from Outlook/Teams carry \r\n,
+    which reads back from disk as \n, so a CRLF baseline never matches the file
+    and every run would look like a vault edit."""
+    return text.replace("\r\n", "\n").replace("\r", "\n") if isinstance(text, str) else text
+
+
 def render_note(stem, meta, body, transcript_link, dt):
     out = [frontmatter(stem, meta, "note", transcript_link, dt), ""]
     out.append(body or "_No AI summary was available for this meeting._")
@@ -453,7 +460,7 @@ def render_note(stem, meta, body, transcript_link, dt):
     description = (meta.get("_calendar_event") or {}).get("description")
     if description:
         out += ["", "## Invitation", "", description]
-    return "\n".join(out).rstrip() + "\n"
+    return lf("\n".join(out).rstrip() + "\n")
 
 
 def render_transcript(stem, meta, transcript, note_link, dt):
@@ -463,7 +470,7 @@ def render_transcript(stem, meta, transcript, note_link, dt):
     out.append(transcript)
     if meta.get("_speaker_context"):
         out += ["", render_speaker_context(meta["_speaker_context"])]
-    return "\n".join(out).rstrip() + "\n"
+    return lf("\n".join(out).rstrip() + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -620,7 +627,7 @@ def refresh_managed(current, generated, entry, prefix):
         before, remainder = body.split(AUTO_START, 1)
         existing, after = remainder.split(AUTO_END, 1)
         existing = existing.strip()
-        baseline = entry.get(prefix + "_base")
+        baseline = lf(entry.get(prefix + "_base"))
         merged = three_way(baseline, existing, new_body) if baseline is not None else (new_body if sha(existing) == entry.get(prefix + "_managed_hash") else None)
         if merged is None and sha(existing) in (entry.get(prefix + "_recent") or []):
             # The block is an earlier export of ours, not a vault edit: a source

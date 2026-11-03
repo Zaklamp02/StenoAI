@@ -170,6 +170,40 @@ class ConfigStoragePathTests(unittest.TestCase):
             self.assertEqual(config.get_storage_path(), "")
 
 
+class ConfigObsidianVaultPathTests(unittest.TestCase):
+    def test_refuses_a_subfolder_of_an_obsidian_vault(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vault = Path(tmp_dir) / "vault"
+            (vault / ".obsidian").mkdir(parents=True)
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+
+            self.assertFalse(config.set_obsidian_vault_path(str(vault / "StenoAI")))
+            self.assertEqual(config.get_obsidian_vault_path(), "")
+            self.assertFalse((vault / "StenoAI").exists())
+            self.assertTrue(config.set_obsidian_vault_path(str(vault)))
+            self.assertEqual(config.get_obsidian_vault_path(), str(vault))
+
+    def test_accepts_a_folder_outside_any_vault(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            target = Path(tmp_dir) / "notes"
+            self.assertIsNone(config_mod.enclosing_obsidian_vault(target))
+            self.assertTrue(config.set_obsidian_vault_path(str(target)))
+
+    def test_cli_names_the_vault_root_when_refusing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            vault = Path(tmp_dir) / "vault"
+            (vault / ".obsidian").mkdir(parents=True)
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            with patch("src.config.get_config", return_value=config):
+                result = CliRunner().invoke(
+                    simple_recorder.cli, ["set-obsidian-vault-path", str(vault / "StenoAI")])
+            data = json.loads(result.output)
+            self.assertFalse(data["success"])
+            self.assertEqual(data["vault_root"], str(vault))
+            self.assertEqual(config.get_obsidian_vault_path(), "")
+
+
 class ConfigLanguageTests(unittest.TestCase):
     def test_default_language_is_auto_detect(self):
         # A fresh config (no explicit language ever set) must default to

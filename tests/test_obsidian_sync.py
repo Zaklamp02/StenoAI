@@ -146,6 +146,25 @@ class ObsidianSyncTests(unittest.TestCase):
         self.assertNotIn('## Preserved vault edits', content)
         self.assertIn('Final.', content)
 
+    def test_crlf_invitation_is_not_mistaken_for_a_vault_edit(self):
+        import json
+        calendar = self.output / (self.stem + '_calendar.json')
+        calendar.write_text(json.dumps({'checked_at': '2026-11-03T09:00:00Z', 'event': {
+            'title': 'Meeting', 'start': '2026-10-17T09:00:00Z', 'end': '2026-10-17T10:00:00Z',
+            'description': 'Agenda\r\nItem one\r\nItem two'}}))
+        self.note()
+        self.run_sync()
+        self.assertNotIn('\r', self.exported('note').read_bytes().decode())
+        self.assertNotIn('\r', self.state[self.stem]['note_base'])
+        # A state written by an older build still carries the CRLF baseline.
+        self.state[self.stem]['note_base'] = self.state[self.stem]['note_base'].replace('Item one', 'Item one\r')
+        self.note(notes='Changed after the invitation was exported.')
+        self.run_sync()
+        content = self.exported('note').read_text()
+        self.assertNotIn('## Preserved vault edits', content)
+        self.assertIn('Changed after the invitation was exported.', content)
+        self.assertIn('Item two', content)
+
     def test_edited_legacy_export_is_preserved_while_latest_source_gets_managed_section(self):
         self.note()
         self.run_sync()
