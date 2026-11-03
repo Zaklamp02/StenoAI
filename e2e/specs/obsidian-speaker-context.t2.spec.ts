@@ -52,7 +52,7 @@ test('Obsidian exports tentative and confirmed identities separately and follows
   expect(suggestions.success).toBe(true);
   await sync();
   const trDir = path.join(vault, 'StenoAI', 'Transcripts');
-  let transcript = path.join(trDir, readdirSync(trDir)[0]);
+  const transcript = path.join(trDir, readdirSync(trDir)[0]);
   let context = data(transcript);
   expect(context.speakers).toHaveLength(2);
   expect(context.speakers[0]).toMatchObject({ review_status: 'unconfirmed', suggested_name: 'Alex Fixture',
@@ -61,10 +61,6 @@ test('Obsidian exports tentative and confirmed identities separately and follows
   expect(context.calendar_invitees).toHaveLength(2);
   expect(readFileSync(transcript, 'utf8')).toContain('[Speaker 1] Substantial contribution.');
   expect(readFileSync(transcript, 'utf8')).not.toContain('embedding');
-  const archive = path.join(vault, 'Archive', 'StenoAI', 'Transcripts');
-  mkdirSync(archive, { recursive: true });
-  const archived = path.join(archive, 'renamed-by-user.md');
-  renameSync(transcript, archived); transcript = archived;
   appendFileSync(transcript, '\nVault-only annotation.\n');
   const approved = await page.evaluate(params => window.stenoai.speakers.confirm(params), {
     meetingStem: stem, channel: 'mic', diarizationSpeakerId: 'SPEAKER_0',
@@ -88,5 +84,14 @@ test('Obsidian exports tentative and confirmed identities separately and follows
   await sync();
   expect(data(transcript).calendar_invitees[0].name).toBe('New Invitee');
   expect(readFileSync(transcript, 'utf8')).toContain('attendees: ["New Invitee", "Owner"]');
+  // Archived exports are processed sources (process-daily-note): frozen.
+  const archive = path.join(vault, 'Archive', 'StenoAI', 'Transcripts');
+  mkdirSync(archive, { recursive: true });
+  const archived = path.join(archive, 'renamed-by-user.md');
+  renameSync(transcript, archived);
+  const frozen = readFileSync(archived, 'utf8');
+  await page.evaluate(() => window.stenoai.speakers.renameProfile('alex-fixture', 'Alex Again'));
+  await sync();
+  expect(readFileSync(archived, 'utf8')).toBe(frozen);
   expect(readdirSync(trDir)).toHaveLength(0);
 });
