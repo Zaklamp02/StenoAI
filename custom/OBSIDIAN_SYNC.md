@@ -83,14 +83,20 @@ review properties follow StenoAI; calendar properties follow matched calendar
 updates/removal. Independently enriched vault attendee metadata is preserved
 while StenoAI has no matched event.
 
+Exports always use `\n` line endings. Outlook/Teams invitations carry `\r\n`,
+which reads back from disk as `\n`; a CRLF baseline would make every run look
+like a vault edit.
+
 Writes and state replacement are atomic per file, and concurrent runs use a lock.
 The two export files and state are not one cross-file transaction. After an
 interruption the next run retries, favoring preserved content over silent loss.
 
 ## Operation
 
-`custom/obsidian_sync.py` is the source; the installed standalone copy is
-`~/scripts/stenoai-sync/stenoai_sync.py`. It uses the standard Python library and
+`custom/obsidian_sync.py` is the source. Prefer the app-managed sync below: it
+ships with every build. A standalone copy (`~/scripts/stenoai-sync/stenoai_sync.py`
+under a LaunchAgent) is never updated by a rebuild, so it drifts from the repo;
+run only one of the two. It uses the standard Python library and
 the installed StenoAI CLI. On macOS the CLI defaults to the installed app's
 bundled backend; another installation can set `steno_backend` in the sync config
 or `STENOAI_BACKEND_PATH`. Other platforms resolve `stenoai`/`stenoai.exe` on PATH.
@@ -110,7 +116,9 @@ engine is no longer connected to Settings.
 ## App-managed sync
 
 Settings → Integrations now runs this same exporter through the bundled CLI.
-Choose the vault root and enable sync; no Python or LaunchAgent installation is
+Choose the vault root (the folder that holds `.obsidian`) and enable sync. A
+folder inside a vault is refused, because sync adds its own `StenoAI/` folder and
+`<vault>/StenoAI` would nest a second copy of every note; no Python or LaunchAgent installation is
 needed for colleagues. It checks every minute while the app is open and after
 note changes; Sync now retries immediately. Calendar context refreshes before
 export. Speaker suggestions are computed before either vault write.

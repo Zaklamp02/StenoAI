@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dialog';
 import { isMac, shortcut } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
+import { RecordingStorageSettings } from './RecordingStorageSettings';
 import {
   useAutoDetectMeetingsSetting,
   useAutoInstallWhenIdleSetting,
@@ -488,6 +489,8 @@ export function GeneralTab() {
           />
         </SettingRow>
       )}
+
+      <RecordingStorageSettings />
 
       <SettingRow
         label="Auto-stop on silence"

@@ -272,6 +272,20 @@ def _atomic_write_text(path: Path, text: str, encoding: str = 'utf-8') -> None:
     _atomic_write(path, lambda fh: fh.write(text), encoding=encoding)
 
 
+def enclosing_obsidian_vault(path) -> Optional[Path]:
+    """The Obsidian vault a folder sits inside, when it is not that vault's root.
+
+    A vault root holds a ``.obsidian`` folder. Returns the nearest ancestor that
+    does, or None when ``path`` is itself a vault root or not inside one."""
+    p = Path(path).expanduser()
+    if (p / ".obsidian").is_dir():
+        return None
+    for parent in p.parents:
+        if (parent / ".obsidian").is_dir():
+            return parent
+    return None
+
+
 def get_user_data_dir() -> Path:
     """Per-OS user data directory for stenoai when running as a frozen bundle.
 
@@ -2206,6 +2220,12 @@ class Config:
             vp = Path(vault_path)
             if not vp.is_absolute():
                 logger.error(f"Obsidian vault path must be absolute: {vault_path}")
+                return False
+            enclosing = enclosing_obsidian_vault(vp)
+            if enclosing is not None:
+                # Sync writes its own StenoAI/ folder under the chosen root, so
+                # picking <vault>/StenoAI nests a second copy of every note.
+                logger.error(f"Obsidian vault path {vault_path} is inside the vault at {enclosing}")
                 return False
             # Ensure the target exists; on failure keep existing config unchanged.
             try:

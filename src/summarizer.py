@@ -1280,103 +1280,118 @@ Return ONLY the response in this exact JSON format:
             timeout_seconds = min(base_timeout + extra_timeout, 7200)  # Cap at 2 hours
             logger.info(f"Using timeout: {timeout_seconds} seconds ({timeout_seconds // 60} minutes)")
 
-            if self.ai_provider == "adapter":
-                response_text = self._adapter_chat(prompt, timeout_seconds)
-            elif self.ai_provider == "cloud":
-                response_text = self._cloud_chat(prompt, timeout_seconds)
-            else:
-                # Retry logic for Ollama API calls (local or remote)
-                max_retries = 3
-                ollama_response = None
-                for attempt in range(max_retries):
-                    try:
-                        if attempt > 0:
-                            logger.info(f"Retry attempt {attempt + 1}/{max_retries}")
-                            if self.ai_provider == "remote":
-                                self.client = ollama.Client(host=self.remote_url)
+            def request_summary():
+                if self.ai_provider == "adapter":
+                    response_text = self._adapter_chat(prompt, timeout_seconds)
+                elif self.ai_provider == "cloud":
+                    response_text = self._cloud_chat(prompt, timeout_seconds)
+                else:
+                    # Retry logic for Ollama API calls (local or remote)
+                    max_retries = 3
+                    ollama_response = None
+                    for attempt in range(max_retries):
+                        try:
+                            if attempt > 0:
+                                logger.info(f"Retry attempt {attempt + 1}/{max_retries}")
+                                if self.ai_provider == "remote":
+                                    self.client = ollama.Client(host=self.remote_url)
+                                else:
+                                    self._ensure_ollama_ready()
+                                    self.client = ollama.Client()
+
+                            # think=False: this JSON-summary path wants direct
+                            # structured output, not reasoning. See _summarize_chunk.
+                            # Via _chat_no_think for the remote-server `think` fallback.
+                            ollama_response = self._chat_no_think(
+                                self.client,
+                                model=self.model_name,
+                                messages=[
+                                    {
+                                        'role': 'user',
+                                        'content': prompt
+                                    }
+                                ],
+                                options=self._ollama_options(),
+                            )
+                            break  # Success, exit retry loop
+
+                        except Exception as e:
+                            logger.error(f"Ollama API attempt {attempt + 1} failed: {e}")
+                            if attempt == max_retries - 1:
+                                raise
                             else:
-                                self._ensure_ollama_ready()
-                                self.client = ollama.Client()
+                                logger.info("Waiting 5 seconds before retry...")
+                                time.sleep(5)
 
-                        # think=False: this JSON-summary path wants direct
-                        # structured output, not reasoning. See _summarize_chunk.
-                        # Via _chat_no_think for the remote-server `think` fallback.
-                        ollama_response = self._chat_no_think(
-                            self.client,
-                            model=self.model_name,
-                            messages=[
-                                {
-                                    'role': 'user',
-                                    'content': prompt
-                                }
-                            ],
-                            options=self._ollama_options(),
-                        )
-                        break  # Success, exit retry loop
+                    response_text = ollama_response['message']['content'].strip()
 
-                    except Exception as e:
-                        logger.error(f"Ollama API attempt {attempt + 1} failed: {e}")
-                        if attempt == max_retries - 1:
-                            raise
-                        else:
-                            logger.info("Waiting 5 seconds before retry...")
-                            time.sleep(5)
+                return response_text
 
-                response_text = ollama_response['message']['content'].strip()
+            def parse_summary(response_text):
+                logger.info(f"Received response from {self.ai_provider}")
+                logger.info(f"Response length: {len(response_text)} characters")
+                # No content preview: the response is meeting-derived and must not
+                # reach the shareable debug log. The length above is the signal.
 
-            logger.info(f"Received response from {self.ai_provider}")
-            logger.info(f"Response length: {len(response_text)} characters")
-            # No content preview: the response is meeting-derived and must not
-            # reach the shareable debug log. The length above is the signal.
-
-            # Try to parse JSON response with repair functionality
-            try:
-                # Remove any markdown formatting
-                if response_text.startswith('```json'):
-                    response_text = response_text.replace('```json', '').replace('```', '').strip()
-                elif response_text.startswith('```'):
-                    response_text = response_text.replace('```', '').strip()
-                
-                # Handle preamble text like "Here is the extracted information in JSON format:"
-                if '{' in response_text and '}' in response_text:
-                    # Find the first { and last } to extract just the JSON
-                    json_start = response_text.find('{')
-                    json_end = response_text.rfind('}') + 1
-                    response_text = response_text[json_start:json_end].strip()
-                
-                # First attempt - try parsing as-is
-                structured_data = json.loads(response_text)
-                logger.info("Successfully parsed JSON response")
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Ollama returned invalid JSON: {e}")
-                logger.error(f"JSON parse error at position: {e.pos}")
-                # Log the size, not the body: the response is meeting content.
-                logger.error(f"Ollama response unparseable ({len(response_text)} chars)")
-                logger.info("Attempting simple JSON repair for unquoted strings...")
-                
-                # Simple fix for unquoted strings in arrays (the actual issue we encountered)
-                import re
-                repaired_json = re.sub(r'(\[|\,)\s*([^"\[\]{},:]+?)\s*(\]|\,)', r'\1 "\2" \3', response_text)
-                
+                # Try to parse JSON response with repair functionality
                 try:
-                    structured_data = json.loads(repaired_json)
-                    logger.info("Successfully parsed repaired JSON response")
-                except json.JSONDecodeError:
-                    logger.error("JSON repair failed, creating fallback summary")
-                    
-                    # Create simple fallback summary with original user-friendly message
-                    fallback_summary = MeetingTranscript(
-                        duration=f"{duration_minutes} minutes",
-                        overview="Meeting transcript recorded but detailed analysis failed. Content appears to be in a non-English language or format not fully supported.",
-                        participants=[],
-                        next_steps=[],
-                        key_points=[],
-                        transcript=transcript
-                    )
-                    logger.info("Created fallback summary")
-                    return fallback_summary
+                    # Remove any markdown formatting
+                    if response_text.startswith('```json'):
+                        response_text = response_text.replace('```json', '').replace('```', '').strip()
+                    elif response_text.startswith('```'):
+                        response_text = response_text.replace('```', '').strip()
+                
+                    # Handle preamble text like "Here is the extracted information in JSON format:"
+                    if '{' in response_text and '}' in response_text:
+                        # Find the first { and last } to extract just the JSON
+                        json_start = response_text.find('{')
+                        json_end = response_text.rfind('}') + 1
+                        response_text = response_text[json_start:json_end].strip()
+                
+                    # First attempt - try parsing as-is
+                    structured_data = json.loads(response_text)
+                    logger.info("Successfully parsed JSON response")
+                
+                except json.JSONDecodeError as e:
+                    logger.error(f"Ollama returned invalid JSON: {e}")
+                    logger.error(f"JSON parse error at position: {e.pos}")
+                    # Log the size, not the body: the response is meeting content.
+                    logger.error(f"Ollama response unparseable ({len(response_text)} chars)")
+                    logger.info("Attempting simple JSON repair for unquoted strings...")
+                
+                    # Simple fix for unquoted strings in arrays (the actual issue we encountered)
+                    import re
+                    repaired_json = re.sub(r'(\[|\,)\s*([^"\[\]{},:]+?)\s*(\]|\,)', r'\1 "\2" \3', response_text)
+                
+                    try:
+                        structured_data = json.loads(repaired_json)
+                        logger.info("Successfully parsed repaired JSON response")
+                    except json.JSONDecodeError:
+                        logger.error("JSON repair failed")
+                        structured_data = None
             
+                return structured_data
+
+            # Local models sometimes return JSON that cannot be read; a second
+            # request usually comes back clean.
+            structured_data = None
+            for parse_attempt in range(2):
+                if parse_attempt:
+                    logger.info("Retrying the summary request after an unreadable response")
+                structured_data = parse_summary(request_summary())
+                if structured_data is not None:
+                    break
+            if structured_data is None:
+                return MeetingTranscript(
+                    duration=f"{duration_minutes} minutes",
+                    overview="The transcript was saved, but the AI model returned a summary that could not be read. "
+                             "Generate notes again, or pick a larger model in Settings.",
+                    participants=[],
+                    next_steps=[],
+                    key_points=[],
+                    transcript=transcript
+                )
+
             # Create MeetingTranscript object
             try:
                 # Parse next steps (formerly key_actions)

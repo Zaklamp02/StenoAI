@@ -101,6 +101,12 @@ export function IntegrationsTab() {
         </div>
       </div>
 
+      {setVaultPath.error && (
+        <p role="alert" className="py-3 text-[13px]" style={{ color: 'var(--fg-1)' }}>
+          {setVaultPath.error.message}
+        </p>
+      )}
+
       {enabled.data && !path && (
         <div className="py-3 text-[13px]" style={{ color: 'var(--fg-2)' }}>{t('integrationsTab.sync_is_on_but_no_vault_folder')}</div>
       )}

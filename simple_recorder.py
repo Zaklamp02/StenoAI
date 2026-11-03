@@ -673,6 +673,11 @@ Summary output language: {config.get_language_name(output_language)}
         # applied as a post-transcription conversion, not an ASR mode.
         asr_language = config.get_whisper_language()
 
+        # Names from the calendar invitation help the engines that take a prompt.
+        from src.config import get_data_dirs
+        context = _meeting_context_for_note(get_data_dirs()["output"] / f"{audio_path.stem}_summary.md")
+        self.transcriber.vocabulary_prompt = context.vocabulary_prompt() if context else None
+
         # Transcribe with diarisation support (stereo → [You]/[Others])
         transcript_result = self.transcriber.transcribe_diarised(audio_path, language=asr_language)
 
@@ -2238,9 +2243,17 @@ def get_obsidian_vault_path_cmd():
 @click.argument('vault_path', default='')
 def set_obsidian_vault_path_cmd(vault_path):
     """Set the Obsidian vault folder (empty to clear)."""
-    from src.config import get_config
+    from src.config import enclosing_obsidian_vault, get_config
     config = get_config()
-    if config.set_obsidian_vault_path(vault_path):
+    enclosing = enclosing_obsidian_vault(vault_path) if vault_path.strip() else None
+    if enclosing is not None:
+        print(json.dumps({
+            "success": False,
+            "error": f"This folder is inside the Obsidian vault at {enclosing}. Choose that vault folder instead; "
+                     "StenoAI creates its own StenoAI folder in it.",
+            "vault_root": str(enclosing),
+        }))
+    elif config.set_obsidian_vault_path(vault_path):
         print(json.dumps({"success": True, "obsidian_vault_path": vault_path}))
     else:
         print(json.dumps({"success": False, "error": "Failed to set vault path"}))

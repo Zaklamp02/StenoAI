@@ -64,11 +64,9 @@ import {
 import {
   useAutoSummarizeSetting,
   useIdentityMatchingEnabledSetting,
-  useKeepRecordingsSetting,
   useLanguageSetting,
   useSetAutoSummarize,
   useSetIdentityMatchingEnabled,
-  useSetKeepRecordings,
   useSetLanguage,
 } from '@/hooks/useSettings';
 import { useOrgSession } from '@/hooks/useOrg';
@@ -76,21 +74,31 @@ import { COMPACT_BTN, COMPACT_INPUT, COMPACT_TRIGGER, SectionHeading, SettingRow
 import { ModelCard, formatModelSize, isDefaultModel, parsePullPercent } from './model-card';
 import { modelMayExceedMemory } from './model-memory';
 import { LANGUAGES_PARAKEET, LANGUAGES_WHISPER } from './languages';
+import { AiSetupPresets } from './AiSetupPresets';
 
 export function AiTab() {
   return (
     <section data-settings-tab="ai">
-      <SectionHeading>Transcription</SectionHeading>
+      <SectionHeading first>{t('settings.ai.presets.heading')}</SectionHeading>
+      <AiSetupPresets />
+
+      <SectionHeading>{t('settings.ai.stages.speech')}</SectionHeading>
       <TranscriptionSection />
 
-      <SectionHeading>Summarisation &amp; Chat</SectionHeading>
+      {isMac && (
+        <>
+          <SectionHeading>{t('settings.ai.stages.speakers')}</SectionHeading>
+          <SpeakerSeparationSetting />
+          <SpeakerIdentificationSetting noBorder />
+        </>
+      )}
+
+      <SectionHeading>{t('settings.ai.stages.notes')}</SectionHeading>
       <p
         className="text-[13px] leading-[1.5]"
         style={{ color: 'var(--fg-2)', marginBottom: 4 }}
       >
-        Turns your transcript into notes and answers your questions. This is
-        the one step that can run locally or in the cloud — if you choose a
-        cloud provider, only the text transcript is sent, never audio.
+        {t('settings.ai.stages.notesIntro')}
       </p>
       <SummarisationSection />
     </section>
@@ -100,8 +108,6 @@ export function AiTab() {
 function TranscriptionSection() {
   const language = useLanguageSetting();
   const setLanguage = useSetLanguage();
-  const keepRecordings = useKeepRecordingsSetting();
-  const setKeepRecordings = useSetKeepRecordings();
   const engineQuery = useTranscriptionEngine();
 
   const engine = engineQuery.data ?? 'parakeet';
@@ -120,26 +126,33 @@ function TranscriptionSection() {
   return (
     // Retains the pre-merge data-settings-tab="transcription" identity as a
     // nested wrapper (the page-level section is now data-settings-tab="ai").
+    // Model first: it decides where audio goes and which languages exist.
     <div data-settings-tab="transcription">
-      <p
-        className="text-[13px] leading-[1.5]"
-        style={{ color: 'var(--fg-2)', marginBottom: 4 }}
-      >
-        {engine === 'openai-asr'
-          ? t('settings.ai.cloudAsr.disclosure')
-          : 'Speech-to-text always runs on your device \u2014 your audio never leaves your computer.'}
-      </p>
+      {/* The Setup block's data-flow lines say where audio goes for the
+          on-device engines; only the upload gets its own warning here. */}
+      {engine === 'openai-asr' && (
+        <p
+          className="text-[13px] leading-[1.5]"
+          style={{ color: 'var(--fg-2)', marginBottom: 4 }}
+        >
+          {t('settings.ai.cloudAsr.disclosure')}
+        </p>
+      )}
+
+      <TranscriptionModelList />
+
       <SettingRow
         label="Language"
         description="Auto-detects by default. Pick one to pin it."
+        noBorder
       >
         <Select
           value={displayValue}
           onValueChange={(v) => setLanguage.mutate(v)}
           disabled={!language.data}
         >
-          {/* Explicit testid: the Model dropdown below is a second combobox in
-              this section now, so parakeet-language-picker.t1 can no longer
+          {/* Explicit testid: the Model dropdown is a second combobox in
+              this section, so parakeet-language-picker.t1 can no longer
               assume "the only combobox" to find this trigger. */}
           <SelectTrigger className={COMPACT_TRIGGER} data-testid="transcription-language-select">
             <SelectValue />
@@ -153,85 +166,7 @@ function TranscriptionSection() {
           </SelectContent>
         </Select>
       </SettingRow>
-
-      <SettingRow
-        label="Save recordings"
-        description="Save audio files to your storage location (see Advanced) after processing. Uses 1–10 MB per minute depending on capture mode."
-      >
-        <Switch
-          checked={keepRecordings.data ?? false}
-          onCheckedChange={(v) => setKeepRecordings.mutate(v)}
-          disabled={keepRecordings.data === undefined}
-        />
-      </SettingRow>
-
-      {keepRecordings.data && <AudioStorageLimitSetting />}
-
-      {isMac && <SpeakerSeparationSetting />}
-
-      {isMac && (
-        <SpeakerIdentificationSetting />
-      )}
-
-      <TranscriptionModelList />
     </div>
-  );
-}
-
-// Slider stops for the recordings disk cap; the last stop means no limit.
-const AUDIO_LIMIT_STOPS_MB = [100, 250, 500, 1000, 2000, 5000, 10000, 20000, null] as const;
-
-function formatMb(mb: number): string {
-  return mb >= 1000 ? `${(mb / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 })} GB` : `${Math.round(mb)} MB`;
-}
-
-/**
- * Optional cap on the space kept recordings use. Past it, the oldest audio is
- * deleted after each processed meeting; notes and transcripts stay.
- */
-export function AudioStorageLimitSetting() {
-  const [state, setState] = React.useState<{ limitMb: number | null; usedBytes: number } | null>(null);
-  const [index, setIndex] = React.useState(AUDIO_LIMIT_STOPS_MB.length - 1);
-  React.useEffect(() => {
-    void ipc().settings.getAudioStorage().then((res) => {
-      if (!res.success) return;
-      setState(res);
-      const at = AUDIO_LIMIT_STOPS_MB.findIndex((mb) => mb === res.limitMb);
-      setIndex(at === -1 ? AUDIO_LIMIT_STOPS_MB.length - 1 : at);
-    });
-  }, []);
-  const save = (next: number) => {
-    void ipc().settings.setAudioStorage(AUDIO_LIMIT_STOPS_MB[next] ?? null).then((res) => {
-      if (res.success) setState(res);
-    });
-  };
-  const stop = AUDIO_LIMIT_STOPS_MB[index] ?? null;
-  const used = state ? formatMb(state.usedBytes / 1_000_000) : '…';
-  return (
-    <SettingRow
-      label={t('aiTab.recordings_storage_limit')}
-      description={t('aiTab.when_saved_audio_passes_this_size_the', { used: used })}
-    >
-      <div className="flex w-[220px] items-center gap-3">
-        <input
-          type="range"
-          min={0}
-          max={AUDIO_LIMIT_STOPS_MB.length - 1}
-          step={1}
-          value={index}
-          onChange={(e) => setIndex(Number(e.target.value))}
-          onPointerUp={(e) => save(Number((e.target as HTMLInputElement).value))}
-          onKeyUp={(e) => save(Number((e.target as HTMLInputElement).value))}
-          disabled={!state}
-          aria-label={t('aiTab.recordings_storage_limit')}
-          data-testid="audio-storage-limit"
-          className="w-full accent-[color:var(--fg-1)]"
-        />
-        <span className="w-[64px] shrink-0 text-right text-[13px] tabular-nums" style={{ color: 'var(--fg-1)' }}>
-          {stop === null ? t('aiTab.no_limit') : formatMb(stop)}
-        </span>
-      </div>
-    </SettingRow>
   );
 }
 
@@ -433,7 +368,7 @@ export function SpeakerSeparationSetting() {
   );
 }
 
-export function SpeakerIdentificationSetting() {
+export function SpeakerIdentificationSetting({ noBorder = false }: { noBorder?: boolean }) {
   const enabled = useIdentityMatchingEnabledSetting();
   const setEnabled = useSetIdentityMatchingEnabled();
   return (
@@ -441,6 +376,7 @@ export function SpeakerIdentificationSetting() {
       label={t('aiTab.speaker_identification')}
       description={t('aiTab.optional_and_off_by_default')}
       descriptionId="speaker-identification-description"
+      noBorder={noBorder}
     >
       <Switch
         aria-label={t('aiTab.speaker_identification')}
@@ -500,7 +436,6 @@ function TranscriptionModelList() {
       <SettingRow
         label="Model"
         description="Which speech-to-text model transcribes your recordings."
-        noBorder
       >
         <div
           className={cn(COMPACT_TRIGGER, 'w-[190px] flex items-center gap-1.5')}
@@ -517,7 +452,6 @@ function TranscriptionModelList() {
       <SettingRow
         label="Model"
         description="Which speech-to-text model transcribes your recordings."
-        noBorder
       >
         <div className={cn(COMPACT_TRIGGER, 'w-[190px] flex items-center')} style={{ color: 'var(--fg-2)' }}>
           <span className="truncate">Could not load models.</span>
@@ -583,7 +517,6 @@ function TranscriptionModelList() {
       <SettingRow
         label="Model"
         description="Which speech-to-text model transcribes your recordings."
-        noBorder={activeEngine !== 'openai-asr'}
       >
         <Select value={value} onValueChange={onValueChange} disabled={isDownloading}>
           <SelectTrigger
@@ -848,12 +781,32 @@ function OpenAiAsrConfig() {
   );
 }
 
+/**
+ * Parameter count in billions from an Ollama tag ("llama3.2:3b", "qwen3:1.7b",
+ * "gemma4:e2b-it-qat"), or null when the tag doesn't say.
+ */
+export function modelSizeB(name: string | undefined): number | null {
+  const tag = name?.split(':')[1];
+  const match = tag?.match(/(?:^|[^a-z0-9])e?(\d+(?:\.\d+)?)b(?![a-z0-9])/i);
+  return match ? Number(match[1]) : null;
+}
+
+// In a 27-meeting comparison a 2B local model got owners, dates and names
+// wrong in most notes; most errors were the summariser's, not the transcript's.
+const SMALL_MODEL_B = 4;
+
+function isSmallModel(name: string | undefined): boolean {
+  const size = modelSizeB(name);
+  return size !== null && size < SMALL_MODEL_B;
+}
+
 function SummarisationSection() {
   const provider = useAiProvider();
   const setProvider = useSetAiProvider();
   const orgSession = useOrgSession();
   const autoSummarize = useAutoSummarizeSetting();
   const setAutoSummarize = useSetAutoSummarize();
+  const currentModel = useCurrentModel();
   const current = provider.data?.ai_provider ?? 'local';
   const orgSignedIn = orgSession.data?.signedIn ?? false;
 
@@ -952,6 +905,16 @@ function SummarisationSection() {
           <p className="text-[13px] leading-[1.5]" style={{ color: 'var(--fg-2)', marginBottom: 8 }}>
             Which model generates your summaries, titles, and chat answers.
           </p>
+          {isSmallModel(currentModel.data) && (
+            <p
+              role="note"
+              data-testid="small-model-note"
+              className="mb-3 rounded-md px-3 py-2 text-[12.5px] leading-[1.45]"
+              style={{ background: 'var(--surface-sunken)', color: 'var(--fg-1)' }}
+            >
+              {t('settings.ai.smallModel')}
+            </p>
+          )}
           <ModelList />
         </div>
       )}
@@ -1339,8 +1302,8 @@ function CloudProviderConfig() {
         />
       </div>
       <div className="text-[12px]" style={{ color: 'var(--fg-2)' }}>
-        Transcripts will be sent to a third-party cloud service. No audio files
-        leave your device.
+        Transcripts are sent to this cloud service to write notes. Audio is
+        never part of these requests.
       </div>
     </div>
   );

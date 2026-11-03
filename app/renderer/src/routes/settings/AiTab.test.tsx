@@ -44,7 +44,7 @@ vi.mock('@/hooks/useModels', async (importOriginal) => ({
 
 import { SpeakerIdentificationSetting, SpeakerSeparationSetting } from './AiTab';
 
-describe('Speaker identification setting', () => {
+describe('Recognise people setting', () => {
   test('describes itself to assistive technology', () => {
     render(<SpeakerIdentificationSetting />);
 
@@ -52,16 +52,16 @@ describe('Speaker identification setting', () => {
     // element that actually exists and carries text. The wording itself is
     // asserted by the copy inventory, not here, so a copy edit doesn't have to
     // touch this test to stay honest.
-    const toggle = screen.getByRole('switch', { name: 'Speaker identification' });
+    const toggle = screen.getByRole('switch', { name: 'Recognise people' });
     const descriptionId = toggle.getAttribute('aria-describedby');
     expect(descriptionId).toBe('speaker-identification-description');
     const description = document.getElementById(descriptionId!);
     expect(description).not.toBeNull();
-    expect(description!.textContent?.trim()).toBe('Optional and off by default.');
+    expect(description!.textContent?.trim()).toContain('Off by default.');
   });
 });
 
-describe('Individual speakers row with the engine picker', () => {
+describe('Separate voices row with the engine picker', () => {
   beforeEach(() => {
     diarization.engine = { data: 'sortformer', isError: false, refetch: vi.fn() };
     diarization.models = { data: 'ready' };
@@ -73,7 +73,7 @@ describe('Individual speakers row with the engine picker', () => {
     const trigger = screen.getByRole('combobox', { name: 'Speaker detection' });
     expect(trigger.getAttribute('aria-describedby')).toBe('speaker-models-description');
     expect(document.getElementById('speaker-models-description')?.textContent).toContain(
-      'Runs on your device',
+      'Runs on this computer',
     );
     return trigger as HTMLButtonElement;
   }

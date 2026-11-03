@@ -31,6 +31,7 @@ anything; the model is the source of truth.
 import contextlib
 import difflib
 import http.client
+import hashlib
 import inspect
 import json
 import logging
@@ -2524,6 +2525,10 @@ class WhisperTranscriber:
         #     fall back to whisper.cpp as before
         self.model_size = model_size
         self.model = None
+        # Names and terms from the meeting's calendar invitation, offered to
+        # engines that accept a prompt (whisper.cpp, OpenAI-compatible APIs).
+        # Parakeet has no prompt input. Set per meeting by the caller.
+        self.vocabulary_prompt: Optional[str] = None
 
         try:
             from src.config import get_config
@@ -2824,6 +2829,10 @@ class WhisperTranscriber:
         api_url = os.environ.get("STENOAI_OAI_API_URL", "")
         api_key = getattr(self, "_openai_asr_api_key", "")
         model = getattr(self, "_openai_asr_model", "") or "whisper-1"
+        # Dropped for the rest of this call if the endpoint rejects it. Never
+        # for a window without predicted speech: prompted models can echo the
+        # prompt into silence.
+        prompt_state = {"prompt": None if _speaker_gap else (getattr(self, "vocabulary_prompt", None) or None)}
 
         from src.config import _normalise_openai_asr_api_url, _openai_asr_api_origin
 
@@ -2916,6 +2925,9 @@ class WhisperTranscriber:
                     self.prefix_parts.append(_field("chunking_strategy", "auto"))
                 if language and language != "auto":
                     self.prefix_parts.append(_field("languages[]" if model == "gpt-transcribe" else "language", language))
+                # Diarize models reject a prompt.
+                if prompt_state["prompt"] and response_format != "diarized_json":
+                    self.prefix_parts.append(_field("prompt", prompt_state["prompt"]))
                 # The WAV stays the reference for local validation; what goes
                 # over the wire is its AAC copy when one could be made.
                 upload_path = _upload_path_for(request_audio_path)
@@ -3257,6 +3269,8 @@ class WhisperTranscriber:
             return result
 
         checkpoint_identity = {"endpoint": endpoint, "model": model, "language": language}
+        if prompt_state["prompt"]:
+            checkpoint_identity["prompt_sha256"] = hashlib.sha256(prompt_state["prompt"].encode()).hexdigest()
         if _speaker_gap:
             checkpoint_identity["empty_policy"] = "acoustic-gap"
         elif _confirm_empty_turn:
@@ -3274,6 +3288,19 @@ class WhisperTranscriber:
                 lambda result: _validate_response_for_request(result, request_audio_path))
 
         def _transcribe_request(request_audio_path: Path) -> dict:
+            try:
+                return _transcribe_request_formats(request_audio_path)
+            except _HttpStatusError as error:
+                if not (prompt_state["prompt"] and error.status in (400, 422)):
+                    raise
+                # Not every OpenAI-compatible endpoint takes a prompt; the
+                # vocabulary is a bonus, never a reason to fail the meeting.
+                logger.warning("openai-asr rejected the vocabulary prompt (HTTP %s); retrying without it",
+                               error.status)
+                prompt_state["prompt"] = None
+                return _transcribe_request_formats(request_audio_path)
+
+        def _transcribe_request_formats(request_audio_path: Path) -> dict:
             # A response-format fallback is still one upload attempt for this
             # audio file. Keep one absolute wall-clock budget across
             # verbose_json -> json -> text as well as each format's retry, so
@@ -3806,6 +3833,9 @@ class WhisperTranscriber:
                     resolved_language = None
 
             transcribe_kwargs = {"media": str(converted_path)}
+            vocabulary = getattr(self, "vocabulary_prompt", None)
+            if vocabulary:
+                transcribe_kwargs["initial_prompt"] = vocabulary
             if resolved_language and resolved_language != "auto":
                 transcribe_kwargs["language"] = resolved_language
             # Per-segment heartbeat: keeps the Electron inactivity watchdog

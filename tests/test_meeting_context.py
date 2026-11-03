@@ -85,6 +85,24 @@ class BuildMeetingContextTests(unittest.TestCase):
         self.assertIsNone(ctx.time_range)
 
 
+class VocabularyPromptTests(unittest.TestCase):
+    def test_title_and_names_without_english_labels_or_mailbox_names(self):
+        prompt = build_meeting_context(synthetic_event()).vocabulary_prompt()
+        self.assertEqual(prompt, "Q4 roadmap review. Sam Recorder, Anna de Vries.")
+        self.assertNotIn("piet.jansen", prompt)
+        self.assertNotIn("Mark Absent", prompt)
+
+    def test_respects_the_length_budget(self):
+        attendees = [{"name": f"Person Number {chr(65 + i)}"} for i in range(26)]
+        prompt = build_meeting_context(synthetic_event(attendees=attendees)).vocabulary_prompt(80)
+        self.assertLessEqual(len(prompt), 80)
+        self.assertTrue(prompt.endswith("."))
+
+    def test_empty_without_title_or_names(self):
+        ctx = build_meeting_context(None, [], "2026-10-15")
+        self.assertEqual(ctx.vocabulary_prompt(), "")
+
+
 class BudgetTests(unittest.TestCase):
     def test_very_long_invitation_is_cut_to_budget(self):
         long_text = "Background paragraph about the programme. " * 5000  # ~215k chars
