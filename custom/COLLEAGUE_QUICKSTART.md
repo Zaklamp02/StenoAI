@@ -70,10 +70,10 @@ Ollama and ffmpeg are bundled; do not install or start a second Ollama just for 
 - macOS may request Keychain access when you first save or use cloud/Calendar
   credentials in your locally signed build. Complete that system prompt to
   enable encrypted credential storage; keep the same signing identity on updates.
-- Enable **Save recordings** if you want listening checks, language retries or
+- Enable **Save recordings** (Settings → Preferences → Recording) if you want listening checks, language retries or
   later speaker analysis. Unfinished/failed audio is protected even when this is off.
-- Download the optional speaker-separation models for multiple voices around
-  one microphone. Name suggestions need the separate speaker-identification opt-in.
+- Download the optional **Separate voices** model (Settings → AI → Speakers) for
+  multiple voices around one microphone. Name suggestions need **Recognise people**.
   Suggestions stay unconfirmed until you approve them.
 - Connect Apple Calendar if useful. Clicking a meeting shows details. Only
   **Join & take notes** / **Take notes** starts recording; **Join** only opens the call.
