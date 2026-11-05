@@ -815,7 +815,7 @@ export type GetKeepRecordingsResponse = Result<{ keep_recordings: boolean }>;
 export type GetAutoSummarizeResponse = Result<{ auto_summarize_enabled: boolean }>;
 
 export type GetAutoInstallWhenIdleResponse = Result<{ auto_install_when_idle: boolean }>;
-/** Settings → When to process. 'plugged_in' holds processing and the live
+/** Settings → Power saving mode. 'plugged_in' holds processing and the live
  *  transcript while the device runs on battery. */
 export type ProcessingPowerPolicy = 'always' | 'plugged_in';
 export type GetProcessingPowerPolicyResponse = Result<{

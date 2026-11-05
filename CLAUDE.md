@@ -156,8 +156,8 @@ overrides an agent's own test-level defaults.
     while its models are missing, IPC allowlist, and a pre-0.17 Sortformer
     cache reading as missing on macOS; its UI half, the download-then-save
     picker and the upgrade Download action, is `diarization-engine.t1`),
-    `processing-power.t2` (Settings -> When to process: with "Only when plugged
-    in" on a simulated battery, `STENOAI_E2E_POWER_SOURCE=battery`, a queued
+    `processing-power.t2` (Settings -> Power saving mode: with it on
+    (`processing_power_policy: plugged_in`) on a simulated battery, `STENOAI_E2E_POWER_SOURCE=battery`, a queued
     meeting is held as `waiting-power` in `recording-journal.json`, requeues
     itself after a restart, runs on Process now, and the live transcript is
     skipped), the onboarding specs

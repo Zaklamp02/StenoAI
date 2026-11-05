@@ -16,7 +16,7 @@ export function useProcessNow() {
 }
 
 // Floating card, like RecordingRecovery, while queued meetings wait for the
-// device to be plugged in (Settings → When to process).
+// device to be plugged in (Settings → Power saving mode).
 export function PowerWaitNotice() {
   const recording = useRecording();
   const processNow = useProcessNow();

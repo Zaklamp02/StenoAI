@@ -339,7 +339,7 @@ function install({ ipcMain }) {
     cloudModel: 'gpt-4o',
     remoteUrl: '', // remote Ollama URL (empty = not configured)
     autoInstallWhenIdle: true, // idle auto-install toggle (config default on)
-    processingPowerPolicy: 'always', // Settings → When to process
+    processingPowerPolicy: 'always', // Settings → Power saving mode
     transcriptionEngine: process.env.STENOAI_E2E_MOCK_ENGINE || 'parakeet',
     // The saved engine; defaults like the backend's (nemotron3 in this fork).
     diarizationEngine: process.env.STENOAI_E2E_MOCK_DIARIZATION_ENGINE || 'nemotron3',

@@ -110,6 +110,8 @@ export function AiTab() {
   );
 }
 
+// "Power saving mode" is the user-facing name for processing_power_policy:
+// on = 'plugged_in' (record on battery, process once plugged in), off = 'always'.
 function ProcessingPowerSetting() {
   const policy = useProcessingPowerPolicySetting();
   const setPolicy = useSetProcessingPowerPolicy();
@@ -119,19 +121,13 @@ function ProcessingPowerSetting() {
       description={t('settings.ai.power.description')}
       noBorder
     >
-      <Select
-        value={policy.data ?? 'always'}
-        onValueChange={(v) => setPolicy.mutate(v as ProcessingPowerPolicy)}
+      <Switch
+        checked={policy.data === 'plugged_in'}
+        onCheckedChange={(on) => setPolicy.mutate((on ? 'plugged_in' : 'always') as ProcessingPowerPolicy)}
         disabled={policy.data === undefined || setPolicy.isPending}
-      >
-        <SelectTrigger className={COMPACT_TRIGGER} aria-label={t('settings.ai.power.label')}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="always">{t('settings.ai.power.always')}</SelectItem>
-          <SelectItem value="plugged_in">{t('settings.ai.power.pluggedIn')}</SelectItem>
-        </SelectContent>
-      </Select>
+        aria-label={t('settings.ai.power.label')}
+        data-power-saving
+      />
     </SettingRow>
   );
 }

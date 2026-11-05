@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * "Process meetings only when plugged in" (Settings → AI → When to process).
+ * "Process meetings only when plugged in" (Settings → AI → Power saving mode).
  *
  * Local transcription, speaker detection, summarisation and the live
  * transcript all run on this machine's CPU/GPU and drain a laptop battery
