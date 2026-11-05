@@ -785,15 +785,15 @@ class EchoBleedTests(unittest.TestCase):
 
     SYSTEM = [
         {"text": "Ik heb jouw planning bekeken en ik heb het gisteren nog kort even met de buren over gehad, want die gaan ook verbouwen.", "start": 86.5, "end": 91.5},
-        {"text": "En daar ben ik wel benieuwd naar hoe jij dat ziet.", "start": 92.1, "end": 93.7},
+        {"text": "En daar vraag ik me wel af hoe jij dat ziet.", "start": 92.1, "end": 93.7},
         {"text": "Hoe groot wordt de schuur eigenlijk of wat zijn de regels van de gemeente?", "start": 94.8, "end": 99.2},
         {"text": "Want ik hoor bijvoorbeeld ook van ja, kan je ons helpen met bijvoorbeeld de vergunning en dat soort zaken.", "start": 99.7, "end": 104.1},
         {"text": "Wat vinden we lastig?", "start": 104.3, "end": 105.4},
         {"text": "En hoe moeten we bijvoorbeeld het hout op tijd laten bezorgen en opslaan?", "start": 105.9, "end": 112.1},
-        {"text": "Ik ben benieuwd hoe jij dat ziet.", "start": 113.1, "end": 115.0},
+        {"text": "Ik vraag me af hoe jij dat ziet.", "start": 113.1, "end": 115.0},
         {"text": "Want ik kijk ernaar vanuit mijn eigen tuin en de klussen die ik al heb gedaan.", "start": 115.2, "end": 122.6},
     ]
-    ECHO = {"text": "want ik hoor bijvoorbeeld ook van ja kan je ons helpen met bijvoorbeeld de vergunning en dat soort zaken wat vinden we lastig en hoe moeten we bijvoorbeeld het hout op tijd laten bezorgen en zullen we zeggen opslaan en ik vind het ik ben benieuwd hoe jij dat ziet want ik kijk ernaar vanuit mijn eigen tuin en de klussen die ik al heb gedaan en", "start": 99.5, "end": 122.0}
+    ECHO = {"text": "want ik hoor bijvoorbeeld ook van ja kan je ons helpen met bijvoorbeeld de vergunning en dat soort zaken wat vinden we lastig en hoe moeten we bijvoorbeeld het hout op tijd laten bezorgen en zullen we zeggen opslaan en ik vind het ik vraag me af hoe jij dat ziet want ik kijk ernaar vanuit mijn eigen tuin en de klussen die ik al heb gedaan en", "start": 99.5, "end": 122.0}
 
     def test_long_run_on_echo_is_dropped_and_system_kept(self):
         own = {"text": "Nou dat is denk ik een stap te ver voor nu.", "start": 60.0, "end": 64.0}
