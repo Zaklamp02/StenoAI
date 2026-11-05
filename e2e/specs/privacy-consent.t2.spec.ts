@@ -3,7 +3,8 @@ import { realUserDataDir, fileSig } from '../fixtures/real-user-data';
 import { readUserConfig, writeUserConfig } from '../fixtures/user-config';
 
 /**
- * T2 — one-time privacy consent modal for upgraders. Model-free + deterministic:
+ * T2 — one-time privacy question for upgraders: the analytics choice (Share
+ * usage data / Not now) plus the launch-on-login disclosure. Model-free + deterministic:
  * seed a config.json that EXISTS but has no `privacy_notice_seen` key (an
  * existing install predating the marker). The backend migration
  * (Config._migrate_privacy_notice_seen) then resolves the marker to false, so
@@ -16,8 +17,8 @@ import { readUserConfig, writeUserConfig } from '../fixtures/user-config';
  */
 
 const MODAL = '[data-privacy-consent]';
-const ACK = '[data-privacy-ack]';
-const TELEMETRY_SWITCH = '[data-privacy-telemetry]';
+const DECLINE = '[data-analytics-decline]';
+const ACCEPT = '[data-analytics-accept]';
 const LAUNCH_SWITCH = '[data-privacy-launch]';
 
 /** Simulate an upgrader: a pre-existing config.json with no privacy marker. */
@@ -51,7 +52,7 @@ async function waitForConsentModal(page: import('@playwright/test').Page) {
     .toBe(true);
 }
 
-test('upgrader sees the consent modal; acknowledging marks it seen and it does not return', async ({
+test('upgrader sees the consent modal; "Not now" records a no, marks it seen and it does not return', async ({
   launchApp,
   userDataDir,
 }) => {
@@ -64,12 +65,11 @@ test('upgrader sees the consent modal; acknowledging marks it seen and it does n
   // The backend migration flipped the absent marker to false on first load.
   expect(readUserConfig(userDataDir).privacy_notice_seen).toBe(false);
 
-  // Analytics is off until explicitly enabled; login launch is independent.
-  await expect(page.locator(TELEMETRY_SWITCH)).toHaveAttribute('data-state', 'unchecked');
+  // Nothing is chosen for the user; login launch is a separate disclosure.
+  await expect(page.locator(ACCEPT)).toBeVisible();
   await expect(page.locator(LAUNCH_SWITCH)).toHaveAttribute('data-state', 'checked');
 
-  // Acknowledge via the primary button.
-  await page.locator(ACK).click();
+  await page.locator(DECLINE).click();
 
   // Backend truth: the marker is now true, forever.
   await expect
@@ -77,6 +77,9 @@ test('upgrader sees the consent modal; acknowledging marks it seen and it does n
       message: 'acknowledging flips privacy_notice_seen to true on disk',
     })
     .toBe(true);
+  // "Not now" is a recorded answer, so the question is not asked again.
+  expect(readUserConfig(userDataDir).telemetry_enabled).toBe(false);
+  expect(readUserConfig(userDataDir).telemetry_consent_given).toBe(true);
 
   // UI truth: the modal is gone and stays gone even after re-forcing the
   // neutral route (the gate query refetched true, so it can never reopen).
@@ -107,7 +110,13 @@ test('a config that already has the marker never shows the modal', async ({
 }) => {
   // Fresh installs are seeded privacy_notice_seen: true by the backend
   // migration; simulate that (and any already-acknowledged install) directly.
-  writeUserConfig(userDataDir, { user_name: 'Seen', privacy_notice_seen: true });
+  // The analytics question is answered too: an unanswered one asks once more
+  // on a machine that has models (onboarding-consent.t2 covers that side).
+  writeUserConfig(userDataDir, {
+    user_name: 'Seen',
+    privacy_notice_seen: true,
+    telemetry_consent_given: true,
+  });
 
   const { page } = await launchApp();
   // A model-free bundle auto-redirects to /setup once; the gate is one-shot so
@@ -138,7 +147,7 @@ test('a config that already has the marker never shows the modal', async ({
   }
 });
 
-test('consent modal toggles persist telemetry_enabled and launch_on_login', async ({
+test('consent modal persists launch_on_login and a yes to analytics', async ({
   launchApp,
   userDataDir,
 }) => {
@@ -148,22 +157,26 @@ test('consent modal toggles persist telemetry_enabled and launch_on_login', asyn
   const { page } = await launchApp();
   await waitForConsentModal(page);
 
-  // Analytics requires an explicit opt-in; launch on login is independent.
-  await expect(page.locator(TELEMETRY_SWITCH)).toHaveAttribute('aria-checked', 'false');
-  await page.locator(TELEMETRY_SWITCH).click();
-  await expect
-    .poll(() => readUserConfig(userDataDir).telemetry_enabled, {
-      message: 'telemetry toggle -> config.telemetry_enabled',
-    })
-    .toBe(true);
-  expect(readUserConfig(userDataDir).telemetry_consent_given).toBe(true);
-
+  // The launch toggle saves on its own, before the analytics answer closes
+  // the dialog.
   await page.locator(LAUNCH_SWITCH).click();
   await expect
     .poll(() => readUserConfig(userDataDir).launch_on_login, {
       message: 'launch-on-login toggle -> config.launch_on_login',
     })
     .toBe(false);
+
+  await page.locator(ACCEPT).click();
+  await expect
+    .poll(() => readUserConfig(userDataDir).telemetry_enabled, {
+      message: 'Share usage data -> config.telemetry_enabled',
+    })
+    .toBe(true);
+  expect(readUserConfig(userDataDir).telemetry_consent_given).toBe(true);
+  await expect
+    .poll(() => readUserConfig(userDataDir).privacy_notice_seen)
+    .toBe(true);
+  await expect(page.locator(MODAL)).toBeHidden();
 
   // Keystone: the real user-data dir is byte-for-byte untouched.
   expect(fileSig(realUserDataDir())).toBe(realDirBefore);

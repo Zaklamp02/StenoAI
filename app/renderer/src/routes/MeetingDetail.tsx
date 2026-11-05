@@ -18,6 +18,7 @@ import {
   Folder as FolderIcon,
   Globe,
   MoreHorizontal,
+  Bug,
   Mic,
   PencilLine,
   RefreshCw,
@@ -97,6 +98,8 @@ import { useReprocessBridge } from '@/hooks/reprocessBridgeStore';
 import { useRecording } from '@/hooks/useRecording';
 import { useAutoSummarizeSetting } from '@/hooks/useSettings';
 import { MEETING_TRANSFER_COPY, useExportMeetingPackage } from '@/hooks/useMeetingTransfer';
+import { DebugReportDialog } from '@/components/DebugReportDialog';
+import { meetingStemFromSummaryFile } from '@/hooks/useSpeakerSuggestions';
 
 const LAST_OPENED_KEY = 'steno-last-opened-meeting';
 
@@ -178,6 +181,8 @@ function DetailContent({
   // recording/processing). Without the old confirm dialog there is no other
   // place for that failure to show, so it must not stay silent.
   const [deleteError, setDeleteError] = React.useState<string | null>(null);
+  const [debugReportOpen, setDebugReportOpen] = React.useState(false);
+  const debugReportStem = meetingStemFromSummaryFile(info.summary_file);
   const deleteMeeting = useDeleteMeeting();
   const reprocess = useReprocessMeeting();
   const retranscribe = useRetranscribeMeeting();
@@ -1003,6 +1008,17 @@ function DetailContent({
                           : `Share with ${orgSession.data.orgId}`}
                     </button>
                   ))}
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-[color:var(--surface-hover)] disabled:opacity-50"
+                  style={{ color: 'var(--fg-1)' }}
+                  onClick={() => setDebugReportOpen(true)}
+                  disabled={!debugReportStem}
+                  data-debug-report-action
+                >
+                  <Bug className="size-[13px] shrink-0" style={{ color: 'var(--fg-2)' }} />
+                  {t('debugReport.menuItem')}
+                </button>
                 {/* Deletes straight away, no confirm step: the delete is a
                     soft-delete and the Undo toast (#234) is the safety net.
                     Asking first *and* offering undo made the flow feel heavy
@@ -1433,6 +1449,12 @@ function DetailContent({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <DebugReportDialog
+        meetingStem={debugReportStem}
+        open={debugReportOpen}
+        onOpenChange={setDebugReportOpen}
+      />
 
       <ConfirmDialog
         open={retranscribeOpen}

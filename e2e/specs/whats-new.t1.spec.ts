@@ -252,10 +252,10 @@ test("a manual request waits for privacy disclosure without stacking dialogs", a
       }
     ).__resolvePrivacyNotice(false);
   });
-  const privacy = page.getByRole("dialog", { name: "A quick note on privacy" });
+  const privacy = page.getByRole("dialog", { name: "Help improve Steno?" });
   await expect(privacy).toBeVisible();
   await expect(page.getByRole("dialog", { name: title })).toHaveCount(0);
-  await privacy.getByRole("button", { name: "Got it" }).click();
+  await privacy.getByRole("button", { name: "Not now" }).click();
   await expect(page.getByRole("dialog", { name: title })).toBeVisible();
   await expect(privacy).toHaveCount(0);
 });

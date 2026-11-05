@@ -8,7 +8,7 @@
 // The project key is PostHog's public ingestion key (write-only, it cannot
 // read data back), so it is safe in the shipped app. Developers can point a
 // dev build at a scratch project with STENOAI_POSTHOG_KEY / STENOAI_POSTHOG_HOST.
-const DEFAULT_POSTHOG_API_KEY = '';
+const DEFAULT_POSTHOG_API_KEY = 'phc_ya7fyMzm9NbGXotykPuVTArAw6zfNwpk9jmeEShZeZAz';
 const DEFAULT_POSTHOG_HOST = 'https://eu.i.posthog.com';
 
 function resolvePosthogConfig(env = process.env) {
