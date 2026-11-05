@@ -6,6 +6,8 @@ import {
 } from '@/lib/parakeetProgress';
 import type { ParakeetPullProgressEvent, SpeakerModelsProgressEvent } from '@/lib/ipc';
 import { DownloadProgressBar } from '@/components/DownloadProgressBar';
+import { AnalyticsConsentButtons, AnalyticsConsentDetails } from '@/components/onboarding/AnalyticsConsent';
+import { OnboardingTour } from '@/components/onboarding/OnboardingTour';
 import { speakerModelsStatusKey, useSpeakerModelsStatus } from '@/hooks/useSpeakerModels';
 import { useQueryClient } from '@tanstack/react-query';
 import { t } from '@/i18n';
@@ -28,7 +30,6 @@ import {
   useLaunchOnLoginSetting,
   useMarkPrivacyNoticeSeen,
   useSetLaunchOnLogin,
-  useSetTelemetry,
   useSetUserName,
   useTelemetrySetting,
   useUserName,
@@ -231,12 +232,16 @@ export function Setup() {
   const speakerModelsStep = useSetupStep('speakerModels');
   const ollamaStep = useSetupStep('ollamaAndModel');
 
-  // Telemetry choice surfaced here so users opt in/out during onboarding
-  // instead of having to find Settings → Advanced afterwards. Persists
-  // immediately via the same backend used by the Settings page.
+  // The analytics question opens onboarding when this install has never
+  // answered it, so a re-run from Settings skips straight to the steps.
+  // Settings -> Advanced changes the answer later.
   const telemetry = useTelemetrySetting();
-  const setTelemetry = useSetTelemetry();
-  const telemetryEnabled = telemetry.data?.telemetry_enabled ?? false;
+  // The local flag lets the user past even if persisting the answer fails;
+  // the upgrade prompt asks again on a later launch in that case.
+  const [analyticsAnswered, setAnalyticsAnswered] = React.useState(false);
+  const askAnalytics = telemetry.data?.telemetry_consent_answered === false && !analyticsAnswered;
+  // Setup finished and the user chose to continue: a few pointers first.
+  const [touring, setTouring] = React.useState(false);
   const keepRecordings = useKeepRecordingsSetting();
   const setKeepRecordings = useSetKeepRecordings();
 
@@ -255,13 +260,13 @@ export function Setup() {
   // traps the user in Setup. The shared hook flips the gate query synchronously
   // on success so the consent modal can't flash on the way home.
   const { mutateAsync: markPrivacyNoticeSeen } = useMarkPrivacyNoticeSeen();
-  const finishOnboarding = React.useCallback(async () => {
+  const finishOnboarding = React.useCallback(async (route = '/') => {
     try {
       await markPrivacyNoticeSeen();
     } catch {
       // best-effort; the consent modal is a soft disclosure, not a gate
     } finally {
-      navigate('/');
+      navigate(route);
     }
   }, [markPrivacyNoticeSeen, navigate]);
 
@@ -557,6 +562,36 @@ export function Setup() {
   const showSummaryChooser =
     !running && (statuses.ollama === 'waiting' || statuses.ollama === 'failed');
 
+  // Hold the page blank until the analytics answer is known, so a first run
+  // does not flash the setup steps before the welcome screen replaces them.
+  if (telemetry.isPending) return <div className="min-h-screen bg-background" />;
+
+  if (askAnalytics) {
+    return (
+      <div className="min-h-screen bg-background text-foreground" data-setup-welcome>
+        <div className="mx-auto max-w-[560px] px-8 py-16 text-center">
+          <Display className="mb-3">{t('setup.welcome.title')}</Display>
+          <Lead className="mb-10">{t('setup.welcome.lead')}</Lead>
+          <div className="rounded-md border border-border p-5 text-left">
+            <div className="text-sm font-medium text-foreground">
+              {t('setup.welcome.analyticsTitle')}
+            </div>
+            <Muted className="mb-4 mt-1">{t('setup.welcome.analyticsBody')}</Muted>
+            <AnalyticsConsentDetails />
+          </div>
+          <div className="mt-8">
+            <AnalyticsConsentButtons source="setup" onAnswered={() => setAnalyticsAnswered(true)} />
+          </div>
+          <Muted className="mt-4 text-[12px]">{t('setup.welcome.changeLater')}</Muted>
+        </div>
+      </div>
+    );
+  }
+
+  if (touring) {
+    return <OnboardingTour onFinish={(route) => void finishOnboarding(route)} />;
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-[560px] px-8 py-16">
@@ -784,27 +819,6 @@ export function Setup() {
           </div>
         )}
 
-        <div
-          className="mt-3 flex items-start gap-4 rounded-md border border-border p-4"
-          data-setup-telemetry
-        >
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-foreground">
-              Anonymous usage analytics
-            </div>
-            <Muted className="mt-0.5">
-              Off by default. If enabled, usage events go to Steno Labs through
-              PostHog; meeting content is excluded. Change this in Settings → Advanced.
-            </Muted>
-          </div>
-          <Switch
-            checked={telemetryEnabled}
-            onCheckedChange={(v) => setTelemetry.mutate({ enabled: v, source: 'setup' })}
-            disabled={telemetry.data === undefined}
-            aria-label="Anonymous usage analytics"
-          />
-        </div>
-
         <div className="mt-3 flex items-start gap-4 rounded-md border border-border p-4">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">{t('setup.save_recordings')}</div>
@@ -834,7 +848,7 @@ export function Setup() {
 
         <div className="mt-8 flex flex-col items-center gap-2">
           {done ? (
-            <Button size="lg" onClick={() => void finishOnboarding()}>
+            <Button size="lg" onClick={() => setTouring(true)}>
               Continue to app
             </Button>
           ) : (

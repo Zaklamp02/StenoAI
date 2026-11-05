@@ -7,6 +7,8 @@ const path = require('node:path');
 const {
   textLengthBucket,
   durationBucket,
+  pipelineCompletedProperties,
+  speakerFeedbackProperties,
   RENDERER_TRACK_EVENTS,
   RENDERER_TRACK_EVENT_PROPERTIES,
   RENDERER_TRACK_EVENT_VALUE_ALLOWLIST,
@@ -605,4 +607,167 @@ test('withTimeout supports a custom fallback value', async () => {
   const neverSettles = new Promise(() => {});
   const result = await withTimeout(neverSettles, 20, 'timed-out');
   assert.strictEqual(result, 'timed-out');
+});
+
+test('pipelineCompletedProperties sends only fixed keys with bucketed values', () => {
+  const props = pipelineCompletedProperties({
+    source: 'batch',
+    diarised: true,
+    dual_channel: true,
+    mic_speakers: 1,
+    system_speakers: 7,
+    window_coverage: 0.95,
+    duration_seconds: 1900,
+    diarization_engine: 'nemotron3',
+    speaker_identification: true,
+    title: 'Board meeting with Jitze',
+    transcript_text: 'confidential',
+  }, { engine: 'parakeet', notesGenerated: true });
+  assert.deepStrictEqual(props, {
+    source: 'batch',
+    asr_engine: 'parakeet',
+    diarization_engine: 'nemotron3',
+    diarised: true,
+    dual_channel: true,
+    mic_speakers: '1',
+    system_speakers: '5+',
+    window_coverage: '90-99%',
+    duration_bucket: '30-60m',
+    speaker_identification: true,
+    notes_generated: true,
+    mic_echo_dropped: 'unknown',
+    channel_bleed_collapsed: false,
+    mic_fragments_folded: 'unknown',
+    system_fragments_folded: 'unknown',
+    cross_channel_merge: 'none',
+    cross_channel_merge_count: '0',
+    cross_channel_merge_distance: 'none',
+    cross_channel_merge_overlap: 'none',
+    nearest_unmerged_distance: 'none',
+    nearest_unmerged_overlap: 'none',
+    cross_channel_skipped_erase_split: false,
+    echo_turns_dropped: '0',
+  });
+});
+
+test('pipelineCompletedProperties buckets bleed and merge decisions on their thresholds', () => {
+  const props = pipelineCompletedProperties({
+    mic_segments: 40,
+    mic_segments_dropped_as_echo: 12,
+    clusters_raw: { mic: 4, system: 2 },
+    clusters_after_fold: { mic: 2, system: 2 },
+    cross_channel_merges: [
+      { tier: 'fragment', distance: 0.05, overlap: null },
+      { tier: 'strong_echo', distance: 0.49, overlap: 0.95 },
+    ],
+    cross_channel_nearest_unmerged: { distance: 0.41, overlap: 0.58 },
+    echo_turns_dropped: 7,
+  });
+  assert.strictEqual(props.mic_echo_dropped, '30-60%');
+  assert.strictEqual(props.mic_fragments_folded, '2');
+  assert.strictEqual(props.system_fragments_folded, '0');
+  assert.strictEqual(props.cross_channel_merge, 'strong_echo');
+  assert.strictEqual(props.cross_channel_merge_count, '2');
+  assert.strictEqual(props.cross_channel_merge_distance, '0.40-0.52');
+  assert.strictEqual(props.cross_channel_merge_overlap, '90%+');
+  assert.strictEqual(props.nearest_unmerged_distance, '0.40-0.52');
+  assert.strictEqual(props.nearest_unmerged_overlap, '30-60%');
+  assert.strictEqual(props.echo_turns_dropped, '5+');
+});
+
+test('pipelineCompletedProperties collapses unexpected values to unknown', () => {
+  const props = pipelineCompletedProperties({
+    source: '/Users/someone/meeting.wav',
+    mic_speakers: 'Jitze',
+    system_speakers: -1,
+    window_coverage: 'all of it',
+    duration_seconds: null,
+    diarization_engine: 'a person name',
+    diarised: 'yes',
+  }, { engine: 'some-new-engine' });
+  assert.strictEqual(props.source, 'unknown');
+  assert.strictEqual(props.asr_engine, 'unknown');
+  assert.strictEqual(props.diarization_engine, 'none');
+  assert.strictEqual(props.mic_speakers, 'unknown');
+  assert.strictEqual(props.system_speakers, 'unknown');
+  assert.strictEqual(props.window_coverage, 'unknown');
+  assert.strictEqual(props.duration_bucket, 'unknown');
+  assert.strictEqual(props.diarised, false);
+  assert.strictEqual(props.notes_generated, false);
+});
+
+test('pipelineCompletedProperties tolerates a missing stats object', () => {
+  const props = pipelineCompletedProperties(null);
+  assert.strictEqual(props.source, 'unknown');
+  assert.strictEqual(props.window_coverage, 'unknown');
+});
+
+test('speakerFeedbackProperties buckets a correction on the suggestion thresholds', () => {
+  const props = speakerFeedbackProperties({
+    action: 'overrode_suggestion',
+    reassigned: false,
+    channel: 'system',
+    suggestion_status: 'possible',
+    blocked_by: { threshold: false, margin: true, stability: false, confirmed_meetings: false, hard_negative: false },
+    known_people: 7,
+    best_distance: 0.33,
+    runner_up_margin: 0.04,
+    best_confirmed_meetings: 3,
+    chosen_rank: 2,
+    chosen_distance: 0.37,
+    chosen_hard_negative_conflict: false,
+    chosen_confirmed_meetings: 1,
+    chosen_claimed_by_other_cluster: true,
+    speech_seconds: 45,
+    segment_count: 20,
+    merged_fragments: 1,
+    clusters_in_channel: 3,
+    same_channel_split: null,
+    cross_channel_split: { distance: 0.45, overlap: 0.7 },
+    suggested_was_invitee: 'no',
+    chosen_was_invitee: 'yes',
+    diarization_engine: 'nemotron3',
+    display_name: 'Jitze',
+    person_id: 'abc-123',
+  });
+  assert.strictEqual(props.action, 'overrode_suggestion');
+  assert.strictEqual(props.blocked_by_margin, true);
+  assert.strictEqual(props.blocked_by_threshold, false);
+  assert.strictEqual(props.best_distance, '0.30-0.40');
+  assert.strictEqual(props.runner_up_margin, '<0.05');
+  assert.strictEqual(props.chosen_rank, '2');
+  assert.strictEqual(props.chosen_distance, '0.30-0.40');
+  assert.strictEqual(props.known_people, '5+');
+  assert.strictEqual(props.cluster_speech, '20-60s');
+  assert.strictEqual(props.cluster_avg_turn, '1.55-3s');
+  assert.strictEqual(props.same_channel_split_distance, 'none');
+  assert.strictEqual(props.cross_channel_split_distance, '0.40-0.52');
+  assert.strictEqual(props.cross_channel_split_overlap, '60-90%');
+  assert.strictEqual(props.chosen_was_invitee, 'yes');
+  const dumped = JSON.stringify(props);
+  assert.ok(!dumped.includes('Jitze'));
+  assert.ok(!dumped.includes('abc-123'));
+  assert.ok(Object.values(props).every((v) => typeof v === 'string' || typeof v === 'boolean'));
+});
+
+test('speakerFeedbackProperties keeps a mixed-cluster marking to cluster facts', () => {
+  const props = speakerFeedbackProperties({
+    action: 'marked_multiple_speakers', channel: 'mic', speech_seconds: 400,
+    segment_count: 90, merged_fragments: 0, clusters_in_channel: 1, diarization_engine: 'sortformer',
+  });
+  assert.deepStrictEqual(props, {
+    action: 'marked_multiple_speakers',
+    channel: 'mic',
+    diarization_engine: 'sortformer',
+    cluster_speech: '5m+',
+    cluster_avg_turn: '3-8s',
+    merged_fragments: '0',
+    clusters_in_channel: '1',
+  });
+});
+
+test('speakerFeedbackProperties collapses unknown actions and ranks', () => {
+  const props = speakerFeedbackProperties({ action: 'something else', chosen_rank: 'Jitze' });
+  assert.strictEqual(props.action, 'unknown');
+  assert.strictEqual(props.chosen_rank, 'unknown');
 });

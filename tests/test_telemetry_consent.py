@@ -22,3 +22,13 @@ class TelemetryConsentTests(unittest.TestCase):
                     self.assertTrue(Config(config_path=path).get_telemetry_enabled())
                     self.assertTrue(config.set_telemetry_enabled(False))
                     self.assertFalse(Config(config_path=path).get_telemetry_enabled())
+
+    def test_either_answer_counts_as_answered(self):
+        for answer in (True, False):
+            with self.subTest(answer=answer), tempfile.TemporaryDirectory() as directory:
+                with patch.dict(os.environ, {"STENOAI_USER_DATA_DIR": directory}):
+                    path = Path(directory) / "config.json"
+                    config = Config(config_path=path)
+                    self.assertFalse(config.get_telemetry_consent_answered())
+                    self.assertTrue(config.set_telemetry_enabled(answer))
+                    self.assertTrue(Config(config_path=path).get_telemetry_consent_answered())
