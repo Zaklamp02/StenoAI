@@ -405,7 +405,7 @@ class TranscribeDiarisedMultiSpeakerTests(unittest.TestCase):
         with patch("src.transcriber._identity_matching_enabled", return_value=False), \
              patch(
                 "src.transcriber._reconcile_cross_channel_speakers",
-                side_effect=lambda tagged, mic, system: (tagged, mic, system),
+                side_effect=lambda tagged, mic, system, **_kwargs: (tagged, mic, system),
              ) as reconcile, \
              patch(
                 "src.transcriber._run_steno_diarize",
@@ -1867,6 +1867,93 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
 
         self.assertEqual(result, (tagged, mic_clusters, system_clusters))
 
+
+    def _long_echo_pair(self, distance, total_s, coincide):
+        # Eight turns of total_s / 8 seconds on each channel. ``coincide`` of
+        # each mic turn trails its system turn by 0.2 s; the rest falls in the
+        # silence after it.
+        length = total_s / 8
+        system_segments = [{"start": 20.0 * i, "end": 20.0 * i + length} for i in range(8)]
+        mic_segments = []
+        for s in system_segments:
+            mic_segments.append({"start": s["start"] + 0.2, "end": s["start"] + 0.2 + length * coincide})
+            if coincide < 1:
+                gap_start = s["end"] + 1.0
+                mic_segments.append({"start": gap_start, "end": gap_start + length * (1 - coincide)})
+        return self._echo_pair(distance, mic_segments, system_segments)
+
+    def test_room_coloured_echo_merges_when_a_minute_of_speech_coincides(self):
+        # Measured on a real call: the mic echo sat 0.48 from its system copy
+        # with 99.5% of 465 s of speech coinciding.
+        tagged, mic_clusters, system_clusters = self._long_echo_pair(0.48, 96.0, 1.0)
+
+        reconciled, mic_out, system_out = _reconcile_cross_channel_speakers(
+            tagged, mic_clusters, system_clusters,
+        )
+
+        self.assertEqual(set(mic_out), {"SPEAKER_0"})
+        self.assertEqual(reconciled[1][1:], ("Others", "echo", "system", "SPEAKER_0"))
+
+    def test_room_coloured_echo_needs_a_minute_of_speech(self):
+        tagged, mic_clusters, system_clusters = self._long_echo_pair(0.48, 40.0, 1.0)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+    def test_room_coloured_echo_needs_near_total_overlap(self):
+        # 75% coinciding passes the near tier's 60% but not the strong tier's 90%.
+        tagged, mic_clusters, system_clusters = self._long_echo_pair(0.48, 96.0, 0.75)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+    def test_strong_tier_stays_below_the_closest_distinct_voices(self):
+        tagged, mic_clusters, system_clusters = self._long_echo_pair(0.55, 96.0, 1.0)
+
+        result = _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+
+        self.assertEqual(result, (tagged, mic_clusters, system_clusters))
+
+    def test_merged_echo_reports_only_its_turns_that_repeat_the_system_copy(self):
+        segments = [{"start": 10.0 * i, "end": 10.0 * i + 6.0} for i in range(5)]
+        _tagged, mic_clusters, system_clusters = self._echo_pair(
+            0.16,
+            [{"start": s["start"] + 0.2, "end": s["end"] + 0.2} for s in segments],
+            segments,
+        )
+        tagged = [
+            (0.0, "You", "dat klopt helemaal", "mic", "SPEAKER_0"),
+            (10.0, "Others", "Zeshonderd euro per maand voor tweehonderd repository.", "system", "SPEAKER_0"),
+            (10.3, "__diar__You__SPEAKER_1", "600 euro per maand voor 200 repositories.", "mic", "SPEAKER_1"),
+            (30.0, "__diar__You__SPEAKER_1", "Alright, spreek later.", "mic", "SPEAKER_1"),
+            (40.0, "Others", "Volgens mij is het dit hem.", "system", "SPEAKER_0"),
+        ]
+        duplicates: set = set()
+
+        reconciled, _mic_out, _system_out = _reconcile_cross_channel_speakers(
+            tagged, mic_clusters, system_clusters, echo_duplicates_out=duplicates,
+        )
+
+        # The repeat goes; the words only the mic caught stay, under the
+        # remote speaker's label. The user's own turn is never tested.
+        self.assertEqual(duplicates, {2})
+        self.assertEqual(reconciled[3][1:], ("Others", "Alright, spreek later.", "system", "SPEAKER_0"))
+
+    def test_unmerged_clusters_report_no_duplicates(self):
+        tagged, mic_clusters, system_clusters = self._echo_pair(
+            0.55,
+            [{"start": 0.0, "end": 30.0}],
+            [{"start": 0.0, "end": 30.0}],
+        )
+        duplicates: set = set()
+
+        _reconcile_cross_channel_speakers(
+            tagged, mic_clusters, system_clusters, echo_duplicates_out=duplicates,
+        )
+
+        self.assertEqual(duplicates, set())
 
     def test_padding_cannot_turn_a_talkative_speaker_into_an_echo(self):
         # Many short system turns (12 s) between a talkative mic voice's
