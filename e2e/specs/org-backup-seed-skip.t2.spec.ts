@@ -201,3 +201,53 @@ test('org auto_share_default=false is honored: gate stays fail-closed and nothin
     await adapter.close();
   }
 });
+
+test('a policy without auto_share_default does not turn auto-share on', async ({
+  launchApp,
+  userDataDir,
+}) => {
+  // Only an explicit `true` may switch automatic org-wide sharing on. An
+  // older or misconfigured adapter that leaves the field out must not make
+  // every note and transcript visible to the whole organisation.
+  const adapter = await startMockAdapter({ policy: { shared_notes_enabled: true } });
+  try {
+    const { app, page } = await launchApp();
+    const encryptionAvailable = await app.evaluate(({ safeStorage }) =>
+      safeStorage.isEncryptionAvailable(),
+    );
+    test.skip(!encryptionAvailable, 'safeStorage unavailable on this runner');
+
+    const login = await page.evaluate(
+      (url) => (window as StenoWindow).stenoai.org.login(url, 'e2e@example.com', 'hunter2'),
+      adapter.url,
+    );
+    expect(login.success).toBe(true);
+
+    await expect
+      .poll(
+        async () => {
+          const ab = await page.evaluate(() =>
+            (window as StenoWindow).stenoai.org.getAutoBackup(),
+          );
+          return ab.org_auto_backup_preference_set === true ? ab.org_auto_backup_enabled : null;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(false);
+
+    const result = await page.evaluate(
+      (sf) =>
+        (window as StenoWindow).stenoai.org.tryAutoBackup({
+          summaryFile: sf,
+          title: 'No Policy Field Note',
+          body: '# No Policy Field Note\n\nbody',
+          visibility: 'org',
+        }),
+      path.join(userDataDir, 'output', 'no-policy-field_summary.json'),
+    );
+    expect(result.attempted).toBe(false);
+    expect(adapter.s3Puts()).toBe(0);
+  } finally {
+    await adapter.close();
+  }
+});

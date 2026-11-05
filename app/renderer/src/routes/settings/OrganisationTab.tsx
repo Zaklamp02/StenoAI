@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -169,21 +170,22 @@ export function OrganisationTab() {
           >
             <div className="min-w-0">
               <div className="text-[13px] font-medium" style={{ color: 'var(--fg-1)' }}>
-                Auto-back up new notes
+                {t('orgTab.autoShareLabel')}
               </div>
               <div
                 className="mt-0.5 text-[12px] leading-[1.5]"
                 style={{ color: 'var(--fg-2)', maxWidth: '52ch' }}
               >
-                Push every new note to your org's S3 once summarisation finishes. You can still
-                unshare individual notes from the Shared notes view.
+                {t('orgTab.autoShareDescription')}
               </div>
             </div>
             <Switch
-              checked={autoBackupQuery.data ?? true}
+              // Shown off until the stored value is known: an automatic
+              // org-wide share must never look on by default.
+              checked={autoBackupQuery.data ?? false}
               onCheckedChange={(v) => setAutoBackup.mutate(v)}
               disabled={autoBackupQuery.data === undefined || setAutoBackup.isPending}
-              aria-label="Auto-back up new notes to org"
+              aria-label={t('orgTab.autoShareLabel')}
             />
           </div>
         </div>

@@ -3373,11 +3373,10 @@
     "renderer/src/routes/settings/OrganisationTab.tsx": {
       "copy": [
         "Adapter URL",
-        "Auto-back up new notes",
-        "Auto-back up new notes to org",
         "Email",
         "Password",
-        "Push every new note to your org's S3 once summarisation finishes. You can still unshare individual notes from the Shared notes view.",
+        "Share new notes with your organisation",
+        "Share new notes with your organisation",
         "Sign in with Google",
         "Sign in with password",
         "Sign out",
@@ -3385,6 +3384,7 @@
         "Signing in…",
         "Single sign-on via your organisation's Google Workspace.",
         "Waiting for browser…",
+        "When a note is ready, it is uploaded to your organisation, including the full transcript, and everyone in the organisation can open it under Shared notes. You can unshare a note there. Off unless your organisation turns it on by default.",
         "https://steno-adapter.yourcompany.com",
         "or",
         "you@yourcompany.com",
