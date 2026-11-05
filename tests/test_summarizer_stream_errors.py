@@ -172,16 +172,18 @@ class AdapterStreamErrorTests(unittest.TestCase):
         return s
 
     def test_adapter_error_record_raises(self):
-        """An NDJSON {"type":"error"} record must raise, not end silently."""
+        """An NDJSON {"type":"error"} record must raise, not end silently,
+        and without the adapter's text: it is the upstream provider's and
+        can echo the prompt (src/provider_errors.py)."""
         s = self._adapter_summarizer()
         lines = [
             b'{"type": "chunk", "text": "partial"}\n',
-            b'{"type": "error", "error": "model not found"}\n',
+            b'{"type": "error", "error": "prompt CONFIDENTIAL_MARKER was rejected"}\n',
         ]
-        with mock.patch("urllib.request.urlopen", return_value=_FakeResp(lines)):
+        with mock.patch("src.summarizer.open_authenticated", return_value=_FakeResp(lines)):
             with self.assertRaises(RuntimeError) as ctx:
                 list(s._adapter_stream("prompt"))
-        self.assertIn("model not found", str(ctx.exception))
+        self.assertEqual(str(ctx.exception), "Adapter stream reported an error")
 
     def test_adapter_httperror_raises(self):
         import urllib.error
@@ -190,13 +192,13 @@ class AdapterStreamErrorTests(unittest.TestCase):
         http_err = urllib.error.HTTPError(
             "https://adapter.example.com/ai/chat/stream", 500, "Server Error", {}, None
         )
-        with mock.patch("urllib.request.urlopen", side_effect=http_err):
+        with mock.patch("src.summarizer.open_authenticated", side_effect=http_err):
             with self.assertRaises(urllib.error.HTTPError):
                 list(s._adapter_stream("prompt"))
 
     def test_adapter_transport_error_raises(self):
         s = self._adapter_summarizer()
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("connection reset")):
+        with mock.patch("src.summarizer.open_authenticated", side_effect=OSError("connection reset")):
             with self.assertRaises(OSError):
                 list(s._adapter_stream("prompt"))
 

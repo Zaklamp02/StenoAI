@@ -267,5 +267,7 @@
   "debugReport.sentBody": "Mention this report ID when you tell us what went wrong: {{id}}",
   "debugReport.copyId": "Copy ID",
   "debugReport.copied": "Copied",
-  "debugReport.close": "Close"
+  "debugReport.close": "Close",
+  "privacy.optionalAnalytics": "Anonymous usage analytics is off by default. If enabled, it sends crash and usage signals to StenoLabs via PostHog, excluding meeting content. Launch on login is a separate setting. You can change either preference anytime in Settings.",
+  "aiTab.cloudKeyReentry": "Your saved key was entered for a different provider or address, so it is not sent here. Enter the key for this one."
 }

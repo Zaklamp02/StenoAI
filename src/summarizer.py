@@ -14,6 +14,9 @@ from .models import MeetingTranscript, ActionItem, Decision
 from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
 from .meeting_context import MeetingContext
 from . import ollama_manager
+from .endpoint_policy import CLOUD_KEY_REENTER_MESSAGE, FIRST_PARTY_ORIGINS, require_secure_endpoint
+from .provider_errors import safe_error_text
+from .secure_http import RedirectRefused, open_authenticated
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +195,13 @@ class OllamaSummarizer:
         self.anthropic_client = None
         self.cloud_provider = None
         self.ollama_process = None
+        # Checked again at use: a value saved by an older build, or by hand,
+        # never passed the setter's transport rule (src/endpoint_policy.py).
+        # Only when it is about to be used, so a stale unused value does not
+        # break the local provider.
         self.remote_url = config.get_remote_ollama_url()
+        if self.ai_provider == "remote":
+            self.remote_url = require_secure_endpoint(self.remote_url)
         # Bedrock-specific state. Lazily populated only when cloud_provider == 'bedrock'.
         self.bedrock_api_key: Optional[str] = None
         self.bedrock_region: str = ""
@@ -203,7 +212,7 @@ class OllamaSummarizer:
             # org adapter, which holds the Anthropic key server-side. The
             # desktop never sees the provider key. URL + JWT come from
             # env vars set by Electron when a session is active.
-            self.adapter_url = config.get_adapter_url()
+            self.adapter_url = require_secure_endpoint(config.get_adapter_url())
             self.adapter_token = config.get_adapter_token()
             # Model name is informational — the adapter is configured with
             # its own DEFAULT_MODEL and we omit `model` from the request
@@ -221,10 +230,12 @@ class OllamaSummarizer:
             # Cloud mode: use OpenAI-compatible or Anthropic API
             cloud_api_key = config.get_cloud_api_key()
             self.cloud_provider = config.get_cloud_provider()
-            cloud_api_url = config.get_cloud_api_url()
+            cloud_api_url = require_secure_endpoint(config.get_cloud_api_url())
             self.model_name = model_name or config.get_cloud_model()
 
             if not cloud_api_key:
+                if config.cloud_key_bound_elsewhere():
+                    raise ValueError(CLOUD_KEY_REENTER_MESSAGE)
                 raise ValueError("Cloud API key is not configured. Set it in Settings > AI.")
 
             if self.cloud_provider == "anthropic":
@@ -232,7 +243,10 @@ class OllamaSummarizer:
                     from anthropic import Anthropic
                 except ImportError:
                     raise ImportError("anthropic package is required for Anthropic cloud mode. pip install anthropic")
-                self.anthropic_client = Anthropic(api_key=cloud_api_key)
+                # Explicit base URL: the SDK would otherwise honour an
+                # ANTHROPIC_BASE_URL from the environment and send the key
+                # past its destination binding (F04).
+                self.anthropic_client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
                 logger.info(f"Anthropic provider initialized: model={self.model_name}")
             elif self.cloud_provider == "bedrock":
                 # No SDK — we call Bedrock Converse directly over HTTPS with
@@ -254,7 +268,12 @@ class OllamaSummarizer:
                     from openai import OpenAI
                 except ImportError:
                     raise ImportError("openai package is required for cloud mode. pip install openai")
-                base_url = cloud_api_url if self.cloud_provider == "custom" and cloud_api_url else None
+                # Never None: the SDK would read OPENAI_BASE_URL from the
+                # environment and send the key past its binding (F04).
+                base_url = (
+                    cloud_api_url if self.cloud_provider == "custom"
+                    else FIRST_PARTY_ORIGINS["openai"] + "/v1"
+                )
                 self.cloud_client = OpenAI(api_key=cloud_api_key, base_url=base_url)
                 logger.info(f"Cloud provider initialized: model={self.model_name}")
 
@@ -877,7 +896,7 @@ class OllamaSummarizer:
                 return response.choices[0].message.content.strip()
 
             except Exception as e:
-                logger.error(f"Cloud API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Cloud API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("OpenAI chat failed after all retries")
@@ -914,10 +933,13 @@ class OllamaSummarizer:
                     logger.info(f"Adapter API retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(5)
                 req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                with open_authenticated(req, timeout=timeout_seconds) as resp:
                     body = _json.loads(resp.read().decode("utf-8"))
                 return (body.get("reply") or "").strip()
             except urllib.error.HTTPError as e:
+                if isinstance(e, RedirectRefused):
+                    # A redirect will not stop being one on retry.
+                    raise
                 # 401/403 won't fix themselves — abort retry loop early so
                 # the user sees the auth error rather than waiting through
                 # three pointless backoffs.
@@ -931,7 +953,7 @@ class OllamaSummarizer:
                 if attempt == max_retries - 1:
                     raise
             except Exception as e:
-                logger.error(f"Adapter API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Adapter API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Adapter chat failed after all retries")
@@ -965,7 +987,7 @@ class OllamaSummarizer:
 
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            with open_authenticated(req, timeout=timeout_seconds) as resp:
                 for raw_line in resp:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -981,8 +1003,9 @@ class OllamaSummarizer:
                         if text:
                             yield text
                     elif kind == "error":
-                        logger.error(f"Adapter stream error: {record.get('error')}")
-                        raise RuntimeError(f"Adapter stream error: {record.get('error')}")
+                        # The adapter's error text is the provider's; keep it out.
+                        logger.error("Adapter stream reported an error")
+                        raise RuntimeError("Adapter stream reported an error")
                     elif kind == "done":
                         return
         except urllib.error.HTTPError as e:
@@ -992,7 +1015,7 @@ class OllamaSummarizer:
                 logger.error(f"Adapter streaming failed: HTTP {e.code}")
             raise
         except Exception as e:
-            logger.error(f"Adapter streaming failed: {e}")
+            logger.error(f"Adapter streaming failed: {safe_error_text(e)}")
             raise
 
     def _anthropic_chat(self, prompt: str, timeout_seconds: int = 300) -> str:
@@ -1016,7 +1039,7 @@ class OllamaSummarizer:
                 return response.content[0].text.strip()
 
             except Exception as e:
-                logger.error(f"Anthropic API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Anthropic API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Anthropic chat failed after all retries")
@@ -1074,7 +1097,7 @@ class OllamaSummarizer:
                     logger.info(f"Bedrock API retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(5)
                 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                with open_authenticated(req, timeout=timeout_seconds) as resp:
                     payload = _json.loads(resp.read().decode("utf-8"))
                 # Converse response shape:
                 #   { "output": { "message": { "content": [ { "text": "..." } ] } }, ... }
@@ -1097,11 +1120,8 @@ class OllamaSummarizer:
                 # 401/403 = bad credentials, 404 = wrong region or model id.
                 # None of these recover with retries — abort early so the
                 # user sees the actual error rather than 15 s of silence.
-                err_body = ""
-                try:
-                    err_body = e.read().decode("utf-8", errors="replace")[:500]
-                except Exception:
-                    pass
+                # The response body is never read into a message: Bedrock's
+                # error text can echo the request (src/provider_errors.py).
                 if e.code in (401, 403):
                     raise RuntimeError(
                         f"Bedrock rejected the API key ({e.code}). "
@@ -1110,14 +1130,13 @@ class OllamaSummarizer:
                 if e.code == 404:
                     raise RuntimeError(
                         f"Bedrock could not find model '{target_id}' in {self.bedrock_region}. "
-                        f"Check the model id and region, or set a cross-region inference profile. "
-                        f"Detail: {err_body}"
+                        f"Check the model id and region, or set a cross-region inference profile."
                     )
-                logger.error(f"Bedrock API attempt {attempt + 1} failed: HTTP {e.code} {err_body}")
+                logger.error(f"Bedrock API attempt {attempt + 1} failed: HTTP {e.code}")
                 if attempt == max_retries - 1:
-                    raise RuntimeError(f"Bedrock HTTP {e.code}: {err_body}")
+                    raise RuntimeError(f"Bedrock HTTP {e.code}")
             except Exception as e:
-                logger.error(f"Bedrock API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Bedrock API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Bedrock chat failed after all retries")
@@ -1449,7 +1468,7 @@ Return ONLY the response in this exact JSON format:
                 return None
                 
         except Exception as e:
-            logger.error(f"Ollama API call failed: {e}")
+            logger.error(f"Ollama API call failed: {safe_error_text(e)}")
             logger.error(f"Model used: {self.model_name}")
             logger.error(f"Transcript length: {len(transcript)} characters")
             logger.error(f"Error type: {type(e).__name__}")
@@ -1610,7 +1629,7 @@ TRANSCRIPT:
                         for text in stream.text_stream:
                             yield text
                 except Exception as e:
-                    logger.error(f"Anthropic streaming failed: {e}")
+                    logger.error(f"Anthropic streaming failed: {safe_error_text(e)}")
                     raise
             elif self.cloud_provider == "bedrock":
                 # Bedrock's /converse-stream uses amazon eventstream framing
@@ -1626,7 +1645,7 @@ TRANSCRIPT:
                     if text:
                         yield text
                 except Exception as e:
-                    logger.error(f"Bedrock summarisation failed: {e}")
+                    logger.error(f"Bedrock summarisation failed: {safe_error_text(e)}")
                     raise
             else:
                 try:
@@ -1642,7 +1661,7 @@ TRANSCRIPT:
                         if content:
                             yield content
                 except Exception as e:
-                    logger.error(f"OpenAI streaming failed: {e}")
+                    logger.error(f"OpenAI streaming failed: {safe_error_text(e)}")
                     raise
             return
 
@@ -1650,7 +1669,7 @@ TRANSCRIPT:
         try:
             yield from self._stream_direct(prompt)
         except Exception as e:
-            logger.error(f"Ollama streaming failed: {e}")
+            logger.error(f"Ollama streaming failed: {safe_error_text(e)}")
             raise
 
     def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None,
