@@ -1653,6 +1653,43 @@ class ReconcileCrossChannelSpeakersTests(unittest.TestCase):
             {"You", "Others", "Speaker 2", "Speaker 3"},
         )
 
+    def test_stats_report_merge_tiers_and_the_nearest_unmerged_pair(self):
+        mic_clusters = {
+            "SPEAKER_0": self._cluster([1.0, 0.0, 0.0]),
+            "SPEAKER_1": self._cluster([0.0, 1.0, 0.0]),
+            "SPEAKER_2": self._cluster([0.0, 0.0, 1.0]),
+        }
+        system_clusters = {
+            "SPEAKER_0": self._cluster([1.0, 0.0, 0.0]),
+            "SPEAKER_1": self._cluster([0.0, 0.0, 1.0]),
+            "SPEAKER_2": self._cluster([0.0, 1.0, 0.0]),
+        }
+        tagged = [
+            (0.0, "You", "the longer direct local turn", "mic", "SPEAKER_0"),
+            (1.0, "Others", "echo", "system", "SPEAKER_0"),
+            (2.0, "__diar__You__SPEAKER_1", "echo", "mic", "SPEAKER_1"),
+            (3.0, "__diar__Others__SPEAKER_2", "the longer direct remote turn", "system", "SPEAKER_2"),
+            (4.0, "__diar__You__SPEAKER_2", "small", "mic", "SPEAKER_2"),
+            (5.0, "__diar__Others__SPEAKER_1", "another longer remote turn", "system", "SPEAKER_1"),
+        ]
+        stats: dict = {}
+        _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters, stats_out=stats)
+
+        self.assertEqual(stats["cross_channel_pairs"], 9)
+        self.assertEqual([m["tier"] for m in stats["cross_channel_merges"]], ["fragment", "fragment"])
+        # The You/Others pair is identical but deliberately not merged, so it
+        # is the nearest unmerged pair.
+        self.assertAlmostEqual(stats["cross_channel_nearest_unmerged"]["distance"], 0.0)
+        self.assertFalse(stats["cross_channel_skipped_erase_split"])
+        self.assertEqual(stats["echo_turns_dropped"], 0)
+
+    def test_stats_are_filled_even_when_nothing_can_be_compared(self):
+        stats: dict = {}
+        _reconcile_cross_channel_speakers([], {}, {}, stats_out=stats)
+        self.assertEqual(stats["cross_channel_pairs"], 0)
+        self.assertEqual(stats["cross_channel_merges"], [])
+        self.assertIsNone(stats["cross_channel_nearest_unmerged"])
+
     def test_ambiguous_near_ties_are_not_merged(self):
         # Both system clusters sit 20 degrees either side of the mic cluster:
         # equally close to it (0.06) but too far apart (0.23) to be fragments
