@@ -1274,6 +1274,37 @@ def _recorded_at_override():
         return None
 
 
+def _print_pipeline_stats(transcript_data, source, output_dir=None, meeting_stem=None):
+    """Emit content-free stats for the shell's pipeline_completed event.
+
+    With a meeting stem, also keeps them as ``{stem}_pipeline.json`` next to
+    the note, which the per-meeting debug report reads later (the decisions
+    are made in memory and are otherwise gone once processing ends).
+
+    Best-effort: statistics must never fail a meeting, so any error here is
+    logged and the line is simply not printed.
+    """
+    try:
+        from src.config import get_config
+        from src.pipeline_stats import pipeline_stats
+        from src.transcriber import _identity_matching_enabled
+
+        stats = pipeline_stats(
+            transcript_data,
+            source=source,
+            diarization_engine=(
+                get_config().get_diarization_engine() if sys.platform == "darwin" else None
+            ),
+            speaker_identification=_identity_matching_enabled(),
+        )
+        print(f"PIPELINE_STATS:{json.dumps(stats)}", flush=True)
+        if output_dir is not None and meeting_stem:
+            from src.pipeline_stats import pipeline_stats_path
+            _atomic_write_json(pipeline_stats_path(Path(output_dir), meeting_stem), stats)
+    except Exception as e:
+        logger.warning("Could not compute pipeline stats: %s", e)
+
+
 @cli.command(name='process-streaming')
 @click.argument('audio_file', default='')
 @click.option('--name', '-n', default='Recording', help='Session name')
@@ -1477,6 +1508,14 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # fallback, even though that fallback is a successful note creation.
         print(f"TRANSCRIPTION_SOURCE:{'live' if is_live_transcript else 'batch'}", flush=True)
         print(f"TRANSCRIPTION_COMPLETE:{len(transcript_text)}", flush=True)
+        # A continuation's audio stem belongs to no note, so its stats are
+        # sent but not kept.
+        _print_pipeline_stats(
+            transcript_data,
+            "live" if is_live_transcript else "batch",
+            output_dir=None if append_to else recorder.output_dir,
+            meeting_stem=None if append_to else Path(audio_file).stem,
+        )
 
         # Continue-recording (append) path: fold this segment's transcript
         # into the target note, mark it stale, and stop — no summary, no
@@ -5776,6 +5815,32 @@ def delete_person_profile(person_id):
         sys.exit(1)
 
 
+def _diarization_engine_setting():
+    """The saved speaker-detection engine, or None off macOS."""
+    if sys.platform != "darwin":
+        return None
+    from src.config import get_config
+    return get_config().get_diarization_engine()
+
+
+def _record_speaker_feedback(build) -> Optional[dict]:
+    """Build one speaker-review feedback record and keep it locally.
+
+    Best-effort by design: the review action already succeeded, and nothing
+    about measuring it may turn that into a failure. Returns the record for
+    the shell (which decides whether to send it), or None.
+    """
+    from src.config import get_user_data_dir
+    from src.speaker_feedback import append_feedback_log
+    try:
+        record = build()
+    except Exception as error:  # noqa: BLE001 - feedback must never fail a review
+        logger.warning("Could not compute speaker feedback: %s", error)
+        return None
+    append_feedback_log(get_user_data_dir(), record)
+    return record
+
+
 @cli.command(name='confirm-speaker')
 @click.argument('meeting_stem')
 @click.argument('channel')
@@ -5943,6 +6008,8 @@ def confirm_speaker(
     target_ids = {(channel, sid) for sid in fragment_ids}
     try:
         profiles = config.get_person_profiles()
+        # As the review panel saw them, for the feedback record below.
+        profiles_before = profiles
         # Every confirmed profile from this meeting can participate in the
         # evidence and Participants updates below. Do not let a persisted
         # reserved/self lookalike become biometric or display evidence just
@@ -6434,8 +6501,33 @@ def confirm_speaker(
             }))
             sys.exit(1)
 
+    def _build_feedback():
+        from src.config import get_user_data_dir
+        from src.speaker_feedback import correction_feedback, load_invitees, load_person_contacts
+        merged_by_channel, resolutions = {}, {}
+        for channel_name, data in (sidecar.get("channels") or {}).items():
+            merged_by_channel[channel_name], resolutions[channel_name] = (
+                merge_same_channel_fragments(clusters_from_sidecar_channel(meeting_stem, data))
+            )
+        return correction_feedback(
+            meeting_stem=meeting_stem,
+            channel=channel,
+            resolved_id=resolved_id,
+            merged_by_channel=merged_by_channel,
+            id_resolution_by_channel=resolutions,
+            raw_channels=sidecar.get("channels") or {},
+            profiles_before=profiles_before,
+            chosen_person_id=None if new_person else person["person_id"],
+            reassigned=bool(reassigned_from),
+            run_matches=lambda prototype: prototype_run_matches(prototype, run_id),
+            invitees=load_invitees(output_dir, meeting_stem),
+            contacts=load_person_contacts(get_user_data_dir()),
+            diarization_engine=_diarization_engine_setting(),
+        )
+
     print(json.dumps({
         "success": True,
+        "feedback": _record_speaker_feedback(_build_feedback),
         "person_id": person["person_id"],
         "display_name": person["display_name"],
         "prototype_id": prototype["prototype_id"],
@@ -7059,8 +7151,25 @@ def mark_speaker_cluster(
                 }))
                 sys.exit(1)
 
+    def _build_feedback():
+        from src.speaker_feedback import mixed_cluster_feedback
+        return mixed_cluster_feedback(
+            channel=channel,
+            context=clusters[resolved_id][1],
+            clusters_in_channel=len(clusters),
+            diarization_engine=_diarization_engine_setting(),
+        )
+
+    # Only a new "several people" marking is a correction of the diarizer;
+    # clearing one is not, and a cluster whose reach could not be computed
+    # has no numbers to report.
+    feedback = (
+        _record_speaker_feedback(_build_feedback)
+        if multiple and resolved_id in clusters else None
+    )
     print(json.dumps({
         "success": True,
+        "feedback": feedback,
         "meeting_id": meeting_stem,
         "channel": channel,
         "diarization_speaker_id": diarization_speaker_id,
@@ -9106,10 +9215,65 @@ def get_telemetry():
 
     result = {
         "telemetry_enabled": enabled,
+        "telemetry_consent_answered": config.get_telemetry_consent_answered(),
+        "speaker_feedback_sharing": config.get_speaker_feedback_sharing(),
         "anonymous_id": anonymous_id
     }
 
     print(json.dumps(result, indent=2))
+
+
+@cli.command(name='set-speaker-feedback-sharing')
+@click.argument('enabled', type=bool)
+def set_speaker_feedback_sharing(enabled):
+    """Allow (True) or stop (False) sending speaker-review feedback."""
+    from src.config import get_config
+
+    config = get_config()
+    ok = config.set_speaker_feedback_sharing(enabled)
+    print(json.dumps({"success": ok, "speaker_feedback_sharing": config.get_speaker_feedback_sharing()}))
+    if not ok:
+        sys.exit(1)
+
+
+@cli.command(name='debug-report')
+@click.argument('meeting_stem')
+def debug_report(meeting_stem):
+    """Print a content-free debug report for one meeting (src.debug_report).
+
+    Builds it only; sending is the shell's job, after the user has seen it.
+    """
+    from src.config import get_config, get_data_dirs
+    from src.debug_report import build_debug_report
+    from src.speaker_schema import validate_meeting_stem
+
+    try:
+        validate_meeting_stem(meeting_stem)
+    except ValueError as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        sys.exit(1)
+    config = get_config()
+    settings = {
+        "transcription_engine": config.get_transcription_engine(),
+        "diarization_engine": _diarization_engine_setting(),
+        "speaker_identification": config.get_identity_matching_enabled(),
+        "language": config.get_language(),
+        "keep_recordings": config.get_keep_recordings(),
+    }
+    report = build_debug_report(
+        get_data_dirs()["output"], meeting_stem,
+        profiles=config.get_person_profiles(), settings=settings,
+    )
+    print(json.dumps({"success": True, "report": report}))
+
+
+@cli.command(name='speaker-feedback-summary')
+def speaker_feedback_summary():
+    """How often speaker suggestions were right, from the local log."""
+    from src.config import get_user_data_dir
+    from src.speaker_feedback import feedback_summary
+
+    print(json.dumps({"success": True, **feedback_summary(get_user_data_dir())}))
 
 
 @cli.command()

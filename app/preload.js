@@ -163,6 +163,8 @@ const stenoai = {
   },
 
   meetings: {
+    getDebugReport: (meetingStem) => invoke('get-debug-report', meetingStem),
+    sendDebugReport: (meetingStem) => invoke('send-debug-report', meetingStem),
     cancelProcessing: (summaryFile) => invoke('cancel-processing', summaryFile),
     getLanguage: (summaryFile) => invoke('get-note-language', summaryFile),
     setLanguage: (summaryFile, code) => invoke('set-note-language', summaryFile, code),
@@ -315,6 +317,8 @@ const stenoai = {
     setRecordHotkey: (v) => invoke('set-record-hotkey', v),
     getTelemetry: () => invoke('get-telemetry'),
     setTelemetry: (v, source) => invoke('set-telemetry', v, source),
+    setSpeakerFeedbackSharing: (v) => invoke('set-speaker-feedback-sharing', v),
+    getSpeakerFeedbackSummary: () => invoke('get-speaker-feedback-summary'),
     getDockIcon: () => invoke('get-dock-icon'),
     setDockIcon: (v) => invoke('set-dock-icon', v),
     getMenuBarIcon: () => invoke('get-menu-bar-icon'),

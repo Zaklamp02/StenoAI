@@ -2210,6 +2210,7 @@ def _consolidate_speakers(
     mic_clusters: dict,
     system_clusters: dict,
     echo_duplicates_out: Optional[set] = None,
+    stats_out: Optional[dict] = None,
 ) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict, dict]:
     """Merge one meeting's duplicate speaker identities.
 
@@ -2221,11 +2222,22 @@ def _consolidate_speakers(
     Folding keeps one output turn per input turn, so the indices
     _reconcile_cross_channel_speakers adds to ``echo_duplicates_out`` point
     into the caller's ``tagged``.
+
+    ``stats_out``, when given, receives content-free counts of what was
+    merged (see _reconcile_cross_channel_speakers) for pipeline_completed
+    and the debug report.
     """
+    raw_counts = {"mic": len(mic_clusters or {}), "system": len(system_clusters or {})}
     tagged, mic_clusters = _fold_same_channel_fragments(tagged, mic_clusters, "mic")
     tagged, system_clusters = _fold_same_channel_fragments(tagged, system_clusters, "system")
+    if stats_out is not None:
+        stats_out["clusters_raw"] = raw_counts
+        stats_out["clusters_after_fold"] = {
+            "mic": len(mic_clusters or {}), "system": len(system_clusters or {}),
+        }
     return _reconcile_cross_channel_speakers(
-        tagged, mic_clusters, system_clusters, echo_duplicates_out=echo_duplicates_out,
+        tagged, mic_clusters, system_clusters,
+        echo_duplicates_out=echo_duplicates_out, stats_out=stats_out,
     )
 
 
@@ -2280,6 +2292,7 @@ def _reconcile_cross_channel_speakers(
     mic_clusters: dict,
     system_clusters: dict,
     echo_duplicates_out: Optional[set] = None,
+    stats_out: Optional[dict] = None,
 ) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict, dict]:
     """Collapse unambiguous mic/system copies of the same acoustic speaker.
 
@@ -2304,7 +2317,21 @@ def _reconcile_cross_channel_speakers(
     Indices of a merged mic cluster's turns that repeat the system text are
     added to ``echo_duplicates_out`` for the caller to drop; the system
     channel's turns are never reported.
+
+    ``stats_out``, when given, receives the decision in numbers only: how
+    many pairs were compared, each merge's tier ("fragment", "echo" or
+    "strong_echo") with its distance and speech overlap, and the closest
+    pair that was NOT merged. That near miss is what says whether an echo
+    slipped past CROSS_CHANNEL_ECHO_MAX_DISTANCE or its overlap floor.
     """
+    stats = stats_out if stats_out is not None else {}
+    stats.update({
+        "cross_channel_pairs": 0,
+        "cross_channel_merges": [],
+        "cross_channel_nearest_unmerged": None,
+        "cross_channel_skipped_erase_split": False,
+        "echo_turns_dropped": 0,
+    })
     if not tagged or not mic_clusters or not system_clusters:
         return tagged, mic_clusters, system_clusters
 
@@ -2344,8 +2371,29 @@ def _reconcile_cross_channel_speakers(
                     else CROSS_CHANNEL_ECHO_STRONG_MIN_SPEECH_S,
                 )
 
+    stats["cross_channel_pairs"] = len(distances)
     if not distances:
         return tagged, mic_clusters, system_clusters
+
+    def _record_nearest_unmerged(merged_pairs: set) -> None:
+        unmerged = [
+            (distance, pair) for pair, distance in distances.items()
+            if pair not in merged_pairs
+        ]
+        if not unmerged:
+            return
+        distance, pair = min(unmerged)
+        stats["cross_channel_nearest_unmerged"] = {
+            "distance": distance,
+            "overlap": overlaps.get(pair),
+        }
+
+    def _merge_tier(distance: float) -> str:
+        if distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
+            return "fragment"
+        if distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE:
+            return "echo"
+        return "strong_echo"
 
     def _eligible(pair: tuple[str, str], distance: float) -> bool:
         if distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
@@ -2394,6 +2442,7 @@ def _reconcile_cross_channel_speakers(
             matches.append((mic_sid, system_sid, distance))
 
     if not matches:
+        _record_nearest_unmerged(set())
         return tagged, mic_clusters, system_clusters
 
     text_weights: dict[tuple[str, str], int] = {}
@@ -2409,6 +2458,8 @@ def _reconcile_cross_channel_speakers(
     system_out = dict(system_clusters)
     aliases: dict[tuple[str, str], tuple[str, str, str]] = {}
     merged_mic_sids: set = set()
+    merged_pairs: set = set()
+    merges: list = []
     for mic_sid, system_sid, distance in matches:
         mic_key = ("mic", mic_sid)
         system_key = ("system", system_sid)
@@ -2436,6 +2487,12 @@ def _reconcile_cross_channel_speakers(
             continue
         aliases[alias_key] = (*canonical_key, canonical_label)
         merged_mic_sids.add(mic_sid)
+        merged_pairs.add((mic_sid, system_sid))
+        merges.append({
+            "tier": _merge_tier(distance),
+            "distance": distance,
+            "overlap": overlaps.get((mic_sid, system_sid)),
+        })
 
         canonical_out = mic_out if canonical_key[0] == "mic" else system_out
         alias_out = mic_out if alias_key[0] == "mic" else system_out
@@ -2467,6 +2524,7 @@ def _reconcile_cross_channel_speakers(
             distance, mic_weight, system_weight,
         )
 
+    _record_nearest_unmerged(merged_pairs)
     if not aliases:
         return tagged, mic_clusters, system_clusters
 
@@ -2486,7 +2544,9 @@ def _reconcile_cross_channel_speakers(
     }
     if len(original_labels) > 1 and len(resolved_labels) <= 1:
         logger.info("Cross-channel speaker reconciliation skipped: would erase speaker split")
+        stats["cross_channel_skipped_erase_split"] = True
         return tagged, mic_clusters, system_clusters
+    stats["cross_channel_merges"] = merges
     if echo_duplicates_out is not None and merged_mic_sids:
         duplicates = _echo_duplicate_turns(tagged, merged_mic_sids)
         if duplicates:
@@ -2495,6 +2555,7 @@ def _reconcile_cross_channel_speakers(
                 len(duplicates),
             )
         echo_duplicates_out.update(duplicates)
+        stats["echo_turns_dropped"] = len(duplicates)
     return reconciled, mic_out, system_out
 
 
@@ -4469,15 +4530,25 @@ class WhisperTranscriber:
             #    remaining content is also bleed — collapse to mic-only.
             #    The first pass usually handles things and this is a
             #    backstop for catastrophic bleed.
+            # Counts only, for pipeline_completed and the debug report.
+            diagnostics: dict = {
+                "mic_segments": len(mic_segments or []),
+                "mic_segments_dropped_as_echo": 0,
+                "channel_bleed_collapsed": False,
+            }
             if mic_segments and system_segments:
                 mic_segments, system_segments = _drop_per_segment_bleed(
                     mic_segments, system_segments,
+                )
+                diagnostics["mic_segments_dropped_as_echo"] = (
+                    diagnostics["mic_segments"] - len(mic_segments)
                 )
             if mic_segments and system_segments:
                 mic_text = ' '.join(s.get('text', '') for s in mic_segments)
                 sys_text = ' '.join(s.get('text', '') for s in system_segments)
                 similarity = _token_jaccard(mic_text, sys_text)
                 if similarity >= BLEED_JACCARD_THRESHOLD:
+                    diagnostics["channel_bleed_collapsed"] = True
                     logger.info(
                         f"Channel bleed detected (Jaccard={similarity:.2f} ≥ "
                         f"{BLEED_JACCARD_THRESHOLD}); collapsing to mic-only"
@@ -4523,6 +4594,7 @@ class WhisperTranscriber:
             label_turns, mic_clusters, system_clusters = _consolidate_speakers(
                 label_turns, mic_clusters, system_clusters,
                 echo_duplicates_out=echo_duplicates,
+                stats_out=diagnostics,
             )
             resolved_labels = _resolve_speaker_placeholders(label_turns)
             tagged = [
@@ -4579,6 +4651,9 @@ class WhisperTranscriber:
                 # clusters_out param. Identity matching off keeps embeddings in
                 # memory for this meeting's duplicate merge and persists none.
                 "speaker_clusters": speaker_clusters,
+                # Content-free counts of the bleed and merge decisions above
+                # (src.pipeline_stats reads them for pipeline_completed).
+                "pipeline_diagnostics": diagnostics,
                 # list[{"start", "channel", "diarization_speaker_id"}], one
                 # per turn -- see comment above turn_manifest's construction.
                 "turn_manifest": assembled.turn_manifest,

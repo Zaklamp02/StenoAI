@@ -87,9 +87,23 @@ function errorResponse(error) {
   return { success: false, error: error instanceof TypeError ? error.message : 'Speaker operation failed.' };
 }
 
+// The backend attaches a content-free `feedback` record to a successful
+// review action (src/speaker_feedback.py). It goes to `onFeedback`, which
+// decides whether to send it; the renderer never needs it, so it is removed
+// from the reply.
+function takeFeedback(result, onFeedback) {
+  if (!result || typeof result !== 'object' || !('feedback' in result)) return result;
+  const { feedback, ...rest } = result;
+  if (rest.success && feedback && typeof feedback === 'object') {
+    try { onFeedback(feedback); } catch { /* measuring must never fail a review */ }
+  }
+  return rest;
+}
+
 function registerSpeakerIpc({
   ipcMain, runPythonScript, parsePythonFailureJson, contacts, meetingCalendar,
   sendDebugLog = () => {},
+  onFeedback = () => {},
 }) {
   ipcMain.handle('list-person-profiles', async () => {
     try {
@@ -129,7 +143,7 @@ function registerSpeakerIpc({
       if (params.newPersonName) args.push('--new-person', params.newPersonName);
       args.push('--expected-run-id', params.expectedRunId);
       args.push('--relabel-transcript');
-      const result = JSON.parse(await runPythonScript('simple_recorder.py', args));
+      const result = takeFeedback(JSON.parse(await runPythonScript('simple_recorder.py', args)), onFeedback);
       if (result.success && contacts && meetingCalendar && params.summaryFile) {
         try {
           contacts.remember(result, await meetingCalendar(params.summaryFile, params.meetingStem));
@@ -212,7 +226,7 @@ function registerSpeakerIpc({
         params.containsMultipleSpeakers ? '--multiple' : '--single',
         '--expected-run-id', params.expectedRunId,
       ];
-      return JSON.parse(await runPythonScript('simple_recorder.py', args));
+      return takeFeedback(JSON.parse(await runPythonScript('simple_recorder.py', args)), onFeedback);
     } catch (error) {
       return error instanceof TypeError ? errorResponse(error) : parsePythonFailureJson(error);
     }

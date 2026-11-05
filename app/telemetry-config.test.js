@@ -26,7 +26,11 @@ test('an environment key and host override the defaults', () => {
   });
 });
 
-test('a missing or malformed key leaves telemetry unconfigured', () => {
-  assert.strictEqual(resolvePosthogConfig({ STENOAI_POSTHOG_KEY: '' }).configured, false);
+test('ships this fork\'s project key, so opted-in installs report', () => {
+  assert.strictEqual(resolvePosthogConfig({}).configured, true);
+  assert.strictEqual(resolvePosthogConfig({ STENOAI_POSTHOG_KEY: '' }).configured, true);
+});
+
+test('a malformed key leaves telemetry unconfigured', () => {
   assert.strictEqual(resolvePosthogConfig({ STENOAI_POSTHOG_KEY: 'not-a-key' }).configured, false);
 });
