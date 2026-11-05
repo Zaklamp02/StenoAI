@@ -886,9 +886,9 @@ const OUTLOOK_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/
  * Cross-platform: Electron's setLoginItemSettings covers macOS and Windows
  * (Windows writes HKCU\...\Run under the hood). Hidden launch differs per OS:
  * on Windows we register with `--hidden` and detect it via argv at startup; on
- * macOS the deprecated openAsHidden no longer works (macOS 13+), so the window
- * suppression is driven by getLoginItemSettings().wasOpenedAtLogin instead —
- * openAsHidden is passed only as a legacy best-effort, never relied on.
+ * macOS the window suppression is driven by
+ * getLoginItemSettings().wasOpenedAtLogin (openAsHidden stopped working on
+ * macOS 13 and was removed in Electron 44).
  *
  * No-op under E2E and in dev (unpackaged), so tests and `npm start` never
  * register a login item on the developer's machine. Silent-fail — a login-item
@@ -899,7 +899,6 @@ function applyLoginItemSetting(enabled) {
   try {
     app.setLoginItemSettings({
       openAtLogin: enabled,
-      openAsHidden: enabled, // macOS legacy best-effort; not relied on for correctness
       args: process.platform === 'win32' && enabled ? ['--hidden'] : [],
     });
   } catch (e) {
