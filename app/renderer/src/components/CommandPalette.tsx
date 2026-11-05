@@ -56,7 +56,7 @@ interface SettingsEntry {
 const SETTINGS_INDEX: SettingsEntry[] = [
   { id: 'general-name', tab: 'general', title: 'Your name', sub: 'In-app greeting' },
   { id: 'general-theme', tab: 'general', title: 'Appearance', sub: 'Light, dark, or system theme' },
-  { id: 'general-calendar', tab: 'general', title: 'Connect calendar', sub: 'Google, Outlook' },
+  { id: 'integrations-calendar', tab: 'integrations', title: 'Connect a calendar', sub: 'Outlook, Google, Apple Calendar' },
   { id: 'general-scheduled', tab: 'general', title: 'Scheduled meetings', sub: 'Upcoming calendar events' },
   { id: 'general-autodetect', tab: 'general', title: 'Auto-detected meetings', sub: 'Notify when another app uses the microphone' },
   { id: 'general-notifications', tab: 'general', title: 'Post meeting notifications', sub: 'Desktop notifications when notes are ready' },

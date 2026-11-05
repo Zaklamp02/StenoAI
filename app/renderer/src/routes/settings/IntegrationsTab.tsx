@@ -10,16 +10,17 @@ import {
   useSetObsidianSync,
   useSetObsidianVaultPath,
 } from '@/hooks/useSettings';
-import { COMPACT_BTN } from './primitives';
+import { COMPACT_BTN, SectionHeading } from './primitives';
 import { WatchedFoldersSection } from './WatchedFoldersSection';
+import { CalendarSettings } from './CalendarSettings';
 import { useMutation } from '@tanstack/react-query';
 import { ipc } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
 
 /**
- * Integrations settings (#413). Currently: Obsidian vault sync — a one-way
- * mirror of notes into a chosen vault folder. More integrations (e.g. Zapier,
- * #414) will join this tab.
+ * Integrations settings (#413): the calendar connection, then Obsidian vault
+ * sync — a one-way mirror of notes into a chosen vault folder. More
+ * integrations (e.g. Zapier, #414) will join this tab.
  */
 export function IntegrationsTab() {
   const enabled = useObsidianSyncSetting();
@@ -46,6 +47,8 @@ export function IntegrationsTab() {
 
   return (
     <section data-settings-tab="integrations">
+      <CalendarSettings />
+      <SectionHeading>{t('integrationsTab.obsidian')}</SectionHeading>
       <div
         className="flex items-start justify-between gap-6 py-4"
         style={{ borderBottom: '1px solid var(--border-subtle)' }}
