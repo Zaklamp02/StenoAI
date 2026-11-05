@@ -1,4 +1,10 @@
 sounddevice>=0.4.6
+# The backend's whole TLS trust store (src/tls_bootstrap.py points stdlib SSL
+# and requests at it), so its version is a security decision, not a transitive
+# detail. Before 2026.10.19 it trusted "emSign ECC Root CA - G3", whose
+# intermediates' keys were compromised (GHSA-6q48-6c7w-9gw2).
+# tests/test_tls_trust_store.py fails if that root comes back.
+certifi==2026.10.23
 # parakeet-mlx pulls librosa/scipy which require NumPy 2.x; the previous
 # numpy<2.0 pin was tied to pywhispercpp. Tests pass under NumPy 2.3 so
 # the floor is the only real constraint now.
