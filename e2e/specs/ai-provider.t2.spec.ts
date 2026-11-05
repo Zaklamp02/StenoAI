@@ -22,6 +22,7 @@ type ProviderSnapshot = {
   cloud_model?: string;
   model?: string;
   cloud_api_key_set?: boolean;
+  cloud_api_key_needs_reentry?: boolean;
   bedrock_region?: string;
   bedrock_inference_profile?: string;
   remote_ollama_url?: string;
@@ -152,4 +153,31 @@ test('cloud API key is stored encrypted (safeStorage) in the temp dir, not confi
   await expect.poll(async () => (await getProvider(page)).cloud_api_key_set).toBe(true);
   // ...and the plaintext key never appears in config.json.
   expect(JSON.stringify(readUserConfig(userDataDir))).not.toContain('sk-e2e-secret-123');
+});
+
+test('the cloud key is bound to the address it was entered for (F04)', async ({ launchApp }) => {
+  const { app, page } = await launchApp();
+  const encryptionAvailable = await app.evaluate(({ safeStorage }) =>
+    safeStorage.isEncryptionAvailable(),
+  );
+  test.skip(!encryptionAvailable, 'safeStorage unavailable on this runner');
+
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudProvider('custom'));
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudApiUrl('https://a.example.test/v1'));
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudApiKey('sk-e2e-bound-to-a'));
+  await expect.poll(async () => (await getProvider(page)).cloud_api_key_set).toBe(true);
+
+  // Another host: the key is not released for it, and the UI is told to ask.
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudApiUrl('https://b.example.test/v1'));
+  await expect.poll(async () => (await getProvider(page)).cloud_api_key_set).toBe(false);
+  expect((await getProvider(page)).cloud_api_key_needs_reentry).toBe(true);
+
+  // Another port on the same host counts as another address too.
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudApiUrl('https://a.example.test:8443/v1'));
+  await expect.poll(async () => (await getProvider(page)).cloud_api_key_set).toBe(false);
+
+  // Back to the original address (any path): the key works again.
+  await page.evaluate(() => (window as StenoWindow).stenoai.ai.setCloudApiUrl('https://A.example.test/other'));
+  await expect.poll(async () => (await getProvider(page)).cloud_api_key_set).toBe(true);
+  expect((await getProvider(page)).cloud_api_key_needs_reentry).toBe(false);
 });

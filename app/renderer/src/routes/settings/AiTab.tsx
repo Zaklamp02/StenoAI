@@ -1261,6 +1261,11 @@ function CloudProviderConfig() {
           onBlur={() => apiKey && setCloudKey.mutate(apiKey)}
           className={COMPACT_INPUT}
         />
+        {provider.data?.cloud_api_key_needs_reentry && !apiKey && (
+          <p className="mt-1 text-[12px]" style={{ color: 'var(--fg-2)' }} data-cloud-key-reentry>
+            {t('aiTab.cloudKeyReentry')}
+          </p>
+        )}
       </div>
       <div>
         <label

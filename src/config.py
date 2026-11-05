@@ -2694,10 +2694,36 @@ class Config:
         self._config["cloud_api_url"] = require_secure_endpoint(url)
         return self._save()
 
-    def get_cloud_api_key(self) -> str:
-        """Get the cloud API key from env var (set by Electron via safeStorage)."""
+    def get_cloud_key_destination(self) -> Optional[str]:
+        """Where the cloud key would be sent with the current config
+        (src/endpoint_policy.cloud_key_destination)."""
+        from src.endpoint_policy import cloud_key_destination
+        return cloud_key_destination(
+            self.get_cloud_provider(), self.get_cloud_api_url(), self.get_bedrock_region(),
+        )
+
+    def cloud_key_bound_elsewhere(self) -> bool:
+        """A key was handed over but for another destination, so the user
+        should be asked to enter it again rather than told none is set."""
         import os
-        return os.environ.get("STENOAI_CLOUD_API_KEY", "")
+        return bool(os.environ.get("STENOAI_CLOUD_API_KEY")) and not self.get_cloud_api_key()
+
+    def get_cloud_api_key(self) -> str:
+        """The cloud API key from the env (set by Electron via safeStorage),
+        or "" unless it was handed over for exactly the destination this
+        config would send it to (F04). Electron passes the destination the
+        key was stored for as STENOAI_CLOUD_KEY_DESTINATION; a mismatch means
+        the endpoint changed after the key was entered, or while this job
+        was starting, and the key must not follow it."""
+        import os
+        key = os.environ.get("STENOAI_CLOUD_API_KEY", "")
+        if not key:
+            return ""
+        bound_to = os.environ.get("STENOAI_CLOUD_KEY_DESTINATION", "")
+        current = self.get_cloud_key_destination()
+        if not bound_to or current is None or bound_to != current:
+            return ""
+        return key
 
     def get_adapter_url(self) -> str:
         """Get the org adapter base URL (set by Electron when a session is

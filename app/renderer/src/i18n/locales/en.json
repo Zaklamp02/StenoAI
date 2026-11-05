@@ -223,5 +223,6 @@
   "calendarSettings.waiting_for_authorization": "Waiting for authorization…",
   "calendarSettings.close": "Close",
   "calendarSettings.try_again": "Try again",
-  "calendarSettings.cancel": "Cancel"
+  "calendarSettings.cancel": "Cancel",
+  "aiTab.cloudKeyReentry": "Your saved key was entered for a different provider or address, so it is not sent here. Enter the key for this one."
 }

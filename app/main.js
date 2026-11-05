@@ -75,6 +75,11 @@ const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
 const { requireSecureEndpoint } = require('./endpoint-policy');
 const {
+  readCloudKeyDestination,
+  encodeEnvelope: encodeCloudKeyEnvelope,
+  decodeForDestination: decodeCloudKeyForDestination,
+} = require('./cloud-key-store');
+const {
   validateGoogleAuthorizeUrl, classifyCallback, RESPONSE_HEADERS: SSO_RESPONSE_HEADERS,
 } = require('./org-sso');
 const { registerObsidianSync } = require('./obsidian-managed-sync');
@@ -9655,14 +9660,32 @@ function getCloudKeyPath() {
   return path.join(getUserDataDir(), '.cloud-api-key');
 }
 
+// The destination (provider + origin) the current config would send the
+// cloud key to, read in one go (app/cloud-key-store.js, F04).
+function currentCloudKeyDestination() {
+  return readCloudKeyDestination({ fs, configPath: path.join(getUserDataDir(), 'config.json') });
+}
+
+// Stores the key bound to the destination configured now. An empty key
+// clears it. Fails when no valid destination is configured: a key with
+// nowhere it may go is not worth keeping.
 function saveCloudApiKey(key) {
   try {
-    const keyDir = path.dirname(getCloudKeyPath());
+    const keyPath = getCloudKeyPath();
+    if (!key) {
+      if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath);
+      return true;
+    }
+    const destination = currentCloudKeyDestination();
+    if (!destination) {
+      console.error('Failed to save cloud API key: no valid provider address is configured');
+      return false;
+    }
+    const keyDir = path.dirname(keyPath);
     if (!fs.existsSync(keyDir)) {
       fs.mkdirSync(keyDir, { recursive: true });
     }
-    const encrypted = getSafeStorage().encryptString(key);
-    fs.writeFileSync(getCloudKeyPath(), encrypted);
+    fs.writeFileSync(keyPath, getSafeStorage().encryptString(encodeCloudKeyEnvelope(key, destination)));
     return true;
   } catch (error) {
     console.error('Failed to save cloud API key:', error.message);
@@ -9670,6 +9693,9 @@ function saveCloudApiKey(key) {
   }
 }
 
+// The key and the destination it is bound to, only while the config still
+// names that destination; otherwise null. Python re-checks the destination
+// against the config it actually uses.
 function loadCloudApiKey() {
   try {
     const keyPath = getCloudKeyPath();
@@ -9677,12 +9703,32 @@ function loadCloudApiKey() {
     if (!fs.existsSync(keyPath)) return null;
     // Not before the window is up: a locked Keychain would block startup.
     if (!keychainGate.isOpen()) return null;
-    const encrypted = fs.readFileSync(keyPath);
-    return getSafeStorage().decryptString(encrypted);
+    const destination = currentCloudKeyDestination();
+    const plaintext = getSafeStorage().decryptString(fs.readFileSync(keyPath));
+    const decoded = decodeCloudKeyForDestination(plaintext, destination);
+    if (!decoded) return null;
+    if (decoded.migrate) {
+      // A pre-binding key adopted for a first-party destination: bind it now.
+      try {
+        fs.writeFileSync(keyPath, getSafeStorage().encryptString(encodeCloudKeyEnvelope(decoded.key, destination)));
+      } catch (_) {
+        // Still usable this time; the next load retries the rewrite.
+      }
+    }
+    return { key: decoded.key, destination };
   } catch (error) {
     console.error('Failed to load cloud API key:', error.message);
     return null;
   }
+}
+
+// The env a backend job needs to use the cloud key: the key and the
+// destination it may go to, or nothing.
+function cloudKeyEnv() {
+  const bound = loadCloudApiKey();
+  return bound
+    ? { STENOAI_CLOUD_API_KEY: bound.key, STENOAI_CLOUD_KEY_DESTINATION: bound.destination }
+    : {};
 }
 
 function hasCloudApiKey() {
@@ -9846,9 +9892,7 @@ async function migrateLegacyOpenAiAsrApiKey(legacy = readLegacyOpenAiAsrCredenti
 // the right path based on the configured ai_provider, and we just
 // surface whatever's available.
 function getAiEnv() {
-  const env = {};
-  const cloudKey = loadCloudApiKey();
-  if (cloudKey) env.STENOAI_CLOUD_API_KEY = cloudKey;
+  const env = { ...cloudKeyEnv() };
   const session = loadOrgSession();
   if (session && session.adapterUrl && session.token && !isJwtExpired(session.token)) {
     // The Python side checks it again (src/endpoint_policy.py).
@@ -10156,8 +10200,18 @@ ipcMain.handle('get-ai-provider', async () => {
   try {
     const result = await runPythonScript('simple_recorder.py', ['get-ai-provider'], true);
     const jsonData = JSON.parse(result.trim());
-    // Override cloud_api_key_set with safeStorage check
-    jsonData.cloud_api_key_set = hasCloudApiKey();
+    // Override cloud_api_key_set with safeStorage check. A key bound to
+    // another destination (F04) is not "set" for this one; say so, so the
+    // renderer can ask for it again. Before the Keychain is open the binding
+    // cannot be read, so fall back to whether a key file exists at all.
+    if (keychainGate.isOpen()) {
+      const usable = Boolean(loadCloudApiKey());
+      jsonData.cloud_api_key_set = usable;
+      jsonData.cloud_api_key_needs_reentry = !usable && hasCloudApiKey();
+    } else {
+      jsonData.cloud_api_key_set = hasCloudApiKey();
+      jsonData.cloud_api_key_needs_reentry = false;
+    }
 
     // Reconcile the provider with org-session reality before answering, so
     // the renderer's first paint already reflects a working provider:
@@ -10353,8 +10407,7 @@ ipcMain.handle('test-remote-ollama', async (event, url) => {
 ipcMain.handle('test-cloud-api', async () => {
   try {
     sendDebugLog('Testing cloud API connection...');
-    const apiKey = loadCloudApiKey();
-    const env = apiKey ? { STENOAI_CLOUD_API_KEY: apiKey } : {};
+    const env = cloudKeyEnv();
     const result = await runPythonScript('simple_recorder.py', ['test-cloud-api'], false, env);
     const jsonMatch = result.match(/\{.*\}/s);
     if (jsonMatch) return JSON.parse(jsonMatch[0]);

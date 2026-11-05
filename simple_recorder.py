@@ -62,6 +62,7 @@ except ImportError:
 
 from src.language_detect import detect_transcript_language
 from src.provider_errors import safe_error_text, scrub_credentials
+from src.endpoint_policy import CLOUD_KEY_REENTER_MESSAGE
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -9661,13 +9662,17 @@ def test_cloud_api():
         return
 
     if not cloud_api_key:
-        print(json.dumps({"success": False, "error": "No API key configured"}))
+        print(json.dumps({"success": False, "error": (
+            CLOUD_KEY_REENTER_MESSAGE if config.cloud_key_bound_elsewhere()
+            else "No API key configured"
+        )}))
         return
 
     try:
         if cloud_provider == "anthropic":
             from anthropic import Anthropic
-            client = Anthropic(api_key=cloud_api_key)
+            from src.endpoint_policy import FIRST_PARTY_ORIGINS
+            client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
             # Lightweight test: list models
             models_page = client.models.list(limit=10)
             model_ids = [m.id for m in models_page.data]
@@ -9706,20 +9711,19 @@ def test_cloud_api():
                     "models": list(config.SUPPORTED_BEDROCK_MODELS),
                 }))
             except urllib.error.HTTPError as he:
-                detail = ""
-                try:
-                    detail = he.read().decode("utf-8", errors="replace")[:300]
-                except Exception:
-                    # Best-effort error-detail extraction; must never mask the
-                    # HTTPError we're about to report to the user.
-                    pass
+                # Status only: Bedrock's error body can echo the request
+                # (src/provider_errors.py).
                 print(json.dumps({
                     "success": False,
-                    "error": f"Bedrock HTTP {he.code}: {detail or he.reason}",
+                    "error": f"Bedrock HTTP {he.code}",
                 }))
         else:
             from openai import OpenAI
-            base_url = cloud_api_url if cloud_provider == "custom" and cloud_api_url else None
+            from src.endpoint_policy import FIRST_PARTY_ORIGINS
+            base_url = (
+                cloud_api_url if cloud_provider == "custom"
+                else FIRST_PARTY_ORIGINS["openai"] + "/v1"
+            )
             client = OpenAI(api_key=cloud_api_key, base_url=base_url)
             models = client.models.list()
             # Newest first so current chat models lead the Settings dropdown.
@@ -9738,7 +9742,7 @@ def test_cloud_api():
             model_ids = [m.id for m in entries[:25]]
             print(json.dumps({"success": True, "models": model_ids}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 @cli.command()

@@ -847,6 +847,9 @@ export type GetAiProviderResponse = Result<{
   /** The local/remote Ollama summarisation model (config.model). */
   model: string;
   cloud_api_key_set: boolean;
+  /** A key is stored but was entered for another provider or address, so
+   *  it is not used here until entered again (security review F04). */
+  cloud_api_key_needs_reentry?: boolean;
   /** AWS region used as the Bedrock endpoint host (defaults to us-east-1). */
   bedrock_region: string;
   /** Optional cross-region inference profile id. Empty when unset. */

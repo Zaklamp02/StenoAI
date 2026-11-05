@@ -14,7 +14,7 @@ from .models import MeetingTranscript, ActionItem, Decision
 from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
 from .meeting_context import MeetingContext
 from . import ollama_manager
-from .endpoint_policy import require_secure_endpoint
+from .endpoint_policy import CLOUD_KEY_REENTER_MESSAGE, FIRST_PARTY_ORIGINS, require_secure_endpoint
 from .provider_errors import safe_error_text
 from .secure_http import RedirectRefused, open_authenticated
 
@@ -234,6 +234,8 @@ class OllamaSummarizer:
             self.model_name = model_name or config.get_cloud_model()
 
             if not cloud_api_key:
+                if config.cloud_key_bound_elsewhere():
+                    raise ValueError(CLOUD_KEY_REENTER_MESSAGE)
                 raise ValueError("Cloud API key is not configured. Set it in Settings > AI.")
 
             if self.cloud_provider == "anthropic":
@@ -241,7 +243,10 @@ class OllamaSummarizer:
                     from anthropic import Anthropic
                 except ImportError:
                     raise ImportError("anthropic package is required for Anthropic cloud mode. pip install anthropic")
-                self.anthropic_client = Anthropic(api_key=cloud_api_key)
+                # Explicit base URL: the SDK would otherwise honour an
+                # ANTHROPIC_BASE_URL from the environment and send the key
+                # past its destination binding (F04).
+                self.anthropic_client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
                 logger.info(f"Anthropic provider initialized: model={self.model_name}")
             elif self.cloud_provider == "bedrock":
                 # No SDK — we call Bedrock Converse directly over HTTPS with
@@ -263,7 +268,12 @@ class OllamaSummarizer:
                     from openai import OpenAI
                 except ImportError:
                     raise ImportError("openai package is required for cloud mode. pip install openai")
-                base_url = cloud_api_url if self.cloud_provider == "custom" and cloud_api_url else None
+                # Never None: the SDK would read OPENAI_BASE_URL from the
+                # environment and send the key past its binding (F04).
+                base_url = (
+                    cloud_api_url if self.cloud_provider == "custom"
+                    else FIRST_PARTY_ORIGINS["openai"] + "/v1"
+                )
                 self.cloud_client = OpenAI(api_key=cloud_api_key, base_url=base_url)
                 logger.info(f"Cloud provider initialized: model={self.model_name}")
 
