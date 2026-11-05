@@ -195,6 +195,7 @@ const { EXPORT_CANCELED } = require('./ipc-sentinels');
 const { mayExposeMainWindow } = require('./e2e-window-visibility');
 const { TOAST_WORKSPACE_OPTIONS, activateApp } = require('./mac-window-activation');
 const { PostHog } = require('posthog-node');
+const { findMeetingUrl, teamsAppUrl } = require('./meeting-links');
 const { resolvePosthogConfig } = require('./telemetry-config');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
@@ -11194,16 +11195,13 @@ ipcMain.handle('open-external', async (event, url) => {
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return { success: false, error: 'unsupported scheme' };
     }
-    // Teams meeting links open the Teams app directly (msteams: deep link)
-    // instead of a browser tab that then asks to launch Teams. Only this exact
-    // host + path is rewritten; anything else opens as given.
-    if (
-      parsed.protocol === 'https:'
-      && parsed.hostname === 'teams.microsoft.com'
-      && parsed.pathname.startsWith('/l/meetup-join/')
-    ) {
+    // Teams meeting links, long or short, open the Teams app directly
+    // (msteams: deep link) instead of a browser tab that then asks to launch
+    // Teams. Anything else opens as given.
+    const teamsUrl = teamsAppUrl(url);
+    if (teamsUrl) {
       try {
-        await shell.openExternal(`msteams:${parsed.pathname}${parsed.search}`);
+        await shell.openExternal(teamsUrl);
         return { success: true };
       } catch {
         // Teams not installed: fall through to the browser
@@ -12116,7 +12114,7 @@ async function fetchOutlookCalendarEvents(accessToken, maxResults = 50, signal) 
     endDateTime: weekAhead.toISOString(),
     $top: String(maxResults),
     $orderby: 'start/dateTime',
-    $select: 'id,subject,body,start,end,attendees,webLink,onlineMeeting,isOnlineMeeting,isAllDay,isCancelled,responseStatus,categories'
+    $select: 'id,subject,body,location,start,end,attendees,webLink,onlineMeeting,isOnlineMeeting,isAllDay,isCancelled,responseStatus,categories'
   });
 
   const calendars = await fetchOutlookCalendarList(accessToken, signal);
@@ -12223,6 +12221,12 @@ function normalizeOutlookEvent(event) {
     conferenceData: event.isOnlineMeeting && event.onlineMeeting ? {
       entryPoints: [{ uri: event.onlineMeeting.joinUrl, entryPointType: 'video' }]
     } : undefined,
+    // A Teams meeting created in Outlook carries its link in onlineMeeting;
+    // an invite from another organisation, or a Zoom/Meet/Webex one, only in
+    // the location or body text. Same link shapes as the Apple Calendar helper.
+    meeting_url:
+      (event.isOnlineMeeting ? event.onlineMeeting?.joinUrl : undefined) ||
+      findMeetingUrl(event.location?.displayName, event.body?.content),
     // Carried forward for normalizeCalendarEvent — Outlook reports these at the
     // top level so we don't need to inspect attendees to find "self".
     isAllDay: event.isAllDay === true,
@@ -12415,6 +12419,7 @@ function normalizeCalendarEvent(event) {
       event.hangoutLink ||
       event.onlineMeeting?.joinUrl ||
       event.meeting_url ||
+      event.conferenceData?.entryPoints?.find((entry) => entry?.entryPointType === 'video')?.uri ||
       undefined,
     is_all_day: isAllDay,
     response_status: responseStatus,
