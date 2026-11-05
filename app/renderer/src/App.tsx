@@ -27,7 +27,7 @@ import { KeychainWaitBanner } from '@/components/KeychainWaitBanner';
 import { RecordingRecovery } from '@/components/RecordingRecovery';
 import { PowerWaitNotice } from '@/components/PowerWaitNotice';
 import { PrivacyConsentModal } from '@/components/PrivacyConsentModal';
-import { usePrivacyNoticeSeen } from '@/hooks/useSettings';
+import { usePrivacyNoticeSeen, useTelemetrySetting } from '@/hooks/useSettings';
 import { ImportDropZone } from '@/components/ImportDropZone';
 import { CommandPaletteProvider, useCommandPalette } from '@/components/CommandPalette';
 import { AskBarProvider } from '@/lib/askBarContext';
@@ -69,7 +69,7 @@ export function App() {
   // redirect lands; accepted as cosmetic for that rare state (the redirect and
   // onboarding's mark-seen still make it correct).
   const privacyNotice = usePrivacyNoticeSeen();
-  const showPrivacyModal = privacyNotice.data === false && route !== '/setup';
+  const telemetry = useTelemetrySetting();
 
   React.useLayoutEffect(() => {
     if (typeof window !== 'undefined' && window.stenoai) {
@@ -178,6 +178,14 @@ export function App() {
   const didSetupRedirectRef = React.useRef(false);
   const [setupGateResolved, setSetupGateResolved] = React.useState(false);
   const [initialSetup, setInitialSetup] = React.useState(false);
+  // Installs that never answered the analytics question (everyone before the
+  // welcome screen asked it) get the same question once. Held until the setup
+  // gate settles and skipped when onboarding is about to open, since its
+  // welcome screen asks it itself.
+  const analyticsUnanswered = telemetry.data?.telemetry_consent_answered === false;
+  const showPrivacyModal =
+    route !== '/setup' &&
+    (privacyNotice.data === false || (analyticsUnanswered && setupGateResolved && !initialSetup));
   React.useEffect(() => {
     if (didSetupGateRef.current) return;
     if (recording.isLoading) return;
@@ -260,7 +268,7 @@ export function App() {
         <KeychainWaitBanner />
         {route !== '/setup' && <RecordingRecovery />}
         {route !== '/setup' && !isProcessingRoute && <PowerWaitNotice />}
-        <PrivacyConsentModal open={showPrivacyModal} />
+        <PrivacyConsentModal open={showPrivacyModal} showLaunchOnLogin={privacyNotice.data === false} />
         <ImportDropZone />
 
         {/* Bottom dock — shared anchor across recording → processing → meeting.

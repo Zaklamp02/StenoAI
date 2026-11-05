@@ -77,3 +77,38 @@ test('registerSpeakerIpc rejects traversal before invoking the backend', async (
   assert.deepStrictEqual(result, { success: false, error: 'Invalid meeting identifier.' });
   assert.deepStrictEqual(calls, []);
 });
+
+test('a review reply hands its feedback record to main and not to the renderer', async () => {
+  const handlers = {};
+  const received = [];
+  registerSpeakerIpc({
+    ipcMain: { handle: (channel, handler) => { handlers[channel] = handler; } },
+    runPythonScript: async () => JSON.stringify({
+      success: true, contains_multiple_speakers: true, feedback: { action: 'marked_multiple_speakers' },
+    }),
+    parsePythonFailureJson: (error) => ({ success: false, error: error.message }),
+    onFeedback: (feedback) => received.push(feedback),
+  });
+
+  const result = await handlers['mark-speaker-cluster']({}, {
+    meetingStem: 'mtg', channel: 'mic', diarizationSpeakerId: 'SPEAKER_0',
+    expectedRunId: 'run', containsMultipleSpeakers: true,
+  });
+  assert.deepStrictEqual(result, { success: true, contains_multiple_speakers: true });
+  assert.deepStrictEqual(received, [{ action: 'marked_multiple_speakers' }]);
+});
+
+test('a failing feedback handler never fails the review', async () => {
+  const handlers = {};
+  registerSpeakerIpc({
+    ipcMain: { handle: (channel, handler) => { handlers[channel] = handler; } },
+    runPythonScript: async () => JSON.stringify({ success: true, feedback: { action: 'new_person' } }),
+    parsePythonFailureJson: (error) => ({ success: false, error: error.message }),
+    onFeedback: () => { throw new Error('boom'); },
+  });
+  const result = await handlers['confirm-speaker']({}, {
+    meetingStem: 'mtg', channel: 'mic', diarizationSpeakerId: 'SPEAKER_0',
+    expectedRunId: 'run', newPersonName: 'Someone',
+  });
+  assert.deepStrictEqual(result, { success: true });
+});

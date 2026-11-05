@@ -115,14 +115,22 @@ export function useTelemetrySetting() {
 export function useSetTelemetry() {
   const qc = useQueryClient();
   const key = settingsKeys.telemetry();
-  type Telemetry = { telemetry_enabled: boolean; anonymous_id?: string };
+  type Telemetry = { telemetry_enabled: boolean; telemetry_consent_answered?: boolean; anonymous_id?: string };
   return useMutation({
     mutationFn: async ({ enabled, source }: { enabled: boolean; source: TelemetryToggleSource }) =>
       unwrap(await ipc().settings.setTelemetry(enabled, source)),
     onMutate: async ({ enabled }) => {
       await qc.cancelQueries({ queryKey: key });
       const previous = qc.getQueryData<Telemetry>(key);
-      if (previous) qc.setQueryData<Telemetry>(key, { ...previous, telemetry_enabled: enabled });
+      // Any answer counts as answered: the backend records the choice, so
+      // the onboarding question and the upgrade prompt close at once.
+      if (previous) {
+        qc.setQueryData<Telemetry>(key, {
+          ...previous,
+          telemetry_enabled: enabled,
+          telemetry_consent_answered: true,
+        });
+      }
       return { previous };
     },
     onError: (_err, _vars, ctx) => {
@@ -137,6 +145,34 @@ export function useSetTelemetry() {
  *  onboarding and start true. The consent modal reads this and, on
  *  acknowledgement, marks it seen forever and invalidates this query so it
  *  won't re-open. */
+/** Speaker-review feedback sharing, cached on the telemetry query so the
+ *  two switches in Settings read one source of truth. */
+export function useSetSpeakerFeedbackSharing() {
+  const qc = useQueryClient();
+  const key = settingsKeys.telemetry();
+  type Telemetry = { telemetry_enabled: boolean; speaker_feedback_sharing?: boolean };
+  return useMutation({
+    mutationFn: async (enabled: boolean) =>
+      unwrap(await ipc().settings.setSpeakerFeedbackSharing(enabled)),
+    onMutate: async (enabled) => {
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<Telemetry>(key);
+      if (previous) qc.setQueryData<Telemetry>(key, { ...previous, speaker_feedback_sharing: enabled });
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.previous) qc.setQueryData<Telemetry>(key, ctx.previous);
+    },
+  });
+}
+
+export function useSpeakerFeedbackSummary() {
+  return useQuery({
+    queryKey: [...settingsKeys.telemetry(), 'speaker-feedback-summary'],
+    queryFn: async () => unwrap(await ipc().settings.getSpeakerFeedbackSummary()),
+  });
+}
+
 export function usePrivacyNoticeSeen() {
   return useQuery({
     queryKey: settingsKeys.privacyNoticeSeen(),
