@@ -65,8 +65,8 @@ Ollama and ffmpeg are bundled; do not install or start a second Ollama just for 
 - Choose local or cloud transcription/summary providers deliberately. Local
   processing stays on this Mac. Cloud ASR uploads audio; cloud notes/chat sends
   the relevant transcript text to your configured provider.
-- Usage analytics is **off**, including after upgrade from the old default.
-  Explicitly enabling it sends usage events to Steno Labs through PostHog.
+- The first launch asks whether to share anonymous usage data (see **Where your
+  data goes**). Either answer is fine and can be changed in Settings → Advanced.
 - macOS may request Keychain access when you first save or use cloud/Calendar
   credentials in your locally signed build. Complete that system prompt to
   enable encrypted credential storage; keep the same signing identity on updates.
@@ -84,6 +84,32 @@ Ollama and ffmpeg are bundled; do not install or start a second Ollama just for 
   triggers share the export lock. Existing native exports are adopted at their
   current paths when their file identity matches; edited content is preserved.
   Source deletion retains the exported archive.
+
+## Where your data goes
+
+| What | Where it goes |
+| --- | --- |
+| Audio, transcripts, notes, speaker profiles | Stay on this Mac (`~/Library/Application Support/stenoai`) unless one of the rows below sends them. |
+| Audio | To your cloud transcription provider, only if you chose cloud transcription. |
+| Transcript text (and meeting context) | To your cloud notes/chat provider, only if you chose one. Local Ollama keeps it on this Mac. |
+| Notes and transcripts | To your Obsidian vault, only if you turned on sync. To your organisation, only if you signed in to one and **Share new notes with your organisation** is on (off unless the organisation sets it on). |
+| Calendar events | Read from the calendar you connected; used locally for titles, invitees and speaker names. |
+| Usage analytics | Only if you said yes: anonymous counts and rounded numbers (features used, processing times, speaker counts, how close speaker suggestions were) to this fork's PostHog project in the EU. Never audio, text, titles, names, emails or calendar details. |
+| Debug report | Only when you choose **Send debug report…** on a note, after it shows you the full report. Numbers only. |
+| Diagnostics export (Settings → Developer) | Saved as a file for you to review and share yourself; keys and tokens are blanked. |
+
+Remote servers must use `https://`; plain `http://` is only accepted for this Mac.
+Organisation sign-in is not part of this pilot.
+
+## Updates and security fixes
+
+The app does not update itself (an automatic update would install the official
+app over this fork). The fork's maintainer is responsible for security updates:
+a fixed build is published as a new release with a note on what changed. Install
+it the same way as the first one; your notes and settings stay. If you build from
+source, check out the new tag and run `custom/bootstrap.sh` and
+`custom/install.sh` again. After an update that changes where a cloud API key may
+be sent, Settings → AI asks for the key once more.
 
 ## Test and report
 

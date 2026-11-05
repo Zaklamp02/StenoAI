@@ -1,33 +1,41 @@
-# Dependency review — 17 October 2026
+# Dependency review — 6 November 2026
 
-The colleague build updates Electron to 42.11.15, the Electron packaging tools,
-Axios, Vite and Vitest, refreshes compatible transitive dependencies, and removes
-unused Puppeteer. Node 24 LTS is the documented build runtime. Electron 42's
-explicit `install-electron` step runs during this project's postinstall so a
-fresh checkout can also launch Playwright/dev builds.
+Follows the 5 November 2026 security review; the fixes are recorded in
+[`docs/security/2026-11-05-pilot-remediation-status.md`](../docs/security/2026-11-05-pilot-remediation-status.md).
 
-`npm audit --omit=dev` reports **zero advisories** for shipped JavaScript
-packages. CI now checks this runtime dependency set. `npm audit` including build
-and test tools reports **16 dependency entries: 0 critical, 5 high, 11 moderate**.
-These entries come from three upstream advisories (several entries are parents
-of the same affected package):
+## Shipped components
 
-| Package | Exposure in this checkout | Decision |
+| Component | Version | Notes |
 | --- | --- | --- |
-| `braces` | Tailwind/watch/build glob parsing; deeply nested patterns can exhaust the stack. | No fixed upstream release reported by npm audit. Inputs are repository-controlled build patterns; do not run builds against untrusted source trees. Track the upstream fix. |
-| `postcss-selector-parser` | Tailwind's build-time CSS selector parsing; pathological selectors can consume CPU. | A patched major exists, but Tailwind 3 requests the older major. Keep the supported dependency graph for this pilot; revisit with the Tailwind migration instead of forcing an unverified major override. |
-| `sprintf-js` | Electron download/packaging dependencies; unbounded precision can consume resources. | No fixed upstream release reported. This app does not feed meeting content or user format strings into this tooling. Track the upstream fix. |
+| Electron | 45.2.3 (pinned exactly) | Latest stable of the supported lines (43-45). Synchronous `safeStorage` is deprecated in 45 and removed in 46; move to the async API before upgrading to 46. |
+| FFmpeg helper | 7.1.5 | Built by `scripts/build-ffmpeg-minimal.sh` from the PGP-verified release tarball; audio-only, no network protocols. `custom/build.sh` refuses any other version. |
+| certifi (Python TLS trust store) | 2026.10.23 (pinned) | Drops the compromised "emSign ECC Root CA - G3". |
 
-These are remaining upstream build-tool risks, not a claim of a completely
-advisory-free dependency tree. The shipped Electron runtime itself was also
-updated; a runtime npm audit alone does not assess Chromium vulnerabilities.
+## JavaScript
 
-Sources: [braces advisory](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm),
-[selector parser advisory](https://github.com/advisories/GHSA-rj75-hqrm-r3gf),
-[sprintf-js advisory](https://github.com/advisories/GHSA-hp3w-g68c-fv3c), and
-[Electron 42 installation change](https://www.electronjs.org/blog/electron-42-0).
+`npm audit --omit=dev` reports **zero advisories** for shipped packages.
 
-Re-run both audits when updating the lockfile; these counts describe this review,
-not a permanent security guarantee. Python requirements retain the fork's
-compatibility constraints and were verified by a clean install and bundle build;
-they are not a fully hashed, transitively locked dependency set.
+`npm audit` including build and lint tools reports **14 entries: 1 high,
+13 moderate**, from seven upstream advisories. None of these packages is in the
+shipped app:
+
+| Package | Pulled in by | Exposure | Decision |
+| --- | --- | --- | --- |
+| `zod` 3.25.76 (high) | `eslint-plugin-react-hooks` | Lint only; validates the plugin's own options. | Take the fixed version with the next plugin release; no app input reaches it. |
+| `fast-uri` (4 advisories) | `electron-builder` → `ajv` | Packaging only; parses the repository's own build config. | Update with electron-builder. |
+| `minimatch` | eslint, electron-builder | Build/lint glob patterns from the repository. | Update with the parents. |
+| `postcss-selector-parser` | Tailwind 3 | Build-time CSS parsing of the repository's own styles. | Fixed in a major Tailwind 3 does not accept; revisit with the Tailwind migration. |
+
+Do not run builds against untrusted source trees. No `npm audit fix --force`:
+it would force unverified major upgrades of the build chain.
+
+## Python
+
+Requirements keep the fork's compatibility constraints (`custom/constraints.txt`)
+and the MLX pin; certifi is now pinned explicitly. They were verified by a clean
+install and bundle build. They are not a fully hashed, transitively locked set,
+and no automated Python advisory scan runs yet; adding `pip-audit` to CI is a
+follow-up.
+
+Re-run these audits when updating a lockfile; these counts describe this review,
+not a permanent guarantee.

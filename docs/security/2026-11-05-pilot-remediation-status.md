@@ -1,12 +1,12 @@
 # Security remediation status for the colleague pilot
 
 Point-in-time record against the 2026-11-05 security review (F01-F10) and
-`SECURITY_REMEDIATION_PLAN.md`. Branch `security/pilot-hardening`.
+`SECURITY_REMEDIATION_PLAN.md`. All fixes are on `main` (PRs #16-#18, #20, #21).
 
 | ID | Finding | Status | Evidence |
 | --- | --- | --- | --- |
-| F01 | Compromised emSign root in the bundled CA store | **Fixed in source**; bundle check below | `certifi==2026.10.23` pinned in `requirements.txt`; `tests/test_tls_trust_store.py` fails if "emSign ECC Root CA - G3" returns or certifi drops below 2026.10.19 |
-| F02 | Electron 42 outside supported lines | **Fixed in source; packaged checks pending** | `electron` pinned to exactly 45.2.3 (latest stable, longest support window; 43-45 are supported). Breaking changes 43-45 reviewed against the code: only `openAsHidden` (removed in 44, inert since macOS 13) needed removing; system audio uses `setDisplayMediaRequestHandler` with no permission handler, so 45's `display-capture` change does not apply; no clipboard, preload Node modules or ASAR descriptors in use. Synchronous `safeStorage` is deprecated in 45 but supported; kept so existing encrypted keys keep decrypting, to be moved before Electron 46. Unit, T1 191/191, T2 159 passed (2 load flakes passed on solo reruns). Packaged checks (system audio, Keychain, login item) by the user. |
+| F01 | Compromised emSign root in the bundled CA store | **Fixed**; bundle check below | `certifi==2026.10.23` pinned in `requirements.txt`; `tests/test_tls_trust_store.py` fails if "emSign ECC Root CA - G3" returns or certifi drops below 2026.10.19 |
+| F02 | Electron 42 outside supported lines | **Fixed** | `electron` pinned to exactly 45.2.3 (latest stable, longest support window; 43-45 are supported). Breaking changes 43-45 reviewed against the code: only `openAsHidden` (removed in 44, inert since macOS 13) needed removing; system audio uses `setDisplayMediaRequestHandler` with no permission handler, so 45's `display-capture` change does not apply; no clipboard, preload Node modules or ASAR descriptors in use. Synchronous `safeStorage` is deprecated in 45 but supported; kept so existing encrypted keys keep decrypting, to be moved before Electron 46. Unit, T1 191/191, T2 159 passed (2 load flakes passed on solo reruns). Packaged app tested by the maintainer on 2026-11-06 (recording with system audio, review, delete). |
 | F03 | FFmpeg 7.1.1 | **Fixed** | `scripts/build-ffmpeg-minimal.sh` pins 7.1.5 (tarball PGP signature checked against FFmpeg release key FCF986EA15E6E293A5644F10B4322F04D67658D8, sha256 de668509…558f), same minimal audio-only, no-network configuration; component lists identical to the 7.1.1 helper. The custom build replaces the official helper with it (`custom/patched-ffmpeg.sh`, `custom/stage-official-binaries.sh`) and `custom/build.sh` fails if the bundled ffmpeg is not the pinned version. Bundled `dist/stenoai/_internal/ffmpeg` reports 7.1.5 (sha256 fcfc8050…98fa after packaging). `scripts/test-ffmpeg-minimal.sh`: 22/22 (all 12 import formats, pipeline filters, outputs, truncated input, no network); `@pipeline` T2 transcription, honest-failure and watched-folder import pass. |
 | F04 | Summarisation key reused after an endpoint change | **Fixed** | `app/cloud-key-store.js`: the encrypted key is an envelope bound to its destination (provider + origin; Bedrock by region). It is released only while the config names that destination, and passed with it (`STENOAI_CLOUD_KEY_DESTINATION`); `Config.get_cloud_api_key` re-derives the destination from the config the job uses and withholds the key on any difference, which also covers a change racing a running job. OpenAI/Anthropic clients get an explicit base URL so `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL` cannot redirect the key. A pre-binding key is adopted only by first-party destinations; for a custom URL it must be entered again, and Settings says so. `tests/fixtures/cloud_key_destinations.json` is shared by the JS and Python tests; `tests/test_cloud_key_binding.py` uses two loopback servers and asserts the second receives no key; `ai-provider.t2` covers host, port and back. |
 | F05 | Bearer token followed redirects | **Fixed** | `src/secure_http.py` refuses every redirect on credentialed urllib calls (adapter chat/stream, Bedrock, Bedrock key test). `tests/test_secure_http.py` drives 301/302/303/307/308 and same-origin redirects against local servers and asserts the second server receives nothing. |
@@ -20,13 +20,36 @@ Point-in-time record against the 2026-11-05 security review (F01-F10) and
 
 Recorded after rebuilding the backend from this branch:
 
-- `dist/stenoai/_internal/certifi/cacert.pem`: see the PR description for
-  the version, hash and emSign root check.
+- `_internal/certifi/cacert.pem` in the packaged app: certifi 2026.10.23,
+  sha256 `2ef52ad56b4803e264045c915e55c236cbfa045b84b81efefc218a19eb44bd2b`,
+  no "emSign ECC Root CA - G3" (only the unaffected "emSign Root CA - G1").
+
+## Pilot policy (resolved)
+
+- Organisation auto-sharing: only an explicit `auto_share_default: true` turns
+  it on; a missing field or failed policy read leaves it off. The setting says
+  that the full transcript is shared and that everyone in the organisation can
+  open it. `org-backup-seed-skip.t2` covers the missing-field case.
+- Data destinations, updates and ownership: `custom/COLLEAGUE_QUICKSTART.md`
+  ("Where your data goes", "Updates and security fixes"). The maintainer owns
+  security updates; there is no automatic updater in this fork.
+- Dependency evidence: `custom/DEPENDENCY_AUDIT.md`.
+
+## Residual risks and follow-ups
+
+- Move off synchronous `safeStorage` before Electron 46 (needs key-migration tests).
+- Builds are locally signed, not notarised; managed Macs may block them.
+- No automated Python advisory scan (`pip-audit`) in CI yet.
+- Not audited: an organisation adapter's own storage and tenant isolation.
+  Organisation sign-in is not part of the pilot.
+- Build-tool advisories listed in `custom/DEPENDENCY_AUDIT.md`.
 
 ## Before sharing with colleagues
 
-- F02 and F03 are the remaining release blockers named by the review. A
-  pilot without them should be an explicit, recorded decision.
-- Org sign-in: F10 is open, so the pilot should not use it.
-- Distribution: local self-signed builds are not notarised; see
-  `custom/README.md` and agree the install path with IT.
+All ten findings are fixed. What remains is release work:
+
+- Publish a new colleague release from `main` with `custom/release.sh <tag>`
+  and point `custom/COLLEAGUE_QUICKSTART.md` at it (it still names
+  `test-2026-11-03`, which predates these fixes).
+- Agree the install path with IT for managed Macs (local signing, no
+  notarisation).
