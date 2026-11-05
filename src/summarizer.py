@@ -15,6 +15,7 @@ from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
 from .meeting_context import MeetingContext
 from . import ollama_manager
 from .endpoint_policy import require_secure_endpoint
+from .provider_errors import safe_error_text
 from .secure_http import RedirectRefused, open_authenticated
 
 logger = logging.getLogger(__name__)
@@ -885,7 +886,7 @@ class OllamaSummarizer:
                 return response.choices[0].message.content.strip()
 
             except Exception as e:
-                logger.error(f"Cloud API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Cloud API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("OpenAI chat failed after all retries")
@@ -942,7 +943,7 @@ class OllamaSummarizer:
                 if attempt == max_retries - 1:
                     raise
             except Exception as e:
-                logger.error(f"Adapter API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Adapter API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Adapter chat failed after all retries")
@@ -992,8 +993,9 @@ class OllamaSummarizer:
                         if text:
                             yield text
                     elif kind == "error":
-                        logger.error(f"Adapter stream error: {record.get('error')}")
-                        raise RuntimeError(f"Adapter stream error: {record.get('error')}")
+                        # The adapter's error text is the provider's; keep it out.
+                        logger.error("Adapter stream reported an error")
+                        raise RuntimeError("Adapter stream reported an error")
                     elif kind == "done":
                         return
         except urllib.error.HTTPError as e:
@@ -1003,7 +1005,7 @@ class OllamaSummarizer:
                 logger.error(f"Adapter streaming failed: HTTP {e.code}")
             raise
         except Exception as e:
-            logger.error(f"Adapter streaming failed: {e}")
+            logger.error(f"Adapter streaming failed: {safe_error_text(e)}")
             raise
 
     def _anthropic_chat(self, prompt: str, timeout_seconds: int = 300) -> str:
@@ -1027,7 +1029,7 @@ class OllamaSummarizer:
                 return response.content[0].text.strip()
 
             except Exception as e:
-                logger.error(f"Anthropic API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Anthropic API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Anthropic chat failed after all retries")
@@ -1108,11 +1110,8 @@ class OllamaSummarizer:
                 # 401/403 = bad credentials, 404 = wrong region or model id.
                 # None of these recover with retries — abort early so the
                 # user sees the actual error rather than 15 s of silence.
-                err_body = ""
-                try:
-                    err_body = e.read().decode("utf-8", errors="replace")[:500]
-                except Exception:
-                    pass
+                # The response body is never read into a message: Bedrock's
+                # error text can echo the request (src/provider_errors.py).
                 if e.code in (401, 403):
                     raise RuntimeError(
                         f"Bedrock rejected the API key ({e.code}). "
@@ -1121,14 +1120,13 @@ class OllamaSummarizer:
                 if e.code == 404:
                     raise RuntimeError(
                         f"Bedrock could not find model '{target_id}' in {self.bedrock_region}. "
-                        f"Check the model id and region, or set a cross-region inference profile. "
-                        f"Detail: {err_body}"
+                        f"Check the model id and region, or set a cross-region inference profile."
                     )
-                logger.error(f"Bedrock API attempt {attempt + 1} failed: HTTP {e.code} {err_body}")
+                logger.error(f"Bedrock API attempt {attempt + 1} failed: HTTP {e.code}")
                 if attempt == max_retries - 1:
-                    raise RuntimeError(f"Bedrock HTTP {e.code}: {err_body}")
+                    raise RuntimeError(f"Bedrock HTTP {e.code}")
             except Exception as e:
-                logger.error(f"Bedrock API attempt {attempt + 1} failed: {e}")
+                logger.error(f"Bedrock API attempt {attempt + 1} failed: {safe_error_text(e)}")
                 if attempt == max_retries - 1:
                     raise
         raise RuntimeError("Bedrock chat failed after all retries")
@@ -1460,7 +1458,7 @@ Return ONLY the response in this exact JSON format:
                 return None
                 
         except Exception as e:
-            logger.error(f"Ollama API call failed: {e}")
+            logger.error(f"Ollama API call failed: {safe_error_text(e)}")
             logger.error(f"Model used: {self.model_name}")
             logger.error(f"Transcript length: {len(transcript)} characters")
             logger.error(f"Error type: {type(e).__name__}")
@@ -1621,7 +1619,7 @@ TRANSCRIPT:
                         for text in stream.text_stream:
                             yield text
                 except Exception as e:
-                    logger.error(f"Anthropic streaming failed: {e}")
+                    logger.error(f"Anthropic streaming failed: {safe_error_text(e)}")
                     raise
             elif self.cloud_provider == "bedrock":
                 # Bedrock's /converse-stream uses amazon eventstream framing
@@ -1637,7 +1635,7 @@ TRANSCRIPT:
                     if text:
                         yield text
                 except Exception as e:
-                    logger.error(f"Bedrock summarisation failed: {e}")
+                    logger.error(f"Bedrock summarisation failed: {safe_error_text(e)}")
                     raise
             else:
                 try:
@@ -1653,7 +1651,7 @@ TRANSCRIPT:
                         if content:
                             yield content
                 except Exception as e:
-                    logger.error(f"OpenAI streaming failed: {e}")
+                    logger.error(f"OpenAI streaming failed: {safe_error_text(e)}")
                     raise
             return
 
@@ -1661,7 +1659,7 @@ TRANSCRIPT:
         try:
             yield from self._stream_direct(prompt)
         except Exception as e:
-            logger.error(f"Ollama streaming failed: {e}")
+            logger.error(f"Ollama streaming failed: {safe_error_text(e)}")
             raise
 
     def summarize_transcript_streaming(self, transcript: str, duration_minutes: int = 0, language: str = "en", notes: str = None, progress_callback=None, template_prompt: Optional[str] = None,

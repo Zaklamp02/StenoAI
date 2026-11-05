@@ -119,7 +119,7 @@ class LocalProviderModelResolutionTests(unittest.TestCase):
         from src.summarizer import OllamaSummarizer
         cfg = mock.Mock()
         cfg.get_ai_provider.return_value = "remote"
-        cfg.get_remote_ollama_url.return_value = "http://192.168.1.50:11434"
+        cfg.get_remote_ollama_url.return_value = "https://192.168.1.50:11434"
         cfg.get_model.return_value = "gemma4:e2b-it-qat"
         with mock.patch("src.summarizer.ollama.Client"), \
              mock.patch("src.config.is_apple_silicon", return_value=True):

@@ -110,6 +110,7 @@ class AdapterRedirectTests(unittest.TestCase):
         summarizer = OllamaSummarizer.__new__(OllamaSummarizer)
         summarizer.adapter_url = "http://127.0.0.1:9"
         summarizer.adapter_token = "FAKE-TOKEN"
+        summarizer.ollama_process = None
 
         def refuse(request, timeout):
             raise RedirectRefused(request.full_url, 302, "refused", {}, None)

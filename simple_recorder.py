@@ -61,6 +61,7 @@ except ImportError:
     OllamaSummarizer = None
 
 from src.language_detect import detect_transcript_language
+from src.provider_errors import safe_error_text, scrub_credentials
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -972,8 +973,8 @@ Summary output language: {config.get_language_name(output_language)}
             # model" recommendation (same as reprocess) rather than a generic
             # failure, then re-raise to preserve this method's existing error
             # contract for its caller.
-            logger.error(f"Summarization failed: {e}")
-            err_msg = str(e).replace('\n', ' ').replace('\r', ' ')
+            logger.error(f"Summarization failed: {safe_error_text(e)}")
+            err_msg = safe_error_text(e)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             raise
         streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
@@ -1616,8 +1617,8 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # "try a smaller model" recommendation it shows for reprocess — instead
         # of a generic processing failure with no guidance.
         if _stream_error is not None:
-            logger.error(f"Summarization failed: {_stream_error}")
-            err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+            logger.error(f"Summarization failed: {safe_error_text(_stream_error)}")
+            err_msg = safe_error_text(_stream_error)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
@@ -3547,9 +3548,9 @@ def reprocess(summary_file, regenerate_title, retranscribe):
                 set_chunk_heartbeat(None)
 
             if transcribe_result.get("transcription_failed"):
-                err_msg = str(
+                err_msg = scrub_credentials(" ".join(str(
                     transcribe_result.get("error") or "transcription failed"
-                ).replace('\n', ' ').replace('\r', ' ')
+                ).split()))
                 print(f"STREAM_ERROR:{err_msg}", flush=True)
                 sys.exit(1)
 
@@ -3663,12 +3664,12 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             summary_heartbeat.set()
 
         if _stream_error is not None:
-            logger.error(f"Summarization failed: {_stream_error}")
+            logger.error(f"Summarization failed: {safe_error_text(_stream_error)}")
             # The renderer's parser reads STREAM_ERROR line-by-line, so a
             # message containing newlines (tracebacks can) would be truncated
             # to its first line. Flatten newlines into spaces so the whole
             # message survives on one line.
-            err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+            err_msg = safe_error_text(_stream_error)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
@@ -4120,8 +4121,8 @@ def generate_report(summary_file, template_id):
         summary_heartbeat.set()
 
     if _stream_error is not None:
-        logger.error(f"Report generation failed: {_stream_error}")
-        err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+        logger.error(f"Report generation failed: {safe_error_text(_stream_error)}")
+        err_msg = safe_error_text(_stream_error)
         print(f"STREAM_ERROR:{err_msg}", flush=True)
         sys.exit(1)
 
