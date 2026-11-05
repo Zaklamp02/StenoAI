@@ -57,9 +57,46 @@ class PipelineStatsTests(unittest.TestCase):
         self.assertEqual(set(stats), {
             "source", "diarised", "dual_channel", "mic_speakers", "system_speakers",
             "window_coverage", "duration_seconds", "diarization_engine", "speaker_identification",
+            "mic_segments", "mic_segments_dropped_as_echo", "channel_bleed_collapsed",
+            "clusters_raw", "clusters_after_fold", "cross_channel_pairs",
+            "cross_channel_merges", "cross_channel_nearest_unmerged",
+            "cross_channel_skipped_erase_split", "echo_turns_dropped",
         })
         self.assertNotIn("Jitze", json.dumps(stats))
         self.assertNotIn("budget", json.dumps(stats))
+
+    def test_copies_bleed_and_merge_counts(self):
+        stats = self._stats({
+            "pipeline_diagnostics": {
+                "mic_segments": 40,
+                "mic_segments_dropped_as_echo": 12,
+                "channel_bleed_collapsed": False,
+                "clusters_raw": {"mic": 3, "system": 2},
+                "clusters_after_fold": {"mic": 2, "system": 2},
+                "cross_channel_pairs": 4,
+                "cross_channel_merges": [
+                    {"tier": "echo", "distance": 0.31, "overlap": 0.92},
+                    {"tier": "made-up", "distance": 0.1},
+                ],
+                "cross_channel_nearest_unmerged": {"distance": 0.47, "overlap": 0.55},
+                "echo_turns_dropped": 5,
+                "segment_texts": ["should never be copied"],
+            },
+        })
+        self.assertEqual(stats["mic_segments_dropped_as_echo"], 12)
+        self.assertEqual(stats["clusters_raw"], {"mic": 3, "system": 2})
+        self.assertEqual(stats["cross_channel_merges"], [
+            {"tier": "echo", "distance": 0.31, "overlap": 0.92},
+        ])
+        self.assertEqual(stats["cross_channel_nearest_unmerged"], {"distance": 0.47, "overlap": 0.55})
+        self.assertNotIn("segment_texts", stats)
+        self.assertNotIn("should never", json.dumps(stats))
+
+    def test_missing_diagnostics_read_as_zero(self):
+        stats = self._stats({})
+        self.assertEqual(stats["mic_segments"], 0)
+        self.assertEqual(stats["cross_channel_merges"], [])
+        self.assertIsNone(stats["cross_channel_nearest_unmerged"])
 
     def test_unknown_source_is_not_forwarded(self):
         self.assertEqual(self._stats({}, source="something else")["source"], "unknown")

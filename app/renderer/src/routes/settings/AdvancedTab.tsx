@@ -1,3 +1,4 @@
+import { t } from '@/i18n';
 import * as React from 'react';
 import { Check, Copy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,7 +9,9 @@ import {
   useClearSystemState,
   usePickStorageFolder,
   useSetStoragePath,
+  useSetSpeakerFeedbackSharing,
   useSetTelemetry,
+  useSpeakerFeedbackSummary,
   useStoragePath,
   useTelemetrySetting,
 } from '@/hooks/useSettings';
@@ -64,6 +67,9 @@ export function AdvancedTab() {
   const clearState = useClearSystemState();
   const telemetry = useTelemetrySetting();
   const setTelemetry = useSetTelemetry();
+  const setSpeakerFeedback = useSetSpeakerFeedbackSharing();
+  const feedbackSummary = useSpeakerFeedbackSummary();
+  const usageOn = telemetry.data?.telemetry_enabled ?? false;
 
   const chooseFolder = async () => {
     try {
@@ -161,14 +167,38 @@ export function AdvancedTab() {
       <SettingRow
         label="Anonymous usage analytics"
         description="Help improve Steno — no meeting content is ever sent"
-        noBorder={!telemetry.data?.anonymous_id}
       >
         <Switch
-          checked={telemetry.data?.telemetry_enabled ?? false}
+          checked={usageOn}
           onCheckedChange={(v) => setTelemetry.mutate({ enabled: v, source: 'settings' })}
           disabled={telemetry.data === undefined}
         />
       </SettingRow>
+
+      <SettingRow
+        label={t('advancedTab.speakerFeedbackLabel')}
+        description={t('advancedTab.speakerFeedbackDescription')}
+        noBorder={!telemetry.data?.anonymous_id}
+      >
+        <Switch
+          checked={usageOn && (telemetry.data?.speaker_feedback_sharing ?? false)}
+          onCheckedChange={(v) => setSpeakerFeedback.mutate(v)}
+          disabled={telemetry.data === undefined || !usageOn}
+          aria-label={t('advancedTab.speakerFeedbackLabel')}
+          data-speaker-feedback-sharing
+        />
+      </SettingRow>
+      <div className="space-y-1 pb-4 text-[13px]" style={{ color: 'var(--fg-2)' }}>
+        {(feedbackSummary.data?.suggested ?? 0) > 0 && (
+          <p data-speaker-feedback-accuracy>
+            {t('advancedTab.speakerFeedbackAccuracy', {
+              accepted: feedbackSummary.data?.accepted ?? 0,
+              suggested: feedbackSummary.data?.suggested ?? 0,
+            })}
+          </p>
+        )}
+        <p>{t('advancedTab.debugReportNote')}</p>
+      </div>
 
       {telemetry.data?.anonymous_id && (
         <div

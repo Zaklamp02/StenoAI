@@ -324,6 +324,7 @@ function install({ ipcMain }) {
   const telemetry = {
     telemetry_enabled: false,
     telemetry_consent_answered: process.env.STENOAI_E2E_TELEMETRY_UNANSWERED !== '1',
+    speaker_feedback_sharing: false,
   };
   let delayPrivacyNotice = process.env.STENOAI_E2E_DELAY_PRIVACY_NOTICE === '1';
   // In-memory stand-in for the org session + provider config that the real
@@ -559,6 +560,23 @@ function install({ ipcMain }) {
       return { success: true, privacy_notice_seen: true };
     },
     'get-telemetry': async () => ({ success: true, ...telemetry }),
+    'set-speaker-feedback-sharing': async (_event, enabled) => {
+      telemetry.speaker_feedback_sharing = enabled === true;
+      return { success: true, speaker_feedback_sharing: telemetry.speaker_feedback_sharing };
+    },
+    'get-speaker-feedback-summary': async () => ({
+      success: true, suggested: 4, accepted: 3, named_without_suggestion: 1, marked_mixed: 0,
+    }),
+    // A fixed, content-free report; the real one is built by src/debug_report.py.
+    'get-debug-report': async () => ({
+      success: true,
+      report: { schema_version: 1, speakers: null, pipeline: { mic_segments: 12 } },
+    }),
+    'send-debug-report': async () => (
+      process.env.STENOAI_E2E_DEBUG_REPORT_FAILS === '1'
+        ? { success: false, error: 'Could not send the report.' }
+        : { success: true, report_id: '00000000-0000-4000-8000-000000000001' }
+    ),
     'set-telemetry': async (_event, enabled) => {
       telemetry.telemetry_enabled = enabled === true;
       telemetry.telemetry_consent_answered = true;

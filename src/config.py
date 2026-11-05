@@ -2071,6 +2071,19 @@ class Config:
         """
         return self._config.get("telemetry_consent_given", False) is True
 
+    def get_speaker_feedback_sharing(self) -> bool:
+        """Whether speaker-review feedback may be sent with usage data.
+
+        A second opt-in on top of telemetry: it only has effect while
+        get_telemetry_enabled() is on. The local feedback log is kept either
+        way (see src.speaker_feedback).
+        """
+        return self._config.get("speaker_feedback_sharing", False) is True
+
+    def set_speaker_feedback_sharing(self, enabled: bool) -> bool:
+        self._config["speaker_feedback_sharing"] = bool(enabled)
+        return self._save()
+
     def set_telemetry_enabled(self, enabled: bool) -> bool:
         """
         Set whether anonymous usage analytics are enabled.

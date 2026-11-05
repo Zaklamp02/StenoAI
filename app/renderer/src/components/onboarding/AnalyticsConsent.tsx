@@ -4,7 +4,7 @@ import { Check, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Muted } from '@/components/ui/typography';
-import { useSetTelemetry } from '@/hooks/useSettings';
+import { useSetSpeakerFeedbackSharing, useSetTelemetry } from '@/hooks/useSettings';
 import type { TelemetryToggleSource } from '@/lib/ipc';
 
 /**
@@ -16,6 +16,7 @@ export function AnalyticsConsentDetails() {
   const sent = [
     t('analyticsConsent.sentFeatures'),
     t('analyticsConsent.sentPipeline'),
+    t('analyticsConsent.sentSpeakerFeedback'),
     t('analyticsConsent.sentErrors'),
   ];
   const neverSent = [
@@ -59,7 +60,8 @@ export function AnalyticsConsentDetails() {
  * and "Not now" a quiet one beside it: the nudge is in the weight, never in a
  * pre-made choice, so either way the user clicks for themselves. Both answers
  * are recorded (set-telemetry stores that a choice was made), so the question
- * is asked once per install.
+ * is asked once per install. Sharing covers everything the details list,
+ * speaker-review feedback included; Settings -> Advanced separates them.
  */
 export function AnalyticsConsentButtons({
   source,
@@ -69,21 +71,27 @@ export function AnalyticsConsentButtons({
   onAnswered?: (enabled: boolean) => void;
 }) {
   const setTelemetry = useSetTelemetry();
+  const { mutateAsync: setSpeakerFeedback } = useSetSpeakerFeedbackSharing();
+  const { mutateAsync: setUsage } = setTelemetry;
   const answer = React.useCallback(
-    (enabled: boolean) => {
-      setTelemetry.mutate(
-        { enabled, source },
-        { onSettled: () => onAnswered?.(enabled) },
-      );
+    async (enabled: boolean) => {
+      try {
+        await setUsage({ enabled, source });
+        if (enabled) await setSpeakerFeedback(true);
+      } catch {
+        // The upgrade prompt asks again on a later launch if this did not stick.
+      } finally {
+        onAnswered?.(enabled);
+      }
     },
-    [onAnswered, setTelemetry, source],
+    [onAnswered, setSpeakerFeedback, setUsage, source],
   );
   return (
     <div className="flex flex-col-reverse items-center gap-2 sm:flex-row sm:justify-center">
       <Button
         variant="ghost"
         size="lg"
-        onClick={() => answer(false)}
+        onClick={() => void answer(false)}
         disabled={setTelemetry.isPending}
         data-analytics-decline
       >
@@ -91,7 +99,7 @@ export function AnalyticsConsentButtons({
       </Button>
       <Button
         size="lg"
-        onClick={() => answer(true)}
+        onClick={() => void answer(true)}
         disabled={setTelemetry.isPending}
         autoFocus
         data-analytics-accept

@@ -788,7 +788,17 @@ export type GetTelemetryResponse = Result<{
   /** False until the user has answered the analytics question either way;
    *  absent from older backends, which counts as answered. */
   telemetry_consent_answered?: boolean;
+  /** Speaker-review feedback rides along with usage data only when this is
+   *  on too; absent from older backends, which counts as off. */
+  speaker_feedback_sharing?: boolean;
   anonymous_id?: string;
+}>;
+/** From the local speaker_feedback.jsonl only; nothing here was sent. */
+export type SpeakerFeedbackSummaryResponse = Result<{
+  suggested: number;
+  accepted: number;
+  named_without_suggestion: number;
+  marked_mixed: number;
 }>;
 export type GetPrivacyNoticeSeenResponse = Result<{ privacy_notice_seen: boolean }>;
 export type GetDockIconResponse = Result<{ hide_dock_icon: boolean }>;
@@ -1239,6 +1249,10 @@ export interface StenoaiBridge {
   };
 
   meetings: {
+    /** Build this note's content-free debug report for the user to read. */
+    getDebugReport: RequestFn<[meetingStem: string], Result<{ report: Record<string, unknown> }>>;
+    /** Send it. Main rebuilds the report itself; nothing is passed in. */
+    sendDebugReport: RequestFn<[meetingStem: string], Result<{ report_id: string }>>;
     /** Stop this note's (re)transcription; the audio is kept. */
     cancelProcessing: RequestFn<[summaryFile?: string], Result<Record<string, never>>>;
     /** This meeting's language; 'auto' means the Settings default applies. */
@@ -1423,6 +1437,8 @@ export interface StenoaiBridge {
       [v: boolean, source: TelemetryToggleSource],
       Result<Record<string, never>>
     >;
+    setSpeakerFeedbackSharing: RequestFn<[v: boolean], Result<{ speaker_feedback_sharing: boolean }>>;
+    getSpeakerFeedbackSummary: RequestFn<[], SpeakerFeedbackSummaryResponse>;
     getDockIcon: RequestFn<[], GetDockIconResponse>;
     setDockIcon: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getMenuBarIcon: RequestFn<[], GetMenuBarIconResponse>;

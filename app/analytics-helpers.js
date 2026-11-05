@@ -104,6 +104,62 @@ function coverageBucket(coverage) {
   return '<90%';
 }
 
+function finiteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function shareBucket(part, whole) {
+  if (!Number.isInteger(part) || !Number.isInteger(whole) || whole <= 0 || part < 0) return 'unknown';
+  const share = part / whole;
+  if (share === 0) return '0';
+  if (share < 0.1) return '<10%';
+  if (share < 0.3) return '10-30%';
+  if (share < 0.6) return '30-60%';
+  return '60%+';
+}
+
+// Edges sit on the merge thresholds in src/transcriber.py:
+// SAME_MEETING_MERGE_DISTANCE_THRESHOLD (0.10), CROSS_CHANNEL_ECHO_MAX_DISTANCE
+// (0.40) and CROSS_CHANNEL_ECHO_STRONG_MAX_DISTANCE (0.52), so a bucket says
+// which rule a pair fell under, not just roughly how far apart it was.
+function mergeDistanceBucket(distance) {
+  const d = finiteNumber(distance);
+  if (d === null) return 'none';
+  if (d <= 0.1) return '<=0.10';
+  if (d <= 0.3) return '0.10-0.30';
+  if (d <= 0.4) return '0.30-0.40';
+  if (d <= 0.52) return '0.40-0.52';
+  if (d <= 0.6) return '0.52-0.60';
+  return '>0.60';
+}
+
+// Edges at CROSS_CHANNEL_ECHO_MIN_OVERLAP (0.60) and _STRONG_MIN_OVERLAP (0.90).
+function overlapBucket(overlap) {
+  const o = finiteNumber(overlap);
+  if (o === null) return 'none';
+  if (o < 0.3) return '<30%';
+  if (o < 0.6) return '30-60%';
+  if (o < 0.9) return '60-90%';
+  return '90%+';
+}
+
+const MERGE_TIER_ORDER = ['fragment', 'echo', 'strong_echo'];
+
+function crossChannelMergeSummary(merges) {
+  const tiers = (Array.isArray(merges) ? merges : [])
+    .map((m) => (m && typeof m === 'object' ? m.tier : null))
+    .filter((tier) => MERGE_TIER_ORDER.includes(tier));
+  if (tiers.length === 0) return 'none';
+  // The loosest tier used is the one worth watching: a strong_echo merge is
+  // the rule most likely to join two real people.
+  return tiers.reduce((a, b) => (MERGE_TIER_ORDER.indexOf(b) > MERGE_TIER_ORDER.indexOf(a) ? b : a));
+}
+
+function countBucket(count) {
+  if (!Number.isInteger(count) || count < 0) return 'unknown';
+  return count >= 5 ? '5+' : String(count);
+}
+
 const PIPELINE_SOURCES = new Set(['live', 'batch']);
 const DIARIZATION_ENGINES = new Set(['sortformer', 'nemotron3']);
 const TRANSCRIPTION_ENGINES = new Set(['parakeet', 'whisper', 'openai-asr']);
@@ -130,6 +186,151 @@ function pipelineCompletedProperties(stats, { engine, notesGenerated } = {}) {
     duration_bucket: duration,
     speaker_identification: s.speaker_identification === true,
     notes_generated: notesGenerated === true,
+    ...pipelineDiagnosticsProperties(s),
+  };
+}
+
+// The bleed and merge decisions, bucketed. Read from the same stats object;
+// each value maps to the constant it would tune (see the bucket helpers).
+function pipelineDiagnosticsProperties(s) {
+  const raw = s.clusters_raw && typeof s.clusters_raw === 'object' ? s.clusters_raw : {};
+  const folded = s.clusters_after_fold && typeof s.clusters_after_fold === 'object' ? s.clusters_after_fold : {};
+  const fragmentsFolded = (channel) => (
+    Number.isInteger(raw[channel]) && Number.isInteger(folded[channel])
+      ? countBucket(Math.max(0, raw[channel] - folded[channel]))
+      : 'unknown'
+  );
+  const merges = Array.isArray(s.cross_channel_merges) ? s.cross_channel_merges : [];
+  const nearest = s.cross_channel_nearest_unmerged && typeof s.cross_channel_nearest_unmerged === 'object'
+    ? s.cross_channel_nearest_unmerged
+    : {};
+  const loosest = merges.find((m) => m && m.tier === crossChannelMergeSummary(merges)) || {};
+  return {
+    mic_echo_dropped: shareBucket(s.mic_segments_dropped_as_echo, s.mic_segments),
+    channel_bleed_collapsed: s.channel_bleed_collapsed === true,
+    mic_fragments_folded: fragmentsFolded('mic'),
+    system_fragments_folded: fragmentsFolded('system'),
+    cross_channel_merge: crossChannelMergeSummary(merges),
+    cross_channel_merge_count: countBucket(merges.length),
+    cross_channel_merge_distance: mergeDistanceBucket(loosest.distance),
+    cross_channel_merge_overlap: overlapBucket(loosest.overlap),
+    nearest_unmerged_distance: mergeDistanceBucket(nearest.distance),
+    nearest_unmerged_overlap: overlapBucket(nearest.overlap),
+    cross_channel_skipped_erase_split: s.cross_channel_skipped_erase_split === true,
+    echo_turns_dropped: countBucket(Number.isInteger(s.echo_turns_dropped) ? s.echo_turns_dropped : 0),
+  };
+}
+
+// Edges sit on src/speaker_suggestions.py's constants: 0.10 is
+// SAME_MEETING_MERGE_DISTANCE_THRESHOLD, 0.40 SUGGESTION_DISTANCE_THRESHOLD,
+// so a correction just past the threshold lands in its own bucket.
+function speakerDistanceBucket(distance) {
+  const d = finiteNumber(distance);
+  if (d === null) return 'none';
+  if (d < 0.1) return '<0.10';
+  if (d < 0.2) return '0.10-0.20';
+  if (d < 0.3) return '0.20-0.30';
+  if (d < 0.4) return '0.30-0.40';
+  if (d < 0.45) return '0.40-0.45';
+  if (d < 0.55) return '0.45-0.55';
+  return '>0.55';
+}
+
+// Edge at SUGGESTION_CONFIDENCE_MARGIN (0.10).
+function speakerMarginBucket(margin) {
+  const m = finiteNumber(margin);
+  if (m === null) return 'none';
+  if (m < 0.05) return '<0.05';
+  if (m < 0.1) return '0.05-0.10';
+  if (m < 0.2) return '0.10-0.20';
+  return '>0.20';
+}
+
+// Edge at SUGGESTION_MIN_DURATION_SECONDS (20).
+function speechSecondsBucket(seconds) {
+  const s = finiteNumber(seconds);
+  if (s === null) return 'unknown';
+  if (s < 10) return '<10s';
+  if (s < 20) return '10-20s';
+  if (s < 60) return '20-60s';
+  if (s < 300) return '1-5m';
+  return '5m+';
+}
+
+// Edge at SUGGESTION_MIN_AVG_TURN_SECONDS (1.55).
+function avgTurnBucket(seconds, segments) {
+  const s = finiteNumber(seconds);
+  if (s === null || !Number.isInteger(segments) || segments <= 0) return 'unknown';
+  const avg = s / segments;
+  if (avg < 1.55) return '<1.55s';
+  if (avg < 3) return '1.55-3s';
+  if (avg < 8) return '3-8s';
+  return '8s+';
+}
+
+const SPEAKER_ACTIONS = new Set([
+  'accepted_confirmed', 'accepted_possible', 'overrode_suggestion', 'named_unsuggested',
+  'new_person', 'new_person_over_suggestion', 'marked_multiple_speakers',
+]);
+const SUGGESTION_STATUSES = new Set(['confirmed', 'possible', 'none']);
+const INVITEE_ANSWERS = new Set(['yes', 'no', 'unknown', 'none']);
+const BLOCKING_GATES = ['hard_negative', 'threshold', 'margin', 'stability', 'confirmed_meetings'];
+
+function chosenRankBucket(rank) {
+  if (rank === 'new_person' || rank === 'no_evidence') return rank;
+  if (!Number.isInteger(rank) || rank < 1) return 'unknown';
+  return rank >= 3 ? '3+' : String(rank);
+}
+
+function splitProperties(prefix, split) {
+  const s = split && typeof split === 'object' ? split : {};
+  return {
+    [`${prefix}_distance`]: mergeDistanceBucket(s.distance),
+    [`${prefix}_overlap`]: overlapBucket(s.overlap),
+  };
+}
+
+// speaker_correction's properties from the record src/speaker_feedback.py
+// returns with confirm-speaker / mark-speaker-cluster. Same contract as
+// pipelineCompletedProperties: fixed keys, every value a bucket, enum or
+// boolean, anything unexpected collapses. Never forwarded: names, ids,
+// meeting stems, raw distances.
+function speakerFeedbackProperties(record) {
+  const r = record && typeof record === 'object' ? record : {};
+  const action = SPEAKER_ACTIONS.has(r.action) ? r.action : 'unknown';
+  const common = {
+    action,
+    channel: r.channel === 'mic' || r.channel === 'system' ? r.channel : 'unknown',
+    diarization_engine: DIARIZATION_ENGINES.has(r.diarization_engine) ? r.diarization_engine : 'none',
+    cluster_speech: speechSecondsBucket(r.speech_seconds),
+    cluster_avg_turn: avgTurnBucket(r.speech_seconds, r.segment_count),
+    merged_fragments: countBucket(r.merged_fragments),
+    clusters_in_channel: countBucket(r.clusters_in_channel),
+  };
+  if (action === 'marked_multiple_speakers') return common;
+
+  const blocked = r.blocked_by && typeof r.blocked_by === 'object' ? r.blocked_by : {};
+  const gates = Object.fromEntries(
+    BLOCKING_GATES.map((gate) => [`blocked_by_${gate}`, blocked[gate] === true]),
+  );
+  return {
+    ...common,
+    reassigned: r.reassigned === true,
+    suggestion_status: SUGGESTION_STATUSES.has(r.suggestion_status) ? r.suggestion_status : 'unknown',
+    ...gates,
+    known_people: countBucket(r.known_people),
+    best_distance: speakerDistanceBucket(r.best_distance),
+    runner_up_margin: speakerMarginBucket(r.runner_up_margin),
+    best_confirmed_meetings: countBucket(r.best_confirmed_meetings),
+    chosen_rank: chosenRankBucket(r.chosen_rank),
+    chosen_distance: speakerDistanceBucket(r.chosen_distance),
+    chosen_hard_negative_conflict: r.chosen_hard_negative_conflict === true,
+    chosen_confirmed_meetings: countBucket(r.chosen_confirmed_meetings),
+    chosen_claimed_by_other_cluster: r.chosen_claimed_by_other_cluster === true,
+    ...splitProperties('same_channel_split', r.same_channel_split),
+    ...splitProperties('cross_channel_split', r.cross_channel_split),
+    suggested_was_invitee: INVITEE_ANSWERS.has(r.suggested_was_invitee) ? r.suggested_was_invitee : 'unknown',
+    chosen_was_invitee: INVITEE_ANSWERS.has(r.chosen_was_invitee) ? r.chosen_was_invitee : 'unknown',
   };
 }
 
@@ -450,6 +651,7 @@ module.exports = {
   textLengthBucket,
   durationBucket,
   pipelineCompletedProperties,
+  speakerFeedbackProperties,
   RENDERER_TRACK_EVENTS,
   RENDERER_TRACK_EVENT_PROPERTIES,
   RENDERER_TRACK_EVENT_VALUE_ALLOWLIST,

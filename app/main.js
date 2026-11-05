@@ -73,6 +73,7 @@ const { registerMeetingTransferIpc, copyRegularFile } = require('./meeting-trans
 const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
+const { registerDebugReportIpc } = require('./debug-report-ipc');
 const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
@@ -173,6 +174,7 @@ const {
   textLengthBucket,
   durationBucket,
   pipelineCompletedProperties,
+  speakerFeedbackProperties,
   RENDERER_TRACK_EVENTS,
   sanitizeTrackProperties,
   calendarMeetingProvider,
@@ -4758,6 +4760,8 @@ ipcMain.handle('delete-meeting', async (event, meetingData) => {
     // Deleting a person is its own explicit action in the Speakers panel.
     if (stem) {
       ancillaryCandidates.push(path.join(outputDir, `${stem}_speakers.json`));
+      // Pipeline stats kept for the meeting's debug report (counts only).
+      ancillaryCandidates.push(path.join(outputDir, `${stem}_pipeline.json`));
     }
     // Imported transfer audio is bound to the same immutable summary stem.
     // Enumerate only canonical track files, never paths from meeting JSON.
@@ -9128,8 +9132,24 @@ ipcMain.handle('pull-parakeet-model', async (event, modelId) => {
 // tray) deliberately stay in main.js until that domain's own extraction.
 registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog });
 registerPersonSampleIpc({ ipcMain, runPythonScript });
+// Speaker-review feedback is a second opt-in on top of usage analytics
+// (Settings -> Advanced). Read from config.json at send time so a change in
+// Settings applies to the very next review, with no cached copy to go stale.
+function speakerFeedbackSharingEnabled() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(getUserDataDir(), 'config.json'), 'utf-8'));
+    return cfg.speaker_feedback_sharing === true;
+  } catch (_) {
+    return false;
+  }
+}
+
 registerSpeakerIpc({
   ipcMain, runPythonScript, parsePythonFailureJson, sendDebugLog,
+  onFeedback: (feedback) => {
+    if (!speakerFeedbackSharingEnabled()) return;
+    trackEvent('speaker_correction', speakerFeedbackProperties(feedback));
+  },
   contacts: require('./person-contacts').createPersonContacts(getUserDataDir),
   meetingCalendar: async (summaryFile, meetingStem) => {
     if (typeof summaryFile !== 'string'
@@ -9368,6 +9388,51 @@ ipcMain.handle('get-telemetry', async () => {
     };
   } catch (error) {
     sendDebugLog(`Error getting telemetry settings: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+// A debug report is sent only by an explicit click on one note, after the
+// user has read it, so it does not wait on the usage-analytics switch: with
+// analytics off it goes through a short-lived client of its own.
+registerDebugReportIpc({
+  ipcMain, runPythonScript, parsePythonFailureJson,
+  appContext: () => ({ version: APP_VERSION, platform: process.platform, arch: process.arch }),
+  send: async (reportId, report) => {
+    if (!POSTHOG.configured) return false;
+    const client = posthogClient || new PostHog(POSTHOG.apiKey, { host: POSTHOG.host, disableGeoip: true });
+    try {
+      client.capture({
+        distinctId: anonymousId || reportId,
+        event: 'debug_report',
+        properties: { report_id: reportId, report: JSON.stringify(report), app_version: APP_VERSION },
+      });
+      if (client === posthogClient) await withTimeout(client.flush(), 5000);
+      else await withTimeout(client.shutdown(), 5000);
+      return true;
+    } catch (error) {
+      sendDebugLog(`Could not send debug report: ${error.message}`);
+      return false;
+    }
+  },
+});
+
+ipcMain.handle('set-speaker-feedback-sharing', async (_event, enabled) => {
+  try {
+    const result = await runPythonScript(
+      'simple_recorder.py', ['set-speaker-feedback-sharing', enabled === true ? 'True' : 'False'],
+    );
+    return JSON.parse(result.match(/\{.*\}/s)[0]);
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-speaker-feedback-summary', async () => {
+  try {
+    const result = await runPythonScript('simple_recorder.py', ['speaker-feedback-summary']);
+    return JSON.parse(result.match(/\{.*\}/s)[0]);
+  } catch (error) {
     return { success: false, error: error.message };
   }
 });
