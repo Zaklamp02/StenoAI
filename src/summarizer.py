@@ -14,6 +14,7 @@ from .models import MeetingTranscript, ActionItem, Decision
 from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
 from .meeting_context import MeetingContext
 from . import ollama_manager
+from .secure_http import RedirectRefused, open_authenticated
 
 logger = logging.getLogger(__name__)
 
@@ -914,10 +915,13 @@ class OllamaSummarizer:
                     logger.info(f"Adapter API retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(5)
                 req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                with open_authenticated(req, timeout=timeout_seconds) as resp:
                     body = _json.loads(resp.read().decode("utf-8"))
                 return (body.get("reply") or "").strip()
             except urllib.error.HTTPError as e:
+                if isinstance(e, RedirectRefused):
+                    # A redirect will not stop being one on retry.
+                    raise
                 # 401/403 won't fix themselves — abort retry loop early so
                 # the user sees the auth error rather than waiting through
                 # three pointless backoffs.
@@ -965,7 +969,7 @@ class OllamaSummarizer:
 
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            with open_authenticated(req, timeout=timeout_seconds) as resp:
                 for raw_line in resp:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
@@ -1074,7 +1078,7 @@ class OllamaSummarizer:
                     logger.info(f"Bedrock API retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(5)
                 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                with open_authenticated(req, timeout=timeout_seconds) as resp:
                     payload = _json.loads(resp.read().decode("utf-8"))
                 # Converse response shape:
                 #   { "output": { "message": { "content": [ { "text": "..." } ] } }, ... }

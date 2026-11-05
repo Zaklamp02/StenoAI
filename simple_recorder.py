@@ -9680,7 +9680,8 @@ def test_cloud_api():
             }
             try:
                 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                from src.secure_http import open_authenticated
+                with open_authenticated(req, timeout=15) as resp:
                     resp.read()  # we only care about the status code
                 # Surface the curated list as "models" so the UI's existing
                 # dropdown wiring lights up after a successful test.
