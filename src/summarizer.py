@@ -14,6 +14,7 @@ from .models import MeetingTranscript, ActionItem, Decision
 from .config import Config, resolve_runtime_tag, BEDROCK_REGION_RE
 from .meeting_context import MeetingContext
 from . import ollama_manager
+from .endpoint_policy import require_secure_endpoint
 from .secure_http import RedirectRefused, open_authenticated
 
 logger = logging.getLogger(__name__)
@@ -193,7 +194,13 @@ class OllamaSummarizer:
         self.anthropic_client = None
         self.cloud_provider = None
         self.ollama_process = None
+        # Checked again at use: a value saved by an older build, or by hand,
+        # never passed the setter's transport rule (src/endpoint_policy.py).
+        # Only when it is about to be used, so a stale unused value does not
+        # break the local provider.
         self.remote_url = config.get_remote_ollama_url()
+        if self.ai_provider == "remote":
+            self.remote_url = require_secure_endpoint(self.remote_url)
         # Bedrock-specific state. Lazily populated only when cloud_provider == 'bedrock'.
         self.bedrock_api_key: Optional[str] = None
         self.bedrock_region: str = ""
@@ -204,7 +211,7 @@ class OllamaSummarizer:
             # org adapter, which holds the Anthropic key server-side. The
             # desktop never sees the provider key. URL + JWT come from
             # env vars set by Electron when a session is active.
-            self.adapter_url = config.get_adapter_url()
+            self.adapter_url = require_secure_endpoint(config.get_adapter_url())
             self.adapter_token = config.get_adapter_token()
             # Model name is informational — the adapter is configured with
             # its own DEFAULT_MODEL and we omit `model` from the request
@@ -222,7 +229,7 @@ class OllamaSummarizer:
             # Cloud mode: use OpenAI-compatible or Anthropic API
             cloud_api_key = config.get_cloud_api_key()
             self.cloud_provider = config.get_cloud_provider()
-            cloud_api_url = config.get_cloud_api_url()
+            cloud_api_url = require_secure_endpoint(config.get_cloud_api_url())
             self.model_name = model_name or config.get_cloud_model()
 
             if not cloud_api_key:

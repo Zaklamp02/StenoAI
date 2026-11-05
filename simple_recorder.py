@@ -9493,8 +9493,13 @@ def set_ai_provider(provider):
 def set_remote_ollama_url(url):
     """Set the remote Ollama server URL"""
     from src.config import get_config
+    from src.endpoint_policy import InsecureEndpoint
     config = get_config()
-    success = config.set_remote_ollama_url(url)
+    try:
+        success = config.set_remote_ollama_url(url)
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        sys.exit(1)
     if success:
         print(json.dumps({"success": True, "remote_ollama_url": url}))
     else:
@@ -9506,8 +9511,13 @@ def set_remote_ollama_url(url):
 def set_cloud_api_url(url):
     """Set the cloud API URL"""
     from src.config import get_config
+    from src.endpoint_policy import InsecureEndpoint
     config = get_config()
-    success = config.set_cloud_api_url(url)
+    try:
+        success = config.set_cloud_api_url(url)
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        sys.exit(1)
     if success:
         print(json.dumps({"success": True, "cloud_api_url": url}))
     else:
@@ -9642,7 +9652,12 @@ def test_cloud_api():
 
     cloud_api_key = config.get_cloud_api_key()
     cloud_provider = config.get_cloud_provider()
-    cloud_api_url = config.get_cloud_api_url()
+    from src.endpoint_policy import InsecureEndpoint, require_secure_endpoint
+    try:
+        cloud_api_url = require_secure_endpoint(config.get_cloud_api_url())
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        return
 
     if not cloud_api_key:
         print(json.dumps({"success": False, "error": "No API key configured"}))

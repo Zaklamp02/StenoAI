@@ -980,6 +980,17 @@ function AdapterProviderInfo({ signedIn }: { signedIn: boolean }) {
   );
 }
 
+/** Why an address was not saved, e.g. plain http to another machine
+ *  (src/endpoint_policy.py). The message comes from the backend. */
+function UrlSaveError({ error }: { error: Error | null }) {
+  if (!error) return null;
+  return (
+    <p className="mt-1 text-[12px]" style={{ color: 'var(--danger)' }} role="alert" data-url-save-error>
+      {error.message}
+    </p>
+  );
+}
+
 function RemoteProviderConfig() {
   const provider = useAiProvider();
   const setUrl = useSetRemoteOllamaUrl();
@@ -1007,10 +1018,11 @@ function RemoteProviderConfig() {
         <Input
           value={url}
           onChange={(e) => setLocalUrl(e.target.value)}
-          placeholder="http://192.168.1.100:11434"
+          placeholder="https://ollama.example.com"
           onBlur={() => url && setUrl.mutate(url)}
           className="h-[30px] bg-[color:var(--surface-raised)] text-[13px]"
         />
+        <UrlSaveError error={setUrl.error} />
       </div>
       <div className="flex items-center gap-3">
         <Button
@@ -1223,6 +1235,7 @@ function CloudProviderConfig() {
             onBlur={() => apiUrl && setCloudUrl.mutate(apiUrl)}
             className={COMPACT_INPUT}
           />
+          <UrlSaveError error={setCloudUrl.error} />
         </div>
       )}
       <div>

@@ -2674,8 +2674,13 @@ class Config:
         return self._config.get("remote_ollama_url", "")
 
     def set_remote_ollama_url(self, url: str) -> bool:
-        """Set the remote Ollama server URL."""
-        self._config["remote_ollama_url"] = url.strip()
+        """Set the remote Ollama server URL.
+
+        Raises InsecureEndpoint for plain http to another machine (it would
+        carry meeting text unencrypted) or a URL with credentials in it.
+        """
+        from src.endpoint_policy import require_secure_endpoint
+        self._config["remote_ollama_url"] = require_secure_endpoint(url)
         return self._save()
 
     def get_cloud_api_url(self) -> str:
@@ -2683,8 +2688,10 @@ class Config:
         return self._config.get("cloud_api_url", "")
 
     def set_cloud_api_url(self, url: str) -> bool:
-        """Set the cloud API URL."""
-        self._config["cloud_api_url"] = url.strip()
+        """Set the cloud API URL. Same transport rule as the Ollama URL;
+        this one also receives the API key."""
+        from src.endpoint_policy import require_secure_endpoint
+        self._config["cloud_api_url"] = require_secure_endpoint(url)
         return self._save()
 
     def get_cloud_api_key(self) -> str:

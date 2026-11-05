@@ -73,6 +73,7 @@ const { registerMeetingTransferIpc, copyRegularFile } = require('./meeting-trans
 const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
+const { requireSecureEndpoint } = require('./endpoint-policy');
 const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
@@ -9847,6 +9848,7 @@ function getAiEnv() {
   if (cloudKey) env.STENOAI_CLOUD_API_KEY = cloudKey;
   const session = loadOrgSession();
   if (session && session.adapterUrl && session.token && !isJwtExpired(session.token)) {
+    // The Python side checks it again (src/endpoint_policy.py).
     env.STENOAI_ADAPTER_URL = session.adapterUrl;
     env.STENOAI_ADAPTER_TOKEN = session.token;
   }
@@ -13167,22 +13169,14 @@ function getOrgBackupEntry(summaryFile) {
 // `localhost`, `127.0.0.1`, IPv6 `::1` (bare or bracketed), with or
 // without a port and/or path. Used to pick the right default scheme
 // when the user types a hostname without one.
-const _LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\]|::1)(?::\d+)?(?:\/|$)/i;
 
+// The adapter receives the sign-in password and then a session token on
+// every call, so it gets the same transport rule as every other credentialed
+// endpoint (app/endpoint-policy.js): https, or http only to this machine, and
+// no credentials in the URL. A bare host defaults to https. Throws a message
+// fit to show; callers already return error.message.
 function normaliseAdapterUrl(url) {
-  let u = String(url || '').trim();
-  if (!u) return '';
-  if (!/^https?:\/\//i.test(u)) {
-    // No scheme provided. Default to https — the adapter is the holder of
-    // org JWTs, AWS credentials, and the AI provider key; sending its
-    // bearer tokens over plain http would expose them on the wire to any
-    // network observer. Loopback addresses are the one documented dev
-    // exception where http is fine because the traffic never leaves the
-    // machine.
-    const isLoopback = _LOOPBACK_HOST_RE.test(u);
-    u = (isLoopback ? 'http://' : 'https://') + u;
-  }
-  return u.replace(/\/+$/, '');
+  return requireSecureEndpoint(url);
 }
 
 async function adapterFetch(pathname, opts = {}) {
@@ -13200,7 +13194,8 @@ async function adapterFetch(pathname, opts = {}) {
   // on both Windows and macOS. Same for every other org/S3 call in this file.
   // credentials:'omit' — the adapter authenticates via the Bearer header above,
   // not session cookies; net.fetch defaults to 'include', so be explicit.
-  const res = await net.fetch(session.adapterUrl + pathname, { ...opts, headers, credentials: 'omit' });
+  // Re-checked at use: a session saved by an older build may hold an http URL.
+  const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + pathname, { ...opts, headers, credentials: 'omit' });
   const text = await res.text();
   let body;
   try {
@@ -13940,7 +13935,7 @@ ipcMain.on('org-chat-stream', async (event, streamId, payload) => {
   sender.once('destroyed', onDestroyed);
 
   try {
-    const res = await net.fetch(session.adapterUrl + '/ai/chat/stream', {
+    const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + '/ai/chat/stream', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
