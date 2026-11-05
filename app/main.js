@@ -195,6 +195,7 @@ const { EXPORT_CANCELED } = require('./ipc-sentinels');
 const { mayExposeMainWindow } = require('./e2e-window-visibility');
 const { TOAST_WORKSPACE_OPTIONS, activateApp } = require('./mac-window-activation');
 const { PostHog } = require('posthog-node');
+const { resolvePosthogConfig } = require('./telemetry-config');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
 
@@ -854,8 +855,7 @@ let posthogClient = null;
 let telemetryEnabled = false;
 let anonymousId = null;
 
-const POSTHOG_API_KEY = 'phc_U2cnTyIyKGNSVaK18FyBMltd8nmN7uHxhhm21fAHwqb';
-const POSTHOG_HOST = 'https://us.i.posthog.com';
+const POSTHOG = resolvePosthogConfig();
 
 // Google Calendar OAuth2 configuration
 const GOOGLE_CLIENT_ID = '281073275073-20da4u5t9luk2366vd5ai0a2r55d5pf5.apps.googleusercontent.com';
@@ -969,8 +969,12 @@ async function initTelemetry() {
     telemetryEnabled = config.telemetry_enabled;
     anonymousId = config.anonymous_id;
 
-    if (telemetryEnabled) {
-      posthogClient = new PostHog(POSTHOG_API_KEY, { host: POSTHOG_HOST, disableGeoip: true });
+    if (telemetryEnabled && !POSTHOG.configured) {
+      // Opted in, but this build has no PostHog project: send nothing.
+      telemetryEnabled = false;
+      console.log('Telemetry opted in but no PostHog project is configured; nothing is sent');
+    } else if (telemetryEnabled) {
+      posthogClient = new PostHog(POSTHOG.apiKey, { host: POSTHOG.host, disableGeoip: true });
       // Identify user for DAU tracking
       posthogClient.identify({
         distinctId: anonymousId,
@@ -9370,10 +9374,10 @@ ipcMain.handle('set-telemetry', async (event, enabled, source) => {
     // disable itself invisible (trackEvent no-ops once telemetryEnabled is
     // false and posthogClient is torn down), and re-enabling would identify
     // stale/absent super-properties until the next app launch.
-    if (enabled && !posthogClient) {
+    if (enabled && !posthogClient && POSTHOG.configured) {
       // Bring the client up and identify FIRST so both the super-properties
       // and this event land fresh, rather than waiting for next launch.
-      posthogClient = new PostHog(POSTHOG_API_KEY, { host: POSTHOG_HOST, disableGeoip: true });
+      posthogClient = new PostHog(POSTHOG.apiKey, { host: POSTHOG.host, disableGeoip: true });
       telemetryEnabled = true;
       refreshIdentitySuperProperties();
       trackEvent('telemetry_toggled', { enabled: true, source: toggleSource });
@@ -9386,7 +9390,7 @@ ipcMain.handle('set-telemetry', async (event, enabled, source) => {
       await shutdownTelemetry(); // flushes the event above, then closes
       console.log('Telemetry disabled');
     } else {
-      telemetryEnabled = enabled;
+      telemetryEnabled = enabled && POSTHOG.configured;
     }
 
     // Extract JSON from output
