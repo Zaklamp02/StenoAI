@@ -46,7 +46,7 @@ function tourSlides(): TourSlide[] {
  * whichever button ends it.
  */
 export function OnboardingTour({ onFinish }: { onFinish: (route?: string) => void }) {
-  const slides = React.useMemo(tourSlides, []);
+  const slides = React.useMemo(() => tourSlides(), []);
   const [index, setIndex] = React.useState(0);
   const slide = slides[index];
   const Icon = slide.icon;
