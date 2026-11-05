@@ -2062,6 +2062,15 @@ class Config:
         return (self._config.get("telemetry_enabled", False) is True
                 and self._config.get("telemetry_consent_given", False) is True)
 
+    def get_telemetry_consent_answered(self) -> bool:
+        """Whether the user has made an analytics choice, yes or no.
+
+        set_telemetry_enabled records any choice, so a False here means the
+        install has never been asked (or never answered) and onboarding or
+        the upgrade prompt should ask once.
+        """
+        return self._config.get("telemetry_consent_given", False) is True
+
     def set_telemetry_enabled(self, enabled: bool) -> bool:
         """
         Set whether anonymous usage analytics are enabled.

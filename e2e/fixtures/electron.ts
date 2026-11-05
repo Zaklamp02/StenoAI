@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -33,6 +33,14 @@ type LaunchOptions = {
   fakeAudio?: boolean;
   /** Extra env vars merged over the e2e defaults. */
   env?: Record<string, string>;
+  /**
+   * Leave the analytics question unanswered. By default a test that starts
+   * with no config.json gets one that has already answered it (and seen the
+   * privacy notice), because on a machine with a cached ASR model the app
+   * skips onboarding and would put the one-time question over whatever the
+   * spec drives. Specs about that question set this.
+   */
+  askAnalytics?: boolean;
 };
 
 type LaunchResult = { app: ElectronApplication; page: Page };
@@ -62,6 +70,13 @@ export const test = base.extend<Fixtures>({
     const launched: { app: ElectronApplication; proc: ReturnType<ElectronApplication['process']> }[] = [];
 
     const launch = async (opts: LaunchOptions = {}): Promise<LaunchResult> => {
+      const configPath = path.join(userDataDir, 'config.json');
+      if (!opts.mockIpc && !opts.askAnalytics && !existsSync(configPath)) {
+        writeFileSync(
+          configPath,
+          JSON.stringify({ privacy_notice_seen: true, telemetry_consent_given: true }, null, 2),
+        );
+      }
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         STENOAI_E2E: '1',

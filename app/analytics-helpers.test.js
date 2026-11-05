@@ -7,6 +7,7 @@ const path = require('node:path');
 const {
   textLengthBucket,
   durationBucket,
+  pipelineCompletedProperties,
   RENDERER_TRACK_EVENTS,
   RENDERER_TRACK_EVENT_PROPERTIES,
   RENDERER_TRACK_EVENT_VALUE_ALLOWLIST,
@@ -605,4 +606,60 @@ test('withTimeout supports a custom fallback value', async () => {
   const neverSettles = new Promise(() => {});
   const result = await withTimeout(neverSettles, 20, 'timed-out');
   assert.strictEqual(result, 'timed-out');
+});
+
+test('pipelineCompletedProperties sends only fixed keys with bucketed values', () => {
+  const props = pipelineCompletedProperties({
+    source: 'batch',
+    diarised: true,
+    dual_channel: true,
+    mic_speakers: 1,
+    system_speakers: 7,
+    window_coverage: 0.95,
+    duration_seconds: 1900,
+    diarization_engine: 'nemotron3',
+    speaker_identification: true,
+    title: 'Board meeting with Jitze',
+    transcript_text: 'confidential',
+  }, { engine: 'parakeet', notesGenerated: true });
+  assert.deepStrictEqual(props, {
+    source: 'batch',
+    asr_engine: 'parakeet',
+    diarization_engine: 'nemotron3',
+    diarised: true,
+    dual_channel: true,
+    mic_speakers: '1',
+    system_speakers: '5+',
+    window_coverage: '90-99%',
+    duration_bucket: '30-60m',
+    speaker_identification: true,
+    notes_generated: true,
+  });
+});
+
+test('pipelineCompletedProperties collapses unexpected values to unknown', () => {
+  const props = pipelineCompletedProperties({
+    source: '/Users/someone/meeting.wav',
+    mic_speakers: 'Jitze',
+    system_speakers: -1,
+    window_coverage: 'all of it',
+    duration_seconds: null,
+    diarization_engine: 'a person name',
+    diarised: 'yes',
+  }, { engine: 'some-new-engine' });
+  assert.strictEqual(props.source, 'unknown');
+  assert.strictEqual(props.asr_engine, 'unknown');
+  assert.strictEqual(props.diarization_engine, 'none');
+  assert.strictEqual(props.mic_speakers, 'unknown');
+  assert.strictEqual(props.system_speakers, 'unknown');
+  assert.strictEqual(props.window_coverage, 'unknown');
+  assert.strictEqual(props.duration_bucket, 'unknown');
+  assert.strictEqual(props.diarised, false);
+  assert.strictEqual(props.notes_generated, false);
+});
+
+test('pipelineCompletedProperties tolerates a missing stats object', () => {
+  const props = pipelineCompletedProperties(null);
+  assert.strictEqual(props.source, 'unknown');
+  assert.strictEqual(props.window_coverage, 'unknown');
 });

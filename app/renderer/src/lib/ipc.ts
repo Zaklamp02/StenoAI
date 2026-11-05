@@ -785,6 +785,9 @@ export type GetRecordHotkeyResponse = Result<{ enabled: boolean; registered: boo
 export type SetRecordHotkeyResponse = Result<{ enabled: boolean; registered: boolean }>;
 export type GetTelemetryResponse = Result<{
   telemetry_enabled: boolean;
+  /** False until the user has answered the analytics question either way;
+   *  absent from older backends, which counts as answered. */
+  telemetry_consent_answered?: boolean;
   anonymous_id?: string;
 }>;
 export type GetPrivacyNoticeSeenResponse = Result<{ privacy_notice_seen: boolean }>;

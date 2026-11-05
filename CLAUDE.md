@@ -160,8 +160,12 @@ overrides an agent's own test-level defaults.
     in" on a simulated battery, `STENOAI_E2E_POWER_SOURCE=battery`, a queued
     meeting is held as `waiting-power` in `recording-journal.json`, requeues
     itself after a restart, runs on Process now, and the live transcript is
-    skipped), and the onboarding spec
-    `setup-check.t2` (the setup-wizard allGood + checks contract) (all model-free,
+    skipped), the onboarding specs
+    `setup-check.t2` (the setup-wizard allGood + checks contract) and
+    `onboarding-consent.t2` (a fresh install's welcome screen asks about
+    analytics before setup; either answer lands in config.json as a recorded
+    choice; its UI half, the skip-when-answered rule and the post-setup tour,
+    is `onboarding-welcome.t1`) (all model-free,
     run in `t2-macos` /
     `t2-windows`); `transcription-pipeline.t2` and `honest-failure.t2` (tagged
     `@pipeline`, run in `t2-pipeline-macos` / `t2-pipeline-windows`), and
@@ -195,6 +199,10 @@ overrides an agent's own test-level defaults.
     `skip`s on whisper. Exercises the long-file chunking **plumbing**, NOT the MLX/Metal OOM
     (that needs a GPU runner — tracked follow-up). Too slow for per-PR, so it lives in the
     nightly workflow, not `e2e.yml`.
+- **Analytics question:** a launch with no config.json gets one that has already
+  answered the analytics question, because on a machine with a cached ASR model
+  the app skips onboarding and would show the one-time question over the spec.
+  Specs about that question pass `askAnalytics: true` to `launchApp`.
 - **Isolation keystone:** every test sets `STENOAI_USER_DATA_DIR` to a temp dir, which
   both `getUserDataDir()` (main.js) and `get_user_data_dir()` (`src/config.py`) honor,
   so a test can never read/write the real `~/Library/Application Support/stenoai`. The

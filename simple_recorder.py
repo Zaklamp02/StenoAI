@@ -1273,6 +1273,30 @@ def _recorded_at_override():
         return None
 
 
+def _print_pipeline_stats(transcript_data, source):
+    """Emit content-free stats for the shell's pipeline_completed event.
+
+    Best-effort: statistics must never fail a meeting, so any error here is
+    logged and the line is simply not printed.
+    """
+    try:
+        from src.config import get_config
+        from src.pipeline_stats import pipeline_stats
+        from src.transcriber import _identity_matching_enabled
+
+        stats = pipeline_stats(
+            transcript_data,
+            source=source,
+            diarization_engine=(
+                get_config().get_diarization_engine() if sys.platform == "darwin" else None
+            ),
+            speaker_identification=_identity_matching_enabled(),
+        )
+        print(f"PIPELINE_STATS:{json.dumps(stats)}", flush=True)
+    except Exception as e:
+        logger.warning("Could not compute pipeline stats: %s", e)
+
+
 @cli.command(name='process-streaming')
 @click.argument('audio_file', default='')
 @click.option('--name', '-n', default='Recording', help='Session name')
@@ -1476,6 +1500,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # fallback, even though that fallback is a successful note creation.
         print(f"TRANSCRIPTION_SOURCE:{'live' if is_live_transcript else 'batch'}", flush=True)
         print(f"TRANSCRIPTION_COMPLETE:{len(transcript_text)}", flush=True)
+        _print_pipeline_stats(transcript_data, "live" if is_live_transcript else "batch")
 
         # Continue-recording (append) path: fold this segment's transcript
         # into the target note, mark it stale, and stop — no summary, no
@@ -9105,6 +9130,7 @@ def get_telemetry():
 
     result = {
         "telemetry_enabled": enabled,
+        "telemetry_consent_answered": config.get_telemetry_consent_answered(),
         "anonymous_id": anonymous_id
     }
 

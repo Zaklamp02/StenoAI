@@ -92,6 +92,47 @@ function sanitizeTrackProperties(eventName, properties) {
   return out;
 }
 
+function speakerCountBucket(count) {
+  if (!Number.isInteger(count) || count < 0) return 'unknown';
+  return count >= 5 ? '5+' : String(count);
+}
+
+function coverageBucket(coverage) {
+  if (typeof coverage !== 'number' || !Number.isFinite(coverage)) return 'unknown';
+  if (coverage >= 0.99) return 'full';
+  if (coverage >= 0.9) return '90-99%';
+  return '<90%';
+}
+
+const PIPELINE_SOURCES = new Set(['live', 'batch']);
+const DIARIZATION_ENGINES = new Set(['sortformer', 'nemotron3']);
+const TRANSCRIPTION_ENGINES = new Set(['parakeet', 'whisper', 'openai-asr']);
+
+// Builds pipeline_completed's properties from the backend's PIPELINE_STATS
+// line plus what the shell knows about the job. Every output key is fixed
+// here and every value is a bucket, an enum or a boolean, so whatever the
+// backend prints (or a future bug adds to it) cannot reach PostHog: unknown
+// keys are never read and unknown values collapse to 'unknown'.
+function pipelineCompletedProperties(stats, { engine, notesGenerated } = {}) {
+  const s = stats && typeof stats === 'object' ? stats : {};
+  const duration = typeof s.duration_seconds === 'number' && Number.isFinite(s.duration_seconds)
+    ? durationBucket(s.duration_seconds)
+    : 'unknown';
+  return {
+    source: PIPELINE_SOURCES.has(s.source) ? s.source : 'unknown',
+    asr_engine: TRANSCRIPTION_ENGINES.has(engine) ? engine : 'unknown',
+    diarization_engine: DIARIZATION_ENGINES.has(s.diarization_engine) ? s.diarization_engine : 'none',
+    diarised: s.diarised === true,
+    dual_channel: s.dual_channel === true,
+    mic_speakers: speakerCountBucket(s.mic_speakers),
+    system_speakers: speakerCountBucket(s.system_speakers),
+    window_coverage: coverageBucket(s.window_coverage),
+    duration_bucket: duration,
+    speaker_identification: s.speaker_identification === true,
+    notes_generated: notesGenerated === true,
+  };
+}
+
 // host === domain, or host is a real subdomain of domain (ends with
 // ".domain") -- NOT a bare substring match, which would also match an
 // unrelated host like "evilzoom.us.attacker.com" or "notzoom.us".
@@ -408,6 +449,7 @@ function withTimeout(promise, ms, fallback = null) {
 module.exports = {
   textLengthBucket,
   durationBucket,
+  pipelineCompletedProperties,
   RENDERER_TRACK_EVENTS,
   RENDERER_TRACK_EVENT_PROPERTIES,
   RENDERER_TRACK_EVENT_VALUE_ALLOWLIST,

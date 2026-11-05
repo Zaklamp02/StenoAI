@@ -172,6 +172,7 @@ const { isDiagnosticStdoutLine, sanitizeArgsForLog } = require('./diagnostics-fi
 const {
   textLengthBucket,
   durationBucket,
+  pipelineCompletedProperties,
   RENDERER_TRACK_EVENTS,
   sanitizeTrackProperties,
   calendarMeetingProvider,
@@ -6021,6 +6022,9 @@ async function processNextInQueue() {
       // Without this the renderer-driven (system audio) flow leaves the
       // user stranded on /meetings/processing after the summary streams in.
       let savedSummaryFile = null;
+      // Content-free stats from the backend's PIPELINE_STATS: line, sent as
+      // pipeline_completed once the job has finished (see analytics-helpers).
+      let pipelineStats = null;
       // Captured from `TRANSCRIPTION_FAILED:<msg>` — the Python pipeline
       // gracefully marks a transcription crash (e.g. an OOM on a long file),
       // preserves the audio, and still emits SAVED: for a reprocessable
@@ -6089,6 +6093,12 @@ async function processNextInQueue() {
           } else if (line.startsWith('SAVED:')) {
             savedSummaryFile = line.slice(6).trim();
             sendDebugLog(`Summary saved: ${savedSummaryFile}`);
+          } else if (line.startsWith('PIPELINE_STATS:')) {
+            try {
+              pipelineStats = JSON.parse(line.slice('PIPELINE_STATS:'.length));
+            } catch (_) {
+              pipelineStats = null;
+            }
           } else if (line.startsWith('TRANSCRIPTION_SOURCE:')) {
             currentProcessingJob.transcriptionSource = line.slice('TRANSCRIPTION_SOURCE:'.length).trim();
           } else if (line.startsWith('TRANSCRIPTION_FAILED:')) {
@@ -6156,6 +6166,12 @@ async function processNextInQueue() {
         if (code === 0) {
           console.log(`✅ Completed streaming processing: ${currentProcessingJob.sessionName}`);
           currentProcessingJob.audioCompleted = currentProcessingJob.transcriptionSource === 'batch' && !transcriptionFailedMsg;
+          if (pipelineStats) {
+            trackEvent('pipeline_completed', pipelineCompletedProperties(pipelineStats, {
+              engine: transcriptionCtx.engine,
+              notesGenerated: summarizationCompleted,
+            }));
+          }
           const sessionNameAtClose = currentProcessingJob.sessionName;
           // Mirror the finished note into an Obsidian vault when sync is on
           // (#413). Best-effort — a vault write must never affect processing.
