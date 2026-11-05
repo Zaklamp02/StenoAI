@@ -168,6 +168,30 @@ CROSS_CHANNEL_ECHO_MAX_DISTANCE = 0.40
 CROSS_CHANNEL_ECHO_MIN_OVERLAP = 0.60
 CROSS_CHANNEL_ECHO_MIN_SPEECH_S = 10.0
 CROSS_CHANNEL_ECHO_PAD_S = 0.25
+# Strong-evidence tier for heavier speaker colouring. Across 9 real
+# recordings, three mic echoes sat 0.48-0.50 from their system copy, past
+# the cap above, with 95-99.6% of their speech coinciding. Distinct voices
+# came as close as 0.44-0.51, so distance alone cannot separate them here,
+# but none coincided more than 44%: two people taking turns cannot speak
+# over each other for 90% of a minute or more. Near-total overlap on that
+# much speech is what admits a pair in this band.
+CROSS_CHANNEL_ECHO_STRONG_MAX_DISTANCE = 0.52
+CROSS_CHANNEL_ECHO_STRONG_MIN_OVERLAP = 0.90
+CROSS_CHANNEL_ECHO_STRONG_MIN_SPEECH_S = 60.0
+# Once a mic cluster is proven to be the echo of a system voice, its turns
+# that repeat the system text are duplicates and are dropped; the rest are
+# words only the mic caught and are kept under the remote speaker's label.
+# Character runs (not whole words) are compared because the two channels
+# decode the same speech differently ("600 euro" / "Zeshonderd euro",
+# "Thinkpads" / "Tingpat"). On that call the echo cluster's repeats covered
+# 0.48-1.00 and its mic-only words 0.00-0.38. Only echo-cluster turns are
+# tested, so the user's own speech is never at risk here.
+CROSS_CHANNEL_ECHO_DUPLICATE_COVERAGE = 0.4
+CROSS_CHANNEL_ECHO_DUPLICATE_MIN_RUN = 4
+# A turn has no end time; estimate it from its word count (generous for
+# Dutch and English speech, ~2.5 words/s) to pick the system text it echoes.
+CROSS_CHANNEL_ECHO_SECONDS_PER_WORD = 0.6
+CROSS_CHANNEL_ECHO_TEXT_PAD_S = 1.0
 
 # Floor for the steno-diarize subprocess timeout. Real measured runtime
 # varies a lot with recording length: single-digit-to-tens-of-seconds for
@@ -2185,6 +2209,7 @@ def _consolidate_speakers(
     tagged: list[tuple[float, str, str, str, Optional[str]]],
     mic_clusters: dict,
     system_clusters: dict,
+    echo_duplicates_out: Optional[set] = None,
 ) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict, dict]:
     """Merge one meeting's duplicate speaker identities.
 
@@ -2193,16 +2218,68 @@ def _consolidate_speakers(
     matched person counts as the runner-up and the cross-channel margin
     check reads it as ambiguity. Uses the meeting's embeddings in memory
     only; persisting them stays gated on speaker identification.
+    Folding keeps one output turn per input turn, so the indices
+    _reconcile_cross_channel_speakers adds to ``echo_duplicates_out`` point
+    into the caller's ``tagged``.
     """
     tagged, mic_clusters = _fold_same_channel_fragments(tagged, mic_clusters, "mic")
     tagged, system_clusters = _fold_same_channel_fragments(tagged, system_clusters, "system")
-    return _reconcile_cross_channel_speakers(tagged, mic_clusters, system_clusters)
+    return _reconcile_cross_channel_speakers(
+        tagged, mic_clusters, system_clusters, echo_duplicates_out=echo_duplicates_out,
+    )
+
+
+def _echo_duplicate_turns(
+    tagged: list[tuple[float, str, str, str, Optional[str]]],
+    echo_mic_sids: set,
+) -> set:
+    """Indices of echo-cluster mic turns that repeat the system text.
+
+    A system turn is taken to last until the next system turn starts; a mic
+    turn's end is estimated from its word count (see
+    CROSS_CHANNEL_ECHO_SECONDS_PER_WORD).
+    """
+    system_starts = [
+        (float(start or 0.0), text or "")
+        for start, _label, text, channel, _sid in tagged
+        if channel == "system"
+    ]
+    system_spans = [
+        (start, system_starts[i + 1][0] if i + 1 < len(system_starts) else math.inf, text)
+        for i, (start, text) in enumerate(system_starts)
+    ]
+    duplicates: set = set()
+    for index, (start, _label, text, channel, raw_sid) in enumerate(tagged):
+        if channel != "mic" or raw_sid not in echo_mic_sids:
+            continue
+        words = re.findall(r"\w+", (text or "").lower())
+        if not words:
+            continue
+        mic_start = float(start or 0.0)
+        mic_end = mic_start + CROSS_CHANNEL_ECHO_SECONDS_PER_WORD * len(words)
+        system_words = re.findall(r"\w+", " ".join(
+            span_text for span_start, span_end, span_text in system_spans
+            if span_start <= mic_end + CROSS_CHANNEL_ECHO_TEXT_PAD_S
+            and span_end >= mic_start - CROSS_CHANNEL_ECHO_TEXT_PAD_S
+        ).lower())
+        if not system_words:
+            continue
+        mic_chars, system_chars = " ".join(words), " ".join(system_words)
+        matcher = difflib.SequenceMatcher(None, mic_chars, system_chars, autojunk=False)
+        covered = sum(
+            block.size for block in matcher.get_matching_blocks()
+            if block.size >= CROSS_CHANNEL_ECHO_DUPLICATE_MIN_RUN
+        )
+        if covered / len(mic_chars) >= CROSS_CHANNEL_ECHO_DUPLICATE_COVERAGE:
+            duplicates.add(index)
+    return duplicates
 
 
 def _reconcile_cross_channel_speakers(
     tagged: list[tuple[float, str, str, str, Optional[str]]],
     mic_clusters: dict,
     system_clusters: dict,
+    echo_duplicates_out: Optional[set] = None,
 ) -> tuple[list[tuple[float, str, str, str, Optional[str]]], dict, dict]:
     """Collapse unambiguous mic/system copies of the same acoustic speaker.
 
@@ -2218,10 +2295,15 @@ def _reconcile_cross_channel_speakers(
     mutual-nearest pair with a clear runner-up margin on both sides, at or
     below the same-meeting fragment threshold -- or, for speaker playback
     re-captured by the mic, within CROSS_CHANNEL_ECHO_MAX_DISTANCE when the
-    two clusters also speak at the same moments.
+    two clusters also speak at the same moments (or within
+    CROSS_CHANNEL_ECHO_STRONG_MAX_DISTANCE when nearly all of a minute or
+    more of speech coincides).
     The channel retaining more post-bleed transcript text is canonical. Alias
     turns inherit its label and provenance, and the duplicate sidecar cluster
     is removed. Ambiguous, malformed, or unmatched clusters stay untouched.
+    Indices of a merged mic cluster's turns that repeat the system text are
+    added to ``echo_duplicates_out`` for the caller to drop; the system
+    channel's turns are never reported.
     """
     if not tagged or not mic_clusters or not system_clusters:
         return tagged, mic_clusters, system_clusters
@@ -2253,10 +2335,13 @@ def _reconcile_cross_channel_speakers(
             if not math.isfinite(distance):
                 continue
             distances[(mic_sid, system_sid)] = distance
-            if SAME_MEETING_MERGE_DISTANCE_THRESHOLD < distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE:
+            if SAME_MEETING_MERGE_DISTANCE_THRESHOLD < distance <= CROSS_CHANNEL_ECHO_STRONG_MAX_DISTANCE:
                 overlaps[(mic_sid, system_sid)] = _speech_overlap_ratio(
                     intervals[("mic", mic_sid)], intervals[("system", system_sid)],
-                    CROSS_CHANNEL_ECHO_PAD_S, CROSS_CHANNEL_ECHO_MIN_SPEECH_S,
+                    CROSS_CHANNEL_ECHO_PAD_S,
+                    CROSS_CHANNEL_ECHO_MIN_SPEECH_S
+                    if distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE
+                    else CROSS_CHANNEL_ECHO_STRONG_MIN_SPEECH_S,
                 )
 
     if not distances:
@@ -2265,9 +2350,11 @@ def _reconcile_cross_channel_speakers(
     def _eligible(pair: tuple[str, str], distance: float) -> bool:
         if distance <= SAME_MEETING_MERGE_DISTANCE_THRESHOLD:
             return True
+        if distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE:
+            return overlaps.get(pair, 0.0) >= CROSS_CHANNEL_ECHO_MIN_OVERLAP
         return (
-            distance <= CROSS_CHANNEL_ECHO_MAX_DISTANCE
-            and overlaps.get(pair, 0.0) >= CROSS_CHANNEL_ECHO_MIN_OVERLAP
+            distance <= CROSS_CHANNEL_ECHO_STRONG_MAX_DISTANCE
+            and overlaps.get(pair, 0.0) >= CROSS_CHANNEL_ECHO_STRONG_MIN_OVERLAP
         )
 
     def _confident_nearest(
@@ -2321,6 +2408,7 @@ def _reconcile_cross_channel_speakers(
     mic_out = dict(mic_clusters)
     system_out = dict(system_clusters)
     aliases: dict[tuple[str, str], tuple[str, str, str]] = {}
+    merged_mic_sids: set = set()
     for mic_sid, system_sid, distance in matches:
         mic_key = ("mic", mic_sid)
         system_key = ("system", system_sid)
@@ -2347,6 +2435,7 @@ def _reconcile_cross_channel_speakers(
         if canonical_label is None:
             continue
         aliases[alias_key] = (*canonical_key, canonical_label)
+        merged_mic_sids.add(mic_sid)
 
         canonical_out = mic_out if canonical_key[0] == "mic" else system_out
         alias_out = mic_out if alias_key[0] == "mic" else system_out
@@ -2398,6 +2487,14 @@ def _reconcile_cross_channel_speakers(
     if len(original_labels) > 1 and len(resolved_labels) <= 1:
         logger.info("Cross-channel speaker reconciliation skipped: would erase speaker split")
         return tagged, mic_clusters, system_clusters
+    if echo_duplicates_out is not None and merged_mic_sids:
+        duplicates = _echo_duplicate_turns(tagged, merged_mic_sids)
+        if duplicates:
+            logger.info(
+                "Cross-channel echo: dropping %d mic turns that repeat the system copy",
+                len(duplicates),
+            )
+        echo_duplicates_out.update(duplicates)
     return reconciled, mic_out, system_out
 
 
@@ -4422,13 +4519,16 @@ class WhisperTranscriber:
             # Duplicate identities are merged whether or not speaker
             # identification is on: the embeddings are used in memory for this
             # meeting only, and are persisted below only when it is on.
+            echo_duplicates: set = set()
             label_turns, mic_clusters, system_clusters = _consolidate_speakers(
                 label_turns, mic_clusters, system_clusters,
+                echo_duplicates_out=echo_duplicates,
             )
             resolved_labels = _resolve_speaker_placeholders(label_turns)
             tagged = [
                 (*resolved, original[5])
-                for resolved, original in zip(resolved_labels, tagged)
+                for index, (resolved, original) in enumerate(zip(resolved_labels, tagged))
+                if index not in echo_duplicates
             ]
 
             # Same {"mic"|"system": {"recording_type", "clusters"}} shape
