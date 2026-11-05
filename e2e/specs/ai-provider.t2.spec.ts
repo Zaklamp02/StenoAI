@@ -90,7 +90,7 @@ test('provider switch + cloud/bedrock config persist and round-trip through get-
 
   // Remote Ollama URL (no connectivity check — set only).
   await page.evaluate(() =>
-    (window as StenoWindow).stenoai.ai.setRemoteOllamaUrl('http://ollama.example.test:11434'),
+    (window as StenoWindow).stenoai.ai.setRemoteOllamaUrl('https://ollama.example.test:11434'),
   );
 
   await expect
@@ -111,7 +111,7 @@ test('provider switch + cloud/bedrock config persist and round-trip through get-
       cloud_model: 'claude-haiku-4-5-20251001',
       bedrock_region: 'us-west-2',
       bedrock_inference_profile: 'my-profile',
-      remote_ollama_url: 'http://ollama.example.test:11434',
+      remote_ollama_url: 'https://ollama.example.test:11434',
     });
 
   // Keystone: the real user-data dir is byte-for-byte untouched.

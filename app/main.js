@@ -10257,7 +10257,9 @@ ipcMain.handle('set-remote-ollama-url', async (event, url) => {
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message };
+    // The backend refuses an insecure address with a message worth showing
+    // (src/endpoint_policy.py); keep it rather than the exit-code text.
+    return parsePythonFailureJson(error);
   }
 });
 
@@ -10268,7 +10270,9 @@ ipcMain.handle('set-cloud-api-url', async (event, url) => {
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message };
+    // The backend refuses an insecure address with a message worth showing
+    // (src/endpoint_policy.py); keep it rather than the exit-code text.
+    return parsePythonFailureJson(error);
   }
 });
 
