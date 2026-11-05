@@ -165,7 +165,10 @@ overrides an agent's own test-level defaults.
     `onboarding-consent.t2` (a fresh install's welcome screen asks about
     analytics before setup; either answer lands in config.json as a recorded
     choice; its UI half, the skip-when-answered rule and the post-setup tour,
-    is `onboarding-welcome.t1`) (all model-free,
+    is `onboarding-welcome.t1`), and `speaker-feedback.t2` (a confirm keeps a
+    content-free row in `speaker_feedback.jsonl` and the renderer's reply
+    carries none of it; the speaker-feedback opt-in persists; the per-note
+    debug report's preview/send/retry UI is `debug-report.t1`) (all model-free,
     run in `t2-macos` /
     `t2-windows`); `transcription-pipeline.t2` and `honest-failure.t2` (tagged
     `@pipeline`, run in `t2-pipeline-macos` / `t2-pipeline-windows`), and
