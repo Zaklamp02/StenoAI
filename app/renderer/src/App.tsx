@@ -25,6 +25,7 @@ import { useLiveTranscriptOpen } from '@/hooks/liveTranscriptOpenStore';
 import { QuitDialog } from '@/components/QuitDialog';
 import { KeychainWaitBanner } from '@/components/KeychainWaitBanner';
 import { RecordingRecovery } from '@/components/RecordingRecovery';
+import { PowerWaitNotice } from '@/components/PowerWaitNotice';
 import { PrivacyConsentModal } from '@/components/PrivacyConsentModal';
 import { usePrivacyNoticeSeen } from '@/hooks/useSettings';
 import { ImportDropZone } from '@/components/ImportDropZone';
@@ -258,6 +259,7 @@ export function App() {
         <SwitchRecordingDialog />
         <KeychainWaitBanner />
         {route !== '/setup' && <RecordingRecovery />}
+        {route !== '/setup' && !isProcessingRoute && <PowerWaitNotice />}
         <PrivacyConsentModal open={showPrivacyModal} />
         <ImportDropZone />
 

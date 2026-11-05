@@ -48,6 +48,7 @@ function registerRecordingRecovery({ ipcMain, journal, resolveRecordingsDir, sum
           return false;
         }
         return valid(entry.audioFile) && !isBusy(entry.audioFile)
+        && entry.state !== 'waiting-power'
         && (entry.owner !== journal.owner || entry.state === 'failed'); }
       catch { return false; }
     });

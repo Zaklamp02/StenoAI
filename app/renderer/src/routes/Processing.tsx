@@ -5,6 +5,7 @@ import {
   Clock,
   Loader2,
   PencilLine,
+  PlugZap,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { create } from 'zustand';
@@ -16,6 +17,8 @@ import { getLiveDraft, useLiveDraftStore } from '@/hooks/liveDraftStore';
 import { ipc } from '@/lib/ipc';
 import { stripReasoning } from '@/lib/markdown';
 import { UI_LOCALE } from '@/lib/locale';
+import { t } from '@/i18n';
+import { useProcessNow } from '@/components/PowerWaitNotice';
 
 type ProcessingStage = 'transcribing' | 'diarizing' | 'summarizing' | 'finalizing' | 'error';
 
@@ -429,6 +432,10 @@ export function Processing() {
     }
   }, [retryAudioFile, activeSession, retrying]);
 
+  // Held for mains power (Settings → When to process): nothing runs until the
+  // device is plugged in or the user asks to process now.
+  const waitingForPower = recording.waitingForPower && !sawActivity;
+
   const displayTitle =
     streamedTitle ?? draft?.title ?? activeSession ?? 'Note';
 
@@ -472,11 +479,13 @@ export function Processing() {
             {/* Hide the animated "Processing" chip once we've stopped: an error
                 (crash or the watchdog's "nothing to process") means nothing is
                 actively processing, so the chip would mislead. */}
-            {stage !== 'error' && <ProcessingChip />}
+            {stage !== 'error' && !waitingForPower && <ProcessingChip />}
           </div>
         </header>
 
-        {stage === 'error' ? (
+        {waitingForPower ? (
+          <WaitingForPowerPanel />
+        ) : stage === 'error' ? (
           <ErrorPanel
             onRetry={handleRetry}
             canRetry={Boolean(retryAudioFile && activeSession)}
@@ -621,6 +630,39 @@ function StageCard({
   );
 }
 
+function WaitingForPowerPanel() {
+  const processNow = useProcessNow();
+  return (
+    <div className="py-3" data-testid="processing-waiting-for-power">
+      <p
+        className="inline-flex items-center gap-2 text-[17px]"
+        style={{ color: 'var(--fg-1)', fontFamily: 'var(--font-sans)' }}
+      >
+        <PlugZap size={16} aria-hidden style={{ color: 'var(--fg-2)' }} />
+        {t('power.waitingTitle')}
+      </p>
+      <p className="mt-1 text-[14px]" style={{ color: 'var(--fg-2)' }}>
+        {t('power.waitingDetail')}
+      </p>
+      {processNow.error && (
+        <p className="mt-2 text-[14px]" role="alert" style={{ color: 'var(--danger, #b4231f)' }}>
+          {processNow.error.message}
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={() => processNow.mutate()}
+        disabled={processNow.isPending}
+        className="mt-4 inline-flex h-9 cursor-pointer items-center gap-2 rounded-[8px] border-0 px-4 text-[14px] font-medium disabled:cursor-not-allowed disabled:opacity-60"
+        style={{ background: 'var(--fg-1)', color: 'var(--fg-inverse)' }}
+      >
+        {processNow.isPending && <Loader2 className="animate-spin" size={14} />}
+        {t('power.processNow')}
+      </button>
+    </div>
+  );
+}
+
 function ErrorPanel({
   onRetry,
   canRetry,
@@ -737,7 +779,8 @@ export function ProcessingDock() {
   // Once the watchdog concluded nothing was captured, the screen shows a
   // "Nothing to process" panel — don't keep animating "Processing" beneath it.
   const gaveUp = useProcessingWatchdogStore((s) => s.gaveUp);
-  if (gaveUp) return null;
+  // Nothing is processing while the meeting waits for mains power.
+  if (gaveUp || (recording.waitingForPower && recording.status === 'idle')) return null;
 
   return (
     <div className="flex justify-center pointer-events-none">

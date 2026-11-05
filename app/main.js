@@ -135,6 +135,7 @@ const speakerModelWarmup = (() => {
     getEnv: () => getBackendEnv(),
     isBusy: () => {
       if (isProcessing || processingQueue.length > 0) return 'a meeting is processing';
+      if (powerPolicy.shouldWait()) return 'processing waits for mains power';
       if (activeReprocessJobs.size > 0) return 'a note is being re-transcribed';
       if (liveTranscribeProcess) return 'live transcription is running';
       return null;
@@ -2067,7 +2068,7 @@ if (!gotSingleInstanceLock) {
         isQuitting = true;
         app.quit();
       }
-    } else if (isProcessing || processingQueue.length > 0) {
+    } else if (isProcessing || (processingQueue.length > 0 && !queueWaitingForPower)) {
       event.preventDefault();
       const jobCount = processingQueue.length + (isProcessing ? 1 : 0);
       const confirmed = await showCustomQuitDialog('processing', jobCount);
@@ -2315,6 +2316,9 @@ if (!gotSingleInstanceLock) {
     powerMonitor.on('suspend', freezeInactivityWatchdogsForSleep);
     powerMonitor.on('resume', promptResumeAfterWake);
     powerMonitor.on('resume', thawInactivityWatchdogsAfterWake);
+    // Meetings held for mains power (Settings → When to process) start once
+    // the machine is plugged in. A no-op when nothing is waiting.
+    powerMonitor.on('on-ac', () => { processNextInQueue(); });
     // Re-evaluate the idle auto-install gate when the machine wakes or the
     // screen unlocks — a downloaded update can then install the moment the
     // user has stepped away, without waiting for the next 60s tick. Cheap and
@@ -2425,6 +2429,12 @@ if (!gotSingleInstanceLock) {
         // Non-fatal - custom path just won't be cached
       }
     }
+
+    // Requeue meetings that were waiting for mains power when the app last
+    // quit. After the storage path load: restored paths are validated against
+    // getAllowedBaseDirs(), which only includes a custom storage path once
+    // it is cached.
+    restoreQueueWaitingForPower();
 
     // Recover any soft-deleted notes whose undo window was cut short by a crash
     // (#234): a hidden summary still under output/.pending-delete/ is renamed back
@@ -5006,12 +5016,38 @@ ipcMain.handle('list-pending-deletes', async () => {
   return { success: true, pending };
 });
 
+// Settings → When to process ('always' | 'plugged_in'). Registered here, not in
+// settings-ipc.js, because a change must release or hold the live queue.
+ipcMain.handle('get-processing-power-policy', async () => ({
+  success: true, processing_power_policy: powerPolicy.policy(), on_battery: powerPolicy.onBattery(),
+}));
+
+ipcMain.handle('set-processing-power-policy', async (event, policy) => {
+  if (!require('./power-policy').POLICIES.includes(policy)) {
+    return { success: false, error: 'Unknown processing power policy' };
+  }
+  try {
+    const result = await runPythonScript('simple_recorder.py', ['set-processing-power-policy', policy]);
+    const jsonData = JSON.parse(result.trim());
+    if (jsonData.success) processNextInQueue();
+    return jsonData;
+  } catch (e) { return { success: false, error: e.message }; }
+});
+
+// "Process now": run meetings held for mains power on battery anyway.
+ipcMain.handle('process-queue-now', async () => {
+  processOnBatteryOverride = true;
+  processNextInQueue();
+  return { success: true };
+});
+
 // Queue status handler
 ipcMain.handle('get-queue-status', async () => {
   return {
     success: true,
     isProcessing,
     queueSize: processingQueue.length,
+    waitingForPower: queueWaitingForPower && !isProcessing,
     currentJob: currentProcessingJob?.sessionName || null,
     currentProgress: currentProcessingJob ? { summaryFile: currentProcessingJob.summaryFile || null, progressLine: currentProcessingJob.progressLine } : null,
     currentReprocesses: Array.from(activeReprocessJobs.values(), ({ summaryFile, sessionName, progressLine }) => ({ summaryFile, sessionName, progressLine })),
@@ -5140,6 +5176,7 @@ ipcMain.handle('get-live-transcript-state', async () => {
     priorSegments: (liveTranscriptState.priorSegments || []).slice(),
     ready: liveTranscriptState.ready,
     error: liveTranscriptState.error,
+    waitingForPower: Boolean(liveTranscriptState.waitingForPower),
   };
 });
 
@@ -5554,6 +5591,16 @@ function applyRecordingBackgroundThrottling() {
 let currentRecordingProcess = null;
 let currentRecordingSessionName = null;  // Surfaced in get-queue-status so renderer knows which meeting is live
 let processingQueue = [];
+// Settings → When to process. See power-policy.js.
+const powerPolicy = require('./power-policy').createPowerPolicy({
+  getUserDataDir,
+  isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),
+  isE2E: IS_E2E,
+});
+// True while queued meetings are held until the machine is plugged in.
+let queueWaitingForPower = false;
+// Set by "Process now": run the held queue on battery until it is empty.
+let processOnBatteryOverride = false;
 
 // ── End orphan-recording cleanup ────────────────────────────────────────
 // Live-transcript ring buffer for the in-flight recording. Populated by the
@@ -5833,10 +5880,59 @@ function thawInactivityWatchdogsAfterWake() {
 }
 
 // Processing queue management
+// Hold the queue until mains power. Each held job's journal entry becomes
+// `waiting-power`, so restoreQueueWaitingForPower() requeues it after a quit,
+// crash or reboot instead of offering it as an interrupted recording.
+function holdQueueForPower() {
+  if (!queueWaitingForPower) sendDebugLog(`[power] on battery: holding ${processingQueue.length} meeting(s) until plugged in`);
+  queueWaitingForPower = true;
+  for (const job of processingQueue) {
+    try { recordingJournal.update(job.audioFile, 'waiting-power'); }
+    catch (e) { sendDebugLog(`Could not mark a meeting as waiting for power: ${e.message}`); }
+  }
+}
+
+function restoreQueueWaitingForPower() {
+  let entries = [];
+  try { entries = recordingJournal.pending().filter((e) => e.state === 'waiting-power'); }
+  catch (e) { sendDebugLog(`Could not read meetings waiting for power: ${e.message}`); return; }
+  const allowed = getAllowedBaseDirs();
+  const safe = (p) => typeof p === 'string' && validateSafeFilePath(p, allowed) && fs.existsSync(p);
+  let restored = 0;
+  for (const entry of entries) {
+    if (!safe(entry.audioFile) || processingQueue.some((job) => job.audioFile === entry.audioFile)) continue;
+    processingQueue.push({
+      audioFile: entry.audioFile,
+      sessionName: entry.sessionName || 'Note',
+      notesFile: safe(entry.notesFile) ? entry.notesFile : null,
+      liveTranscriptFile: safe(entry.liveTranscriptFile) ? entry.liveTranscriptFile : null,
+      appendTo: typeof entry.appendTo === 'string' && validateSafeFilePath(entry.appendTo, allowed) ? entry.appendTo : null,
+      summaryFile: typeof entry.summaryFile === 'string' && validateSafeFilePath(entry.summaryFile, allowed) ? entry.summaryFile : null,
+      recordedAt: entry.recordedAt,
+    });
+    // Claim the entry for this run (the journal stamps the current owner).
+    try { recordingJournal.update(entry.audioFile, 'waiting-power'); } catch (_) { /* stays protected */ }
+    restored += 1;
+  }
+  if (restored > 0) {
+    sendDebugLog(`[power] restored ${restored} meeting(s) waiting for power`);
+    processNextInQueue();
+  }
+}
+
 async function processNextInQueue() {
   if (isProcessing || processingQueue.length === 0) {
+    if (!isProcessing) {
+      queueWaitingForPower = false;
+      processOnBatteryOverride = false;
+    }
     return;
   }
+  if (!processOnBatteryOverride && powerPolicy.shouldWait()) {
+    holdQueueForPower();
+    return;
+  }
+  queueWaitingForPower = false;
 
   isProcessing = true;
   currentProcessingJob = processingQueue.shift();
@@ -6451,7 +6547,7 @@ async function prepareMeetingCalendar(job) {
 // options.recordedAt dates the meeting when it was recorded (watched folders);
 // options.external marks a job that is not the recording just stopped.
 function addToProcessingQueue(audioFile, sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile, options = {}) {
-  recordingJournal.update(audioFile, 'queued', { sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile: summaryFile || summaryFileForAudio(audioFile) });
+  recordingJournal.update(audioFile, 'queued', { sessionName, notesFile, liveTranscriptFile, appendTo, summaryFile: summaryFile || summaryFileForAudio(audioFile), recordedAt: options.recordedAt });
   // A language picked on the recording screen belongs to this meeting only.
   if (pendingRecordingLanguage && !options.external) {
     try { noteLanguages.set(appendTo || summaryFile || audioFile, pendingRecordingLanguage); }
@@ -6603,7 +6699,10 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
     // so the renderer can show real-time text. Cached read — avoids a
     // Python subprocess on every recording start.
     const engine = loadTranscriptionEngine();
-    const liveEnabled = engine === 'parakeet';
+    // On battery with "only when plugged in", skip the live transcript too:
+    // the meeting is transcribed in full once it is processed.
+    const liveWaitsForPower = engine === 'parakeet' && powerPolicy.shouldWait();
+    const liveEnabled = engine === 'parakeet' && !liveWaitsForPower;
 
     // Renderer-driven capture (useSystemAudioCapture) is the ONLY recording
     // path: it captures the mic (+ system loopback when the Settings toggle is
@@ -6646,6 +6745,7 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
       priorSegments: carryPrior,
       ready: false,
       error: null,
+      waitingForPower: liveWaitsForPower,
     };
     // Spawn the Parakeet+Silero transcribe-stream sidecar for live partials.
     // Whisper recordings skip it — the renderer gates its live-tap IPC on the
@@ -6657,7 +6757,7 @@ ipcMain.handle('start-recording-ui', async (_, sessionName, trigger, appendTo) =
         sendDebugLog(`Failed to spawn live transcribe sidecar: ${e.message}`);
       }
     } else {
-      sendDebugLog(`Live transcription off — engine=${engine}`);
+      sendDebugLog(`Live transcription off — ${liveWaitsForPower ? 'on battery' : `engine=${engine}`}`);
     }
     updateTrayIcon(true);
     // Fire-and-forget: the calendar lookup (network call) must never delay
@@ -7063,7 +7163,8 @@ function gatherIdleInstallState() {
     updateReady: updateDownloadedReady,
     isRecording: currentRecordingProcess !== null || systemAudioRecordingActive,
     isProcessing,
-    queueLength: processingQueue.length,
+    // Meetings held for mains power are journaled and requeue on relaunch.
+    queueLength: queueWaitingForPower ? 0 : processingQueue.length,
     liveActive: liveTranscribeProcess != null,
     streaming: activeQueryProcs.size > 0 || contextQueries.size > 0,
     otherJobsActive: activeReprocessJobs.size > 0,

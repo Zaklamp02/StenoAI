@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { ipc, type LiveSegment } from '@/lib/ipc';
 
-export type LiveTranscriptStatus = 'idle' | 'loading' | 'streaming' | 'error';
+/** 'waitingForPower': skipped on battery (Settings → When to process). */
+export type LiveTranscriptStatus = 'idle' | 'loading' | 'streaming' | 'error' | 'waitingForPower';
 
 export interface UseLiveTranscriptResult {
   status: LiveTranscriptStatus;
@@ -128,6 +129,7 @@ export function useLiveTranscript(sessionName: string | null): UseLiveTranscript
   // event for it), so it's set once and never folded into the lanes.
   const [priorSegments, setPriorSegments] = React.useState<LiveSegment[]>([]);
   const [ready, setReady] = React.useState(false);
+  const [waitingForPower, setWaitingForPower] = React.useState(false);
   const [error, setError] = React.useState<{ stage: string; message?: string } | null>(null);
   // Per-session marker that flips true the moment any subscription event
   // arrives. The backfill (getState resolves async) checks it before
@@ -145,6 +147,7 @@ export function useLiveTranscript(sessionName: string | null): UseLiveTranscript
     setPriorSegments([]);
     setReady(false);
     setError(null);
+    setWaitingForPower(false);
 
     if (!sessionName) return;
 
@@ -196,6 +199,7 @@ export function useLiveTranscript(sessionName: string | null): UseLiveTranscript
         setFinals(lanes.finals);
         setPartials(lanes.partials);
         setReady(res.ready);
+        setWaitingForPower(Boolean(res.waitingForPower));
         if (res.error) {
           setError({ stage: res.error.stage, message: res.error.message ?? res.error.error });
         }
@@ -224,7 +228,9 @@ export function useLiveTranscript(sessionName: string | null): UseLiveTranscript
     ? 'error'
     : !sessionName
       ? 'idle'
-      : segments.length > 0 || priorSegments.length > 0 || ready
+      : waitingForPower
+        ? 'waitingForPower'
+        : segments.length > 0 || priorSegments.length > 0 || ready
         ? 'streaming'
         : 'loading';
 
@@ -262,6 +268,7 @@ export function useLiveTranscriptStatus(sessionName: string | null): {
   slow: boolean;
 } {
   const [ready, setReady] = React.useState(false);
+  const [waitingForPower, setWaitingForPower] = React.useState(false);
   const [sawSegment, setSawSegment] = React.useState(false);
   const [error, setError] = React.useState<{ stage: string; message?: string } | null>(null);
   const receivedEventRef = React.useRef(false);
@@ -271,6 +278,7 @@ export function useLiveTranscriptStatus(sessionName: string | null): {
     setReady(false);
     setSawSegment(false);
     setError(null);
+    setWaitingForPower(false);
     if (!sessionName) return;
 
     const offReady = ipc().on.liveTranscriptReady((ev) => {
@@ -307,6 +315,7 @@ export function useLiveTranscriptStatus(sessionName: string | null): {
         if (receivedEventRef.current) return;
         if ((res.segments ?? []).length > 0) setSawSegment(true);
         setReady(res.ready);
+        setWaitingForPower(Boolean(res.waitingForPower));
         if (res.error) {
           setError({ stage: res.error.stage, message: res.error.message ?? res.error.error });
         }
@@ -327,7 +336,9 @@ export function useLiveTranscriptStatus(sessionName: string | null): {
     ? 'error'
     : !sessionName
       ? 'idle'
-      : sawSegment || ready
+      : waitingForPower
+        ? 'waitingForPower'
+        : sawSegment || ready
         ? 'streaming'
         : 'loading';
 

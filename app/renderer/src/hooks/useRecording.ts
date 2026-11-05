@@ -271,6 +271,8 @@ export function useRecording() {
      *  produced no job (nothing was captured), which the watchdog uses to
      *  break out of an otherwise-forever spinner (issue #343). */
     queueSize: queue.data?.queueSize ?? 0,
+    /** Queued meetings are held until the device is plugged in. */
+    waitingForPower: queue.data?.waitingForPower ?? false,
     // The name the CURRENT state actually backs, which keeps `sessionName`
     // populated through the full recording → processing → done lifecycle so the
     // synthetic in-progress row in useMeetings stays visible while a note is

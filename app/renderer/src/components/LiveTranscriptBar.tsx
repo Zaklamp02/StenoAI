@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { useLiveTranscript } from '@/hooks/useLiveTranscript';
+import { useLiveTranscript, type LiveTranscriptStatus } from '@/hooks/useLiveTranscript';
+import { t } from '@/i18n';
 import { useRecording } from '@/hooks/useRecording';
 import { useLanguageSetting, useSetLanguage } from '@/hooks/useSettings';
 import { PARAKEET_LANGUAGES } from '@/lib/transcription-languages';
@@ -268,7 +269,7 @@ export function LiveTranscriptBar() {
 type Segments = ReturnType<typeof useLiveTranscript>['segments'];
 
 interface BodyStateProps {
-  status: 'idle' | 'loading' | 'streaming' | 'error';
+  status: LiveTranscriptStatus;
   error: { stage: string; message?: string } | null;
   /** The search result, rendered as one flat list while a query is active. */
   filtered: Segments;
@@ -298,6 +299,14 @@ function LiveTranscriptBodyState({
       <EmptyState
         title="Live transcription unavailable"
         subtitle={error.message ? `${error.stage}: ${error.message}` : `Stage: ${error.stage}`}
+      />
+    );
+  }
+  if (status === 'waitingForPower') {
+    return (
+      <EmptyState
+        title={t('power.liveTitle')}
+        subtitle={t('power.liveSubtitle')}
       />
     );
   }

@@ -2138,6 +2138,26 @@ def set_auto_install_when_idle_cmd(enabled: bool):
         print(json.dumps({"success": False, "error": "Failed to persist setting"}))
 
 
+@cli.command(name='get-processing-power-policy')
+def get_processing_power_policy_cmd():
+    """Get when meetings are processed: always, or only when plugged in."""
+    from src.config import get_config
+    config = get_config()
+    print(json.dumps({"processing_power_policy": config.get_processing_power_policy()}))
+
+
+@cli.command(name='set-processing-power-policy')
+@click.argument('policy', type=click.Choice(['always', 'plugged_in']))
+def set_processing_power_policy_cmd(policy: str):
+    """Set when meetings are processed: always, or only when plugged in."""
+    from src.config import get_config
+    config = get_config()
+    if config.set_processing_power_policy(policy):
+        print(json.dumps({"success": True, "processing_power_policy": policy}))
+    else:
+        print(json.dumps({"success": False, "error": "Failed to persist setting"}))
+
+
 @cli.command(name='get-identity-matching-enabled')
 def get_identity_matching_enabled_cmd():
     """Get whether cross-recording speaker identification is enabled."""

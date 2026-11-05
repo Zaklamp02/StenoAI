@@ -404,6 +404,9 @@ export interface QueueStatus {
   success: true;
   isProcessing: boolean;
   queueSize: number;
+  /** Queued meetings are held until the device is plugged in (Settings →
+   *  When to process). Absent on older main processes. */
+  waitingForPower?: boolean;
   currentJob: string | null;
   /** Side-channel tracking for in-flight `reprocess-meeting` invocations,
    *  which don't go through `processingQueue` / `currentJob`. Populated
@@ -799,6 +802,13 @@ export type GetKeepRecordingsResponse = Result<{ keep_recordings: boolean }>;
 export type GetAutoSummarizeResponse = Result<{ auto_summarize_enabled: boolean }>;
 
 export type GetAutoInstallWhenIdleResponse = Result<{ auto_install_when_idle: boolean }>;
+/** Settings → When to process. 'plugged_in' holds processing and the live
+ *  transcript while the device runs on battery. */
+export type ProcessingPowerPolicy = 'always' | 'plugged_in';
+export type GetProcessingPowerPolicyResponse = Result<{
+  processing_power_policy: ProcessingPowerPolicy;
+  on_battery: boolean;
+}>;
 
 export type GetIdentityMatchingEnabledResponse = Result<{ identity_matching_enabled: boolean }>;
 
@@ -1038,6 +1048,9 @@ export type LiveTranscriptStateResponse = Result<{
   ready: boolean;
   /** Last failure reported by the consumer thread, if any. Null on success. */
   error: { stage: string; error?: string; message?: string } | null;
+  /** The live transcript was skipped because the device is on battery and
+   *  processing waits for mains power. */
+  waitingForPower?: boolean;
 }>;
 
 export interface LiveTranscriptReadyEvent {
@@ -1160,6 +1173,8 @@ export interface StenoaiBridge {
     recoverable: RequestFn<[], Result<{ recordings: { id: string; name: string; updatedAt: string; recordedAt?: string; bytes: number }[] }>>;
     recover: RequestFn<[id: string], Result<Record<string, never>>>;
     dismissRecovery: RequestFn<[id: string], Result<Record<string, never>>>;
+    /** Process meetings held for mains power now, on battery. */
+    processNow: RequestFn<[], Result<Record<string, never>>>;
     /** trigger: analytics source (manual/hotkey/tray/…). appendTo: path of an
      *  existing note to append this recording's transcript to
      *  (continue-recording) instead of creating a new note. */
@@ -1434,6 +1449,8 @@ export interface StenoaiBridge {
     setAutoSummarize: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getAutoInstallWhenIdle: RequestFn<[], GetAutoInstallWhenIdleResponse>;
     setAutoInstallWhenIdle: RequestFn<[v: boolean], Result<Record<string, never>>>;
+    getProcessingPowerPolicy: RequestFn<[], GetProcessingPowerPolicyResponse>;
+    setProcessingPowerPolicy: RequestFn<[policy: ProcessingPowerPolicy], Result<{ processing_power_policy: ProcessingPowerPolicy }>>;
     getIdentityMatchingEnabled: RequestFn<[], GetIdentityMatchingEnabledResponse>;
     setIdentityMatchingEnabled: RequestFn<[v: boolean], Result<Record<string, never>>>;
     getSilenceAutoStop: RequestFn<[], GetSilenceAutoStopResponse>;
