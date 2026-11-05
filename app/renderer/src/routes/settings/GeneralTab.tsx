@@ -1,11 +1,6 @@
-import { t } from '@/i18n';
 import * as React from 'react';
-import { CalendarDays, ExternalLink, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { GoogleCalendarIcon } from '@/components/ui/google-calendar-icon';
-import { OutlookIcon } from '@/components/ui/outlook-icon';
 import {
   Select,
   SelectContent,
@@ -13,14 +8,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { isMac, shortcut } from '@/lib/utils';
 import { useTheme } from '@/hooks/useTheme';
 import { RecordingStorageSettings } from './RecordingStorageSettings';
@@ -53,12 +40,7 @@ import {
   useUserName,
 } from '@/hooks/useSettings';
 import { useAudioInputDevices } from '@/hooks/useAudioInputDevices';
-import {
-  useAppleCalendar,
-  useGoogleCalendarAuth,
-  useOutlookCalendarAuth,
-} from '@/hooks/useCalendarEvents';
-import { COMPACT_BTN, COMPACT_TRIGGER, SectionHeading, SettingRow } from './primitives';
+import { COMPACT_TRIGGER, SectionHeading, SettingRow } from './primitives';
 
 const DEFAULT_MIC_VALUE = 'default';
 
@@ -111,9 +93,6 @@ export function GeneralTab() {
   const microphone = useMicrophoneSetting();
   const setMicrophone = useSetMicrophone();
   const audioInputDevices = useAudioInputDevices();
-  const google = useGoogleCalendarAuth();
-  const outlook = useOutlookCalendarAuth();
-  const apple = useAppleCalendar();
   const userName = useUserName();
   const setUserName = useSetUserName();
   const [nameDraft, setNameDraft] = React.useState('');
@@ -147,96 +126,6 @@ export function GeneralTab() {
     // commit (draft equal to the not-yet-resolved placeholder) would leave the
     // guard stuck and the field stranded on a stale/blank draft.
     nameDirtyRef.current = false;
-  };
-
-  const calendarConnected =
-    google.status.data?.connected || outlook.status.data?.connected;
-  const calendarProvider = google.status.data?.connected
-    ? 'Google'
-    : outlook.status.data?.connected
-      ? 'Outlook'
-      : null;
-  // Only populated for connections made after the email-capture change —
-  // pre-existing connections fall back to the provider name below.
-  const calendarEmail = google.status.data?.connected
-    ? google.status.data.email
-    : outlook.status.data?.connected
-      ? outlook.status.data.email
-      : null;
-
-  const [oauth, setOauth] = React.useState<
-    | {
-        provider: 'google' | 'outlook';
-        state: 'pending' | 'error';
-        message?: string;
-      }
-    | null
-  >(null);
-
-  React.useEffect(() => {
-    if (!oauth) return;
-    if (oauth.provider === 'google' && google.status.data?.connected) {
-      setOauth(null);
-    }
-    if (oauth.provider === 'outlook' && outlook.status.data?.connected) {
-      setOauth(null);
-    }
-  }, [oauth, google.status.data?.connected, outlook.status.data?.connected]);
-
-  // Synchronous in-flight lock. react-query's isPending only flips true on the
-  // NEXT render, so two clicks handled in the same tick both read a stale
-  // false and slip past an isPending-based guard; a ref set before the first
-  // mutate closes that exact window. The token distinguishes attempts so a
-  // superseded attempt's settle (a cancel or a newer startConnect took over)
-  // can't release a still-active attempt's lock.
-  const connectingRef = React.useRef(false);
-  const connectTokenRef = React.useRef(0);
-
-  const startConnect = async (provider: 'google' | 'outlook') => {
-    if (connectingRef.current) return;
-    connectingRef.current = true;
-    const token = ++connectTokenRef.current;
-    setOauth({ provider, state: 'pending' });
-    try {
-      if (provider === 'google') await google.connect.mutateAsync();
-      else await outlook.connect.mutateAsync();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // A user-initiated Cancel rejects the connect mutation with "Cancelled"
-      // (see useGoogleCalendarAuth/useOutlookCalendarAuth) — not an error to
-      // surface back to the user.
-      if (message === 'Cancelled') return;
-      // Only surface the error if THIS attempt is still the active one. The
-      // token check catches a cancel-then-immediate-retry of the same provider,
-      // where a newer attempt is also `pending`/same-provider — provider+state
-      // alone can't tell the stale rejection apart from the fresh dialog. It
-      // also covers a dismissed dialog or a switch to a different provider.
-      setOauth((current) =>
-        connectTokenRef.current === token &&
-        current?.provider === provider &&
-        current.state === 'pending'
-          ? { provider, state: 'error', message }
-          : current,
-      );
-    } finally {
-      // Release only if this is still the active attempt — a cancel or a newer
-      // startConnect may have superseded it and now owns the lock.
-      if (connectTokenRef.current === token) connectingRef.current = false;
-    }
-  };
-
-  const cancelConnect = () => {
-    // Abort the in-flight handshake so we don't leak a loopback OAuth server
-    // that could silently complete the connection (and save tokens) after the
-    // user has already backed out of the dialog.
-    if (oauth?.state === 'pending') {
-      if (oauth.provider === 'google') google.cancel.mutate();
-      else outlook.cancel.mutate();
-    }
-    // Release the lock immediately so the user can retry or switch providers
-    // without waiting for the abandoned mutation to reject.
-    connectingRef.current = false;
-    setOauth(null);
   };
 
   // Both the menu bar icon and the dock icon are ways back into a hidden
@@ -295,97 +184,6 @@ export function GeneralTab() {
           </SelectContent>
         </Select>
       </SettingRow>
-
-      <SectionHeading>Calendar</SectionHeading>
-
-      <SettingRow
-        label="Connect calendar"
-        description={
-          calendarConnected
-            ? `Connected to ${calendarEmail || calendarProvider}`
-            : 'Show upcoming meetings on the home screen'
-        }
-        noBorder
-      >
-        {calendarConnected ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className={COMPACT_BTN}
-            onClick={() => {
-              if (google.status.data?.connected) google.disconnect.mutate();
-              else outlook.disconnect.mutate();
-            }}
-          >
-            {google.status.data?.connected ? (
-              <GoogleCalendarIcon size={13} />
-            ) : (
-              <OutlookIcon size={13} />
-            )}
-            Disconnect
-          </Button>
-        ) : (
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className={COMPACT_BTN}
-              onClick={() => void startConnect('google')}
-            >
-              <GoogleCalendarIcon size={13} />
-              Google
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className={COMPACT_BTN}
-              onClick={() => void startConnect('outlook')}
-            >
-              <OutlookIcon size={13} />
-              Outlook
-            </Button>
-          </div>
-        )}
-      </SettingRow>
-
-      <SettingRow
-        label={t('generalTab.apple_calendar')}
-        description={
-          apple.connect.isError
-            ? (apple.connect.error as Error).message
-            : apple.status.data?.enabled
-              ? t('generalTab.connected_uses_every_calendar_in_calendar_app')
-              : t('generalTab.use_the_calendars_in_calendar_app_icloud')
-        }
-        noBorder
-      >
-        {apple.status.data?.enabled ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className={COMPACT_BTN}
-            onClick={() => apple.disconnect.mutate()}
-          >
-            <CalendarDays className="size-[13px]" />{t('generalTab.disconnect')}</Button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            className={COMPACT_BTN}
-            disabled={apple.connect.isPending || apple.status.data?.available === false}
-            onClick={() => apple.connect.mutate()}
-          >
-            <CalendarDays className="size-[13px]" />
-            {apple.connect.isPending ? t('calendar.waiting_for_permission') : t('generalTab.connect')}
-          </Button>
-        )}
-      </SettingRow>
-
-      <OAuthPrompt
-        state={oauth}
-        onClose={cancelConnect}
-        onRetry={() => oauth && void startConnect(oauth.provider)}
-      />
 
       <SectionHeading>Meeting notifications</SectionHeading>
 
@@ -613,63 +411,5 @@ export function GeneralTab() {
         />
       </SettingRow>
     </section>
-  );
-}
-
-interface OAuthPromptProps {
-  state:
-    | {
-        provider: 'google' | 'outlook';
-        state: 'pending' | 'error';
-        message?: string;
-      }
-    | null;
-  onClose: () => void;
-  onRetry: () => void;
-}
-
-function OAuthPrompt({ state, onClose, onRetry }: OAuthPromptProps) {
-  const open = !!state;
-  const providerName = state?.provider === 'outlook' ? 'Outlook' : 'Google';
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md" data-oauth-prompt>
-        <DialogHeader>
-          <DialogTitle>
-            {state?.state === 'error'
-              ? `Couldn't connect to ${providerName}`
-              : `Connecting to ${providerName}`}
-          </DialogTitle>
-          <DialogDescription>
-            {state?.state === 'error'
-              ? state.message || 'The authorization flow did not complete.'
-              : 'Complete the authorization in your browser. This dialog will close automatically once access is granted.'}
-          </DialogDescription>
-        </DialogHeader>
-
-        {state?.state === 'pending' && (
-          <div className="flex items-center gap-3 rounded-md border border-border bg-paper-0 p-3 text-sm text-muted-foreground dark:bg-paper-1">
-            <Loader2 className="size-4 animate-spin text-foreground" />
-            <span className="flex-1">Waiting for authorization…</span>
-            <ExternalLink className="size-3.5" />
-          </div>
-        )}
-
-        <DialogFooter>
-          {state?.state === 'error' ? (
-            <>
-              <Button variant="outline" onClick={onClose}>
-                Close
-              </Button>
-              <Button onClick={onRetry}>Try again</Button>
-            </>
-          ) : (
-            <Button variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-          )}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

@@ -397,6 +397,13 @@ function install({ ipcMain }) {
     || process.env.STENOAI_E2E_SEED_SPEAKER_SIDECAR === '1'
     || process.env.STENOAI_E2E_SEED_SPEAKER_SINGLE_CLUSTER === '1'
     || process.env.STENOAI_E2E_SEED_MANY_PEOPLE === '1';
+  // Calendar sources a spec starts with: STENOAI_E2E_CALENDAR_SOURCES is a
+  // comma list of apple / outlook / google. Disconnect handlers drop one so
+  // the settings group re-renders from the refetched status.
+  const calendarSources = new Set(
+    (process.env.STENOAI_E2E_CALENDAR_SOURCES || '').split(',').filter(Boolean),
+  );
+
   const speakerState = {
     personProfiles: seedSpeakers
       ? [
@@ -1268,6 +1275,30 @@ function install({ ipcMain }) {
         return { success: false, error: 'simulated private backend detail' };
       }
       return { success: true, audio_base64: MINIMAL_WAV_BASE64 };
+    },
+
+    'apple-calendar-status': async () => ({
+      success: true, available: true, enabled: calendarSources.has('apple'),
+    }),
+    'apple-calendar-disconnect': async () => {
+      calendarSources.delete('apple');
+      return { success: true };
+    },
+    'outlook-auth-status': async () => ({
+      success: true,
+      connected: calendarSources.has('outlook'),
+      email: calendarSources.has('outlook') ? 'owner@example.com' : null,
+    }),
+    'outlook-auth-disconnect': async () => {
+      calendarSources.delete('outlook');
+      return { success: true };
+    },
+    'google-auth-status': async () => ({
+      success: true, connected: calendarSources.has('google'), email: null,
+    }),
+    'google-auth-disconnect': async () => {
+      calendarSources.delete('google');
+      return { success: true };
     },
 
     // Accepts either --person-id (Change) or --new-person (New person) mode,
