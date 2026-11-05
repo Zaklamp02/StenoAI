@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -34,14 +34,41 @@ type LaunchOptions = {
   /** Extra env vars merged over the e2e defaults. */
   env?: Record<string, string>;
   /**
-   * Leave the analytics question unanswered. By default a test that starts
-   * with no config.json gets one that has already answered it (and seen the
-   * privacy notice), because on a machine with a cached ASR model the app
-   * skips onboarding and would put the one-time question over whatever the
-   * spec drives. Specs about that question set this.
+   * Leave the analytics question unanswered. By default every T2 launch has
+   * answered it (see answerAnalyticsQuestion), because wherever the app skips
+   * onboarding (a cached or seeded ASR model) it would put the one-time
+   * question over whatever the spec drives. Specs about it set this.
    */
   askAnalytics?: boolean;
 };
+
+/**
+ * Record an answer to the analytics question before launch. No config.json
+ * gets one that has answered it and seen the privacy notice (a fresh install
+ * that finished onboarding); a config the spec wrote gets the answer merged
+ * in, leaving everything else, the privacy marker included, as seeded. A
+ * config that is not a JSON object is left alone for the specs that test
+ * corruption.
+ */
+function answerAnalyticsQuestion(userDataDir: string): void {
+  const configPath = path.join(userDataDir, 'config.json');
+  if (!existsSync(configPath)) {
+    writeFileSync(
+      configPath,
+      JSON.stringify({ privacy_notice_seen: true, telemetry_consent_given: true }, null, 2),
+    );
+    return;
+  }
+  let cfg: unknown;
+  try {
+    cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+  } catch {
+    return;
+  }
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
+  if ('telemetry_consent_given' in cfg) return;
+  writeFileSync(configPath, JSON.stringify({ ...cfg, telemetry_consent_given: true }, null, 2));
+}
 
 type LaunchResult = { app: ElectronApplication; page: Page };
 
@@ -70,13 +97,7 @@ export const test = base.extend<Fixtures>({
     const launched: { app: ElectronApplication; proc: ReturnType<ElectronApplication['process']> }[] = [];
 
     const launch = async (opts: LaunchOptions = {}): Promise<LaunchResult> => {
-      const configPath = path.join(userDataDir, 'config.json');
-      if (!opts.mockIpc && !opts.askAnalytics && !existsSync(configPath)) {
-        writeFileSync(
-          configPath,
-          JSON.stringify({ privacy_notice_seen: true, telemetry_consent_given: true }, null, 2),
-        );
-      }
+      if (!opts.mockIpc && !opts.askAnalytics) answerAnalyticsQuestion(userDataDir);
       const env: Record<string, string> = {
         ...(process.env as Record<string, string>),
         STENOAI_E2E: '1',

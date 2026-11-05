@@ -199,10 +199,11 @@ overrides an agent's own test-level defaults.
     `skip`s on whisper. Exercises the long-file chunking **plumbing**, NOT the MLX/Metal OOM
     (that needs a GPU runner — tracked follow-up). Too slow for per-PR, so it lives in the
     nightly workflow, not `e2e.yml`.
-- **Analytics question:** a launch with no config.json gets one that has already
-  answered the analytics question, because on a machine with a cached ASR model
-  the app skips onboarding and would show the one-time question over the spec.
-  Specs about that question pass `askAnalytics: true` to `launchApp`.
+- **Analytics question:** every T2 launch has answered the analytics question
+  (the fixture writes it into config.json, or merges it into a config the spec
+  seeded), because wherever the app skips onboarding (a cached or seeded ASR
+  model) it would show the one-time question over the spec. Specs about that
+  question pass `askAnalytics: true` to `launchApp`.
 - **Isolation keystone:** every test sets `STENOAI_USER_DATA_DIR` to a temp dir, which
   both `getUserDataDir()` (main.js) and `get_user_data_dir()` (`src/config.py`) honor,
   so a test can never read/write the real `~/Library/Application Support/stenoai`. The
