@@ -10180,7 +10180,7 @@ function reconcileAiProviderWithOrgSession(opts = {}) {
       if (orgSessionGeneration !== genAtRead) return null;
       sendDebugLog('Org lock: ai_provider=adapter but no org session backing it; restoring pre-adapter provider');
       // Direct call, not the queued wrapper — we already hold the queue.
-      await doRestorePreAdapterProvider();
+      await doRestorePreAdapterProvider('session-lost');
       return await readAiProvider();
     }
     if (orgSessionGeneration === genAtRead) {
@@ -10202,19 +10202,40 @@ async function autoSwitchToAdapterOnSignIn() {
 // Serialized on the same queue as the reconcile so the two state machines
 // can't interleave; doRestorePreAdapterProvider is the unqueued body, used
 // by the reconcile when it already holds the queue.
-function restorePreAdapterProvider() {
-  return enqueueProviderStateOp(doRestorePreAdapterProvider);
+//
+// `reason` decides where to go (security review F10):
+//  - 'signout': the user signed out themselves, so their pre-adapter choice
+//    (which may be a personal cloud provider) is restored.
+//  - 'session-lost': the session expired, was revoked or vanished. Nobody
+//    chose to leave the organisation's routing, so meeting text must not
+//    silently start going to a personal cloud account or remote server:
+//    processing falls back to this Mac, and the user is told. Picking a
+//    provider again, or signing back in, is their explicit decision.
+function restorePreAdapterProvider(reason = 'signout') {
+  return enqueueProviderStateOp(() => doRestorePreAdapterProvider(reason));
 }
 
-async function doRestorePreAdapterProvider() {
+function notifyOrgSessionEnded() {
+  try {
+    if (!Notification.isSupported()) return;
+    new Notification({
+      title: 'Organisation sign-in ended',
+      body: 'Meetings are now processed on this Mac. Sign in again, or choose a provider in Settings → AI.',
+    }).show();
+  } catch (_) {
+    // A notification is a courtesy; the provider change already happened.
+  }
+}
+
+async function doRestorePreAdapterProvider(reason = 'signout') {
   lastConsistentCheck = { generation: -1, at: 0 }; // state is changing
   const current = await readAiProvider();
   if (current !== 'adapter') {
     clearPreAdapterProvider(); // tidy: if not on adapter, the marker is stale
     return;
   }
-  const restored = loadPreAdapterProvider() || 'local';
-  sendDebugLog(`Org sign-out: restoring ai_provider from adapter to ${restored}`);
+  const restored = reason === 'signout' ? (loadPreAdapterProvider() || 'local') : 'local';
+  sendDebugLog(`Org ${reason}: moving ai_provider from adapter to ${restored}`);
   let restoreLanded = true;
   try {
     const out = await runPythonScript('simple_recorder.py', ['set-ai-provider', restored]);
@@ -10231,6 +10252,7 @@ async function doRestorePreAdapterProvider() {
   // Keep the marker when the restore didn't land — it's the only record
   // of the user's pre-adapter choice, and a later retry needs it.
   if (restoreLanded) clearPreAdapterProvider();
+  if (restoreLanded && reason === 'session-lost') notifyOrgSessionEnded();
 }
 
 ipcMain.handle('get-ai-provider', async () => {
@@ -13302,7 +13324,7 @@ async function adapterFetch(pathname, opts = {}) {
       // has an HTTP error to handle and shouldn't block on a Python
       // subprocess.
       clearOrgSession();
-      restorePreAdapterProvider().catch(() => {});
+      restorePreAdapterProvider('session-lost').catch(() => {});
     }
     const err = new Error(body.detail || ('HTTP ' + res.status));
     err.status = res.status;
@@ -13340,8 +13362,9 @@ ipcMain.handle('org-status', async () => {
     clearOrgSession();
     // If the user was on 'adapter', drop them back to 'local' so the next
     // summary attempt doesn't error out with "adapter not configured".
-    // Same reasoning as the explicit-logout path; both end the session.
-    restorePreAdapterProvider().catch(() => {});
+    // Not the explicit-logout path: nobody chose to leave the org's
+    // routing, so this falls back to local (F10).
+    restorePreAdapterProvider('session-lost').catch(() => {});
     return { signedIn: false, everSignedIn };
   }
   // Hard lock: heal any provider drift while the session is valid.
@@ -13420,7 +13443,7 @@ ipcMain.handle('org-logout', async () => {
   // org-status's stale-session path stays fire-and-forget because that
   // handler is called frequently and any blocking would slow the UI.
   try {
-    await restorePreAdapterProvider();
+    await restorePreAdapterProvider('signout');
   } catch (_) {}
   return { success: true };
 });
@@ -14017,7 +14040,7 @@ ipcMain.on('org-chat-stream', async (event, streamId, payload) => {
         // session AND restore pre-adapter provider so future processing
         // doesn't hit "adapter not configured".
         clearOrgSession();
-        restorePreAdapterProvider().catch(() => {});
+        restorePreAdapterProvider('session-lost').catch(() => {});
       }
       safeSend('query-done', { queryId: streamId, success: false, error: `HTTP ${res.status}: ${detail.slice(0, 200)}` });
       return;
