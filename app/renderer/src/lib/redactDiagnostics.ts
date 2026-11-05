@@ -109,8 +109,21 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Anything shaped like a credential, wherever it sits in a line. Mirrors
+// src/provider_errors.py, which keeps provider text out at the source; this
+// catches what an older backend, a third-party log line or a pasted value
+// still carries. Replacements contain no characters the patterns match, so
+// the pass stays idempotent.
+const CREDENTIAL_RES: [RegExp, string][] = [
+  [/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer <redacted>'],
+  [/\bsk-[A-Za-z0-9_-]{8,}/g, '<redacted-key>'],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+/g, '<redacted-token>'],
+  [/\b(api[_-]?key|token|password|secret)=([^&\s"']+)/gi, '$1=<redacted>'],
+];
+
 function redactLine(line: string, storageRoot?: string): string {
   let out = line;
+  for (const [pattern, replacement] of CREDENTIAL_RES) out = out.replace(pattern, replacement);
   // Legacy capture logs used a bare title-derived filename. Handle those
   // before path redaction, including spaces and Unicode in the title.
   out = out.replace(/(^|[\s"'])sysaudio-\d+-[^\r\n]*?\.(?:webm|wav|m4a|mp3|mp4|json|md|txt)(?=$|[\s"'),;])/gi, '$1<recording>');

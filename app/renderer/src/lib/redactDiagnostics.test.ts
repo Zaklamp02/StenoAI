@@ -209,3 +209,25 @@ describe('redactDiagnostics - idempotence + no over-redaction', () => {
     expect(out).toEqual(['~/x']);
   });
 });
+
+describe('credentials anywhere in a line', () => {
+  test('blanks bearer tokens, API keys, JWTs and key parameters', () => {
+    const [line] = redactDiagnostics([
+      'STREAM_ERROR:failed Authorization: Bearer AUDIT-FAKE-ORG-JWT key sk-proj-AUDITFAKEKEY123 '
+        + 'jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhdWRpdCJ9.c2lnbmF0dXJl api_key=abc123&x=1',
+    ]);
+    for (const leaked of ['AUDIT-FAKE-ORG-JWT', 'AUDITFAKEKEY', 'eyJhbGci', 'abc123']) {
+      expect(line).not.toContain(leaked);
+    }
+    expect(line).toContain('Bearer <redacted>');
+  });
+
+  test('stays idempotent', () => {
+    const once = redactDiagnostics(['Bearer abc.def sk-0123456789abcdef token=xyz']);
+    expect(redactDiagnostics(once)).toEqual(once);
+  });
+
+  test('leaves ordinary lines alone', () => {
+    expect(redactDiagnostics(['Model llama3 not found (HTTP 404)'])).toEqual(['Model llama3 not found (HTTP 404)']);
+  });
+});

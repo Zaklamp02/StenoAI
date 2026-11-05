@@ -59,6 +59,9 @@ function startMockAdapter(opts = {}) {
   let s3PutCount = 0;
   let policyFetchCount = 0;
   let failS3Put = Boolean(opts.failS3Put);
+  // Opt-in: once revoked, every request after sign-in answers 401, the way a
+  // revoked or expired org session looks to the app.
+  let revoked = false;
   let baseUrl = '';
 
   return new Promise((resolve, reject) => {
@@ -75,6 +78,9 @@ function startMockAdapter(opts = {}) {
           }
         };
         const { method, url } = req;
+        if (revoked && url !== '/auth/login') {
+          return json(res, 401, { detail: 'mock: session revoked' });
+        }
 
         // --- auth + policy (unchanged contract) ---
         if (method === 'POST' && url === '/auth/login') {
@@ -157,6 +163,9 @@ function startMockAdapter(opts = {}) {
         policyFetches: () => policyFetchCount,
         setFailS3Put: (v) => {
           failS3Put = Boolean(v);
+        },
+        setRevoked: (v) => {
+          revoked = Boolean(v);
         },
       });
     });

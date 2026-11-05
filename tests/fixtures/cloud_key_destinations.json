@@ -1,0 +1,19 @@
+[
+  {"provider": "openai", "cloud_api_url": "", "bedrock_region": "", "destination": "openai|https://api.openai.com"},
+  {"provider": "openai", "cloud_api_url": "https://attacker.example.test/v1", "bedrock_region": "", "destination": "openai|https://api.openai.com"},
+  {"provider": "anthropic", "cloud_api_url": "", "bedrock_region": "", "destination": "anthropic|https://api.anthropic.com"},
+  {"provider": "something-new", "cloud_api_url": "", "bedrock_region": "", "destination": "openai|https://api.openai.com"},
+  {"provider": "bedrock", "cloud_api_url": "", "bedrock_region": "eu-west-1", "destination": "bedrock|https://bedrock-runtime.eu-west-1.amazonaws.com"},
+  {"provider": "bedrock", "cloud_api_url": "", "bedrock_region": "", "destination": "bedrock|https://bedrock-runtime.us-east-1.amazonaws.com"},
+  {"provider": "bedrock", "cloud_api_url": "", "bedrock_region": "x@127.0.0.1:8443/", "destination": null},
+  {"provider": "custom", "cloud_api_url": "https://API.Example.Test/v1/", "bedrock_region": "", "destination": "custom|https://api.example.test"},
+  {"provider": "custom", "cloud_api_url": "https://api.example.test:443/v1", "bedrock_region": "", "destination": "custom|https://api.example.test"},
+  {"provider": "custom", "cloud_api_url": "https://api.example.test:8443/v1", "bedrock_region": "", "destination": "custom|https://api.example.test:8443"},
+  {"provider": "custom", "cloud_api_url": "http://localhost:8000/v1", "bedrock_region": "", "destination": "custom|http://localhost:8000"},
+  {"provider": "custom", "cloud_api_url": "http://[::1]:8000", "bedrock_region": "", "destination": "custom|http://[::1]:8000"},
+  {"provider": "custom", "cloud_api_url": "http://10.0.0.5/v1", "bedrock_region": "", "destination": null},
+  {"provider": "custom", "cloud_api_url": "https://user:pw@api.example.test/v1", "bedrock_region": "", "destination": null},
+  {"provider": "custom", "cloud_api_url": "api.example.test/v1", "bedrock_region": "", "destination": null},
+  {"provider": "custom", "cloud_api_url": "https://bücher.example.test/v1", "bedrock_region": "", "destination": null},
+  {"provider": "custom", "cloud_api_url": "", "bedrock_region": "", "destination": null}
+]

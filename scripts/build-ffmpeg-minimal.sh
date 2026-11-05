@@ -17,8 +17,12 @@
 
 set -euo pipefail
 
-FFMPEG_VERSION="7.1.1"
-FFMPEG_SHA256="733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1"
+# 7.1.5 carries the AAC decoder and MOV/CAF/WAV parser fixes the 2026-11-05
+# security review asked for (F03). The tarball's PGP signature was checked
+# against FFmpeg's release key FCF986EA15E6E293A5644F10B4322F04D67658D8
+# (published on ffmpeg.org/download.html) before pinning this hash.
+FFMPEG_VERSION="7.1.5"
+FFMPEG_SHA256="de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

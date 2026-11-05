@@ -61,6 +61,8 @@ except ImportError:
     OllamaSummarizer = None
 
 from src.language_detect import detect_transcript_language
+from src.provider_errors import safe_error_text, scrub_credentials
+from src.endpoint_policy import CLOUD_KEY_REENTER_MESSAGE
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -972,8 +974,8 @@ Summary output language: {config.get_language_name(output_language)}
             # model" recommendation (same as reprocess) rather than a generic
             # failure, then re-raise to preserve this method's existing error
             # contract for its caller.
-            logger.error(f"Summarization failed: {e}")
-            err_msg = str(e).replace('\n', ' ').replace('\r', ' ')
+            logger.error(f"Summarization failed: {safe_error_text(e)}")
+            err_msg = safe_error_text(e)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             raise
         streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
@@ -1655,8 +1657,8 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
         # "try a smaller model" recommendation it shows for reprocess — instead
         # of a generic processing failure with no guidance.
         if _stream_error is not None:
-            logger.error(f"Summarization failed: {_stream_error}")
-            err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+            logger.error(f"Summarization failed: {safe_error_text(_stream_error)}")
+            err_msg = safe_error_text(_stream_error)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
@@ -3586,9 +3588,9 @@ def reprocess(summary_file, regenerate_title, retranscribe):
                 set_chunk_heartbeat(None)
 
             if transcribe_result.get("transcription_failed"):
-                err_msg = str(
+                err_msg = scrub_credentials(" ".join(str(
                     transcribe_result.get("error") or "transcription failed"
-                ).replace('\n', ' ').replace('\r', ' ')
+                ).split()))
                 print(f"STREAM_ERROR:{err_msg}", flush=True)
                 sys.exit(1)
 
@@ -3702,12 +3704,12 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             summary_heartbeat.set()
 
         if _stream_error is not None:
-            logger.error(f"Summarization failed: {_stream_error}")
+            logger.error(f"Summarization failed: {safe_error_text(_stream_error)}")
             # The renderer's parser reads STREAM_ERROR line-by-line, so a
             # message containing newlines (tracebacks can) would be truncated
             # to its first line. Flatten newlines into spaces so the whole
             # message survives on one line.
-            err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+            err_msg = safe_error_text(_stream_error)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
@@ -4159,8 +4161,8 @@ def generate_report(summary_file, template_id):
         summary_heartbeat.set()
 
     if _stream_error is not None:
-        logger.error(f"Report generation failed: {_stream_error}")
-        err_msg = str(_stream_error).replace('\n', ' ').replace('\r', ' ')
+        logger.error(f"Report generation failed: {safe_error_text(_stream_error)}")
+        err_msg = safe_error_text(_stream_error)
         print(f"STREAM_ERROR:{err_msg}", flush=True)
         sys.exit(1)
 
@@ -9657,8 +9659,13 @@ def set_ai_provider(provider):
 def set_remote_ollama_url(url):
     """Set the remote Ollama server URL"""
     from src.config import get_config
+    from src.endpoint_policy import InsecureEndpoint
     config = get_config()
-    success = config.set_remote_ollama_url(url)
+    try:
+        success = config.set_remote_ollama_url(url)
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        sys.exit(1)
     if success:
         print(json.dumps({"success": True, "remote_ollama_url": url}))
     else:
@@ -9670,8 +9677,13 @@ def set_remote_ollama_url(url):
 def set_cloud_api_url(url):
     """Set the cloud API URL"""
     from src.config import get_config
+    from src.endpoint_policy import InsecureEndpoint
     config = get_config()
-    success = config.set_cloud_api_url(url)
+    try:
+        success = config.set_cloud_api_url(url)
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        sys.exit(1)
     if success:
         print(json.dumps({"success": True, "cloud_api_url": url}))
     else:
@@ -9806,16 +9818,25 @@ def test_cloud_api():
 
     cloud_api_key = config.get_cloud_api_key()
     cloud_provider = config.get_cloud_provider()
-    cloud_api_url = config.get_cloud_api_url()
+    from src.endpoint_policy import InsecureEndpoint, require_secure_endpoint
+    try:
+        cloud_api_url = require_secure_endpoint(config.get_cloud_api_url())
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        return
 
     if not cloud_api_key:
-        print(json.dumps({"success": False, "error": "No API key configured"}))
+        print(json.dumps({"success": False, "error": (
+            CLOUD_KEY_REENTER_MESSAGE if config.cloud_key_bound_elsewhere()
+            else "No API key configured"
+        )}))
         return
 
     try:
         if cloud_provider == "anthropic":
             from anthropic import Anthropic
-            client = Anthropic(api_key=cloud_api_key)
+            from src.endpoint_policy import FIRST_PARTY_ORIGINS
+            client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
             # Lightweight test: list models
             models_page = client.models.list(limit=10)
             model_ids = [m.id for m in models_page.data]
@@ -9844,7 +9865,8 @@ def test_cloud_api():
             }
             try:
                 req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=15) as resp:
+                from src.secure_http import open_authenticated
+                with open_authenticated(req, timeout=15) as resp:
                     resp.read()  # we only care about the status code
                 # Surface the curated list as "models" so the UI's existing
                 # dropdown wiring lights up after a successful test.
@@ -9853,20 +9875,19 @@ def test_cloud_api():
                     "models": list(config.SUPPORTED_BEDROCK_MODELS),
                 }))
             except urllib.error.HTTPError as he:
-                detail = ""
-                try:
-                    detail = he.read().decode("utf-8", errors="replace")[:300]
-                except Exception:
-                    # Best-effort error-detail extraction; must never mask the
-                    # HTTPError we're about to report to the user.
-                    pass
+                # Status only: Bedrock's error body can echo the request
+                # (src/provider_errors.py).
                 print(json.dumps({
                     "success": False,
-                    "error": f"Bedrock HTTP {he.code}: {detail or he.reason}",
+                    "error": f"Bedrock HTTP {he.code}",
                 }))
         else:
             from openai import OpenAI
-            base_url = cloud_api_url if cloud_provider == "custom" and cloud_api_url else None
+            from src.endpoint_policy import FIRST_PARTY_ORIGINS
+            base_url = (
+                cloud_api_url if cloud_provider == "custom"
+                else FIRST_PARTY_ORIGINS["openai"] + "/v1"
+            )
             client = OpenAI(api_key=cloud_api_key, base_url=base_url)
             models = client.models.list()
             # Newest first so current chat models lead the Settings dropdown.
@@ -9885,7 +9906,7 @@ def test_cloud_api():
             model_ids = [m.id for m in entries[:25]]
             print(json.dumps({"success": True, "models": model_ids}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 @cli.command()

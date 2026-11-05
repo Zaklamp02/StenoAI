@@ -78,7 +78,7 @@ class AdapterStreamLoggingPrivacyTests(unittest.TestCase):
             (secret + "\n").encode("utf-8"),
             b'{"type": "done"}\n',
         ]
-        with mock.patch("urllib.request.urlopen", return_value=_FakeStreamResponse(lines)):
+        with mock.patch("src.summarizer.open_authenticated", return_value=_FakeStreamResponse(lines)):
             with self.assertLogs("src.summarizer", level="WARNING") as cm:
                 list(s._adapter_stream("prompt"))
         joined = "\n".join(cm.output)

@@ -37,6 +37,14 @@ rm -rf build dist
 test -x dist/stenoai/stenoai
 test -x dist/stenoai/_internal/steno-diarize
 test -x dist/stenoai/_internal/steno-audio-encode
+# The ffmpeg that ships must be the pinned, patched one (F03), never a copy
+# of the official helper that a staging step brought back.
+expected_ffmpeg="$(sed -n 's/^FFMPEG_VERSION="\(.*\)"$/\1/p' scripts/build-ffmpeg-minimal.sh)"
+bundled_ffmpeg="$(find dist/stenoai -maxdepth 2 -name ffmpeg -type f -perm -u+x | head -1)"
+if ! "$bundled_ffmpeg" -hide_banner -version | head -1 | grep -q "^ffmpeg version $expected_ffmpeg "; then
+  echo "Bundled ffmpeg is not the pinned $expected_ffmpeg: $("$bundled_ffmpeg" -hide_banner -version | head -1)" >&2
+  exit 1
+fi
 .venv/bin/python scripts/verify_mlx_bundle.py
 
 echo "==> Calendar helper (EventKit)"

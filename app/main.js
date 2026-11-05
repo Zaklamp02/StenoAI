@@ -74,6 +74,15 @@ const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
 const { registerDebugReportIpc } = require('./debug-report-ipc');
+const { requireSecureEndpoint } = require('./endpoint-policy');
+const {
+  readCloudKeyDestination,
+  encodeEnvelope: encodeCloudKeyEnvelope,
+  decodeForDestination: decodeCloudKeyForDestination,
+} = require('./cloud-key-store');
+const {
+  validateGoogleAuthorizeUrl, classifyCallback, RESPONSE_HEADERS: SSO_RESPONSE_HEADERS,
+} = require('./org-sso');
 const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
@@ -9731,14 +9740,32 @@ function getCloudKeyPath() {
   return path.join(getUserDataDir(), '.cloud-api-key');
 }
 
+// The destination (provider + origin) the current config would send the
+// cloud key to, read in one go (app/cloud-key-store.js, F04).
+function currentCloudKeyDestination() {
+  return readCloudKeyDestination({ fs, configPath: path.join(getUserDataDir(), 'config.json') });
+}
+
+// Stores the key bound to the destination configured now. An empty key
+// clears it. Fails when no valid destination is configured: a key with
+// nowhere it may go is not worth keeping.
 function saveCloudApiKey(key) {
   try {
-    const keyDir = path.dirname(getCloudKeyPath());
+    const keyPath = getCloudKeyPath();
+    if (!key) {
+      if (fs.existsSync(keyPath)) fs.unlinkSync(keyPath);
+      return true;
+    }
+    const destination = currentCloudKeyDestination();
+    if (!destination) {
+      console.error('Failed to save cloud API key: no valid provider address is configured');
+      return false;
+    }
+    const keyDir = path.dirname(keyPath);
     if (!fs.existsSync(keyDir)) {
       fs.mkdirSync(keyDir, { recursive: true });
     }
-    const encrypted = getSafeStorage().encryptString(key);
-    fs.writeFileSync(getCloudKeyPath(), encrypted);
+    fs.writeFileSync(keyPath, getSafeStorage().encryptString(encodeCloudKeyEnvelope(key, destination)));
     return true;
   } catch (error) {
     console.error('Failed to save cloud API key:', error.message);
@@ -9746,6 +9773,9 @@ function saveCloudApiKey(key) {
   }
 }
 
+// The key and the destination it is bound to, only while the config still
+// names that destination; otherwise null. Python re-checks the destination
+// against the config it actually uses.
 function loadCloudApiKey() {
   try {
     const keyPath = getCloudKeyPath();
@@ -9753,12 +9783,32 @@ function loadCloudApiKey() {
     if (!fs.existsSync(keyPath)) return null;
     // Not before the window is up: a locked Keychain would block startup.
     if (!keychainGate.isOpen()) return null;
-    const encrypted = fs.readFileSync(keyPath);
-    return getSafeStorage().decryptString(encrypted);
+    const destination = currentCloudKeyDestination();
+    const plaintext = getSafeStorage().decryptString(fs.readFileSync(keyPath));
+    const decoded = decodeCloudKeyForDestination(plaintext, destination);
+    if (!decoded) return null;
+    if (decoded.migrate) {
+      // A pre-binding key adopted for a first-party destination: bind it now.
+      try {
+        fs.writeFileSync(keyPath, getSafeStorage().encryptString(encodeCloudKeyEnvelope(decoded.key, destination)));
+      } catch (_) {
+        // Still usable this time; the next load retries the rewrite.
+      }
+    }
+    return { key: decoded.key, destination };
   } catch (error) {
     console.error('Failed to load cloud API key:', error.message);
     return null;
   }
+}
+
+// The env a backend job needs to use the cloud key: the key and the
+// destination it may go to, or nothing.
+function cloudKeyEnv() {
+  const bound = loadCloudApiKey();
+  return bound
+    ? { STENOAI_CLOUD_API_KEY: bound.key, STENOAI_CLOUD_KEY_DESTINATION: bound.destination }
+    : {};
 }
 
 function hasCloudApiKey() {
@@ -9922,11 +9972,10 @@ async function migrateLegacyOpenAiAsrApiKey(legacy = readLegacyOpenAiAsrCredenti
 // the right path based on the configured ai_provider, and we just
 // surface whatever's available.
 function getAiEnv() {
-  const env = {};
-  const cloudKey = loadCloudApiKey();
-  if (cloudKey) env.STENOAI_CLOUD_API_KEY = cloudKey;
+  const env = { ...cloudKeyEnv() };
   const session = loadOrgSession();
   if (session && session.adapterUrl && session.token && !isJwtExpired(session.token)) {
+    // The Python side checks it again (src/endpoint_policy.py).
     env.STENOAI_ADAPTER_URL = session.adapterUrl;
     env.STENOAI_ADAPTER_TOKEN = session.token;
   }
@@ -10174,7 +10223,7 @@ function reconcileAiProviderWithOrgSession(opts = {}) {
       if (orgSessionGeneration !== genAtRead) return null;
       sendDebugLog('Org lock: ai_provider=adapter but no org session backing it; restoring pre-adapter provider');
       // Direct call, not the queued wrapper — we already hold the queue.
-      await doRestorePreAdapterProvider();
+      await doRestorePreAdapterProvider('session-lost');
       return await readAiProvider();
     }
     if (orgSessionGeneration === genAtRead) {
@@ -10196,19 +10245,40 @@ async function autoSwitchToAdapterOnSignIn() {
 // Serialized on the same queue as the reconcile so the two state machines
 // can't interleave; doRestorePreAdapterProvider is the unqueued body, used
 // by the reconcile when it already holds the queue.
-function restorePreAdapterProvider() {
-  return enqueueProviderStateOp(doRestorePreAdapterProvider);
+//
+// `reason` decides where to go (security review F10):
+//  - 'signout': the user signed out themselves, so their pre-adapter choice
+//    (which may be a personal cloud provider) is restored.
+//  - 'session-lost': the session expired, was revoked or vanished. Nobody
+//    chose to leave the organisation's routing, so meeting text must not
+//    silently start going to a personal cloud account or remote server:
+//    processing falls back to this Mac, and the user is told. Picking a
+//    provider again, or signing back in, is their explicit decision.
+function restorePreAdapterProvider(reason = 'signout') {
+  return enqueueProviderStateOp(() => doRestorePreAdapterProvider(reason));
 }
 
-async function doRestorePreAdapterProvider() {
+function notifyOrgSessionEnded() {
+  try {
+    if (!Notification.isSupported()) return;
+    new Notification({
+      title: 'Organisation sign-in ended',
+      body: 'Meetings are now processed on this Mac. Sign in again, or choose a provider in Settings → AI.',
+    }).show();
+  } catch (_) {
+    // A notification is a courtesy; the provider change already happened.
+  }
+}
+
+async function doRestorePreAdapterProvider(reason = 'signout') {
   lastConsistentCheck = { generation: -1, at: 0 }; // state is changing
   const current = await readAiProvider();
   if (current !== 'adapter') {
     clearPreAdapterProvider(); // tidy: if not on adapter, the marker is stale
     return;
   }
-  const restored = loadPreAdapterProvider() || 'local';
-  sendDebugLog(`Org sign-out: restoring ai_provider from adapter to ${restored}`);
+  const restored = reason === 'signout' ? (loadPreAdapterProvider() || 'local') : 'local';
+  sendDebugLog(`Org ${reason}: moving ai_provider from adapter to ${restored}`);
   let restoreLanded = true;
   try {
     const out = await runPythonScript('simple_recorder.py', ['set-ai-provider', restored]);
@@ -10225,14 +10295,25 @@ async function doRestorePreAdapterProvider() {
   // Keep the marker when the restore didn't land — it's the only record
   // of the user's pre-adapter choice, and a later retry needs it.
   if (restoreLanded) clearPreAdapterProvider();
+  if (restoreLanded && reason === 'session-lost') notifyOrgSessionEnded();
 }
 
 ipcMain.handle('get-ai-provider', async () => {
   try {
     const result = await runPythonScript('simple_recorder.py', ['get-ai-provider'], true);
     const jsonData = JSON.parse(result.trim());
-    // Override cloud_api_key_set with safeStorage check
-    jsonData.cloud_api_key_set = hasCloudApiKey();
+    // Override cloud_api_key_set with safeStorage check. A key bound to
+    // another destination (F04) is not "set" for this one; say so, so the
+    // renderer can ask for it again. Before the Keychain is open the binding
+    // cannot be read, so fall back to whether a key file exists at all.
+    if (keychainGate.isOpen()) {
+      const usable = Boolean(loadCloudApiKey());
+      jsonData.cloud_api_key_set = usable;
+      jsonData.cloud_api_key_needs_reentry = !usable && hasCloudApiKey();
+    } else {
+      jsonData.cloud_api_key_set = hasCloudApiKey();
+      jsonData.cloud_api_key_needs_reentry = false;
+    }
 
     // Reconcile the provider with org-session reality before answering, so
     // the renderer's first paint already reflects a working provider:
@@ -10332,7 +10413,9 @@ ipcMain.handle('set-remote-ollama-url', async (event, url) => {
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message };
+    // The backend refuses an insecure address with a message worth showing
+    // (src/endpoint_policy.py); keep it rather than the exit-code text.
+    return parsePythonFailureJson(error);
   }
 });
 
@@ -10343,7 +10426,9 @@ ipcMain.handle('set-cloud-api-url', async (event, url) => {
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message };
+    // The backend refuses an insecure address with a message worth showing
+    // (src/endpoint_policy.py); keep it rather than the exit-code text.
+    return parsePythonFailureJson(error);
   }
 });
 
@@ -10424,8 +10509,7 @@ ipcMain.handle('test-remote-ollama', async (event, url) => {
 ipcMain.handle('test-cloud-api', async () => {
   try {
     sendDebugLog('Testing cloud API connection...');
-    const apiKey = loadCloudApiKey();
-    const env = apiKey ? { STENOAI_CLOUD_API_KEY: apiKey } : {};
+    const env = cloudKeyEnv();
     const result = await runPythonScript('simple_recorder.py', ['test-cloud-api'], false, env);
     const jsonMatch = result.match(/\{.*\}/s);
     if (jsonMatch) return JSON.parse(jsonMatch[0]);
@@ -13247,22 +13331,14 @@ function getOrgBackupEntry(summaryFile) {
 // `localhost`, `127.0.0.1`, IPv6 `::1` (bare or bracketed), with or
 // without a port and/or path. Used to pick the right default scheme
 // when the user types a hostname without one.
-const _LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\]|::1)(?::\d+)?(?:\/|$)/i;
 
+// The adapter receives the sign-in password and then a session token on
+// every call, so it gets the same transport rule as every other credentialed
+// endpoint (app/endpoint-policy.js): https, or http only to this machine, and
+// no credentials in the URL. A bare host defaults to https. Throws a message
+// fit to show; callers already return error.message.
 function normaliseAdapterUrl(url) {
-  let u = String(url || '').trim();
-  if (!u) return '';
-  if (!/^https?:\/\//i.test(u)) {
-    // No scheme provided. Default to https — the adapter is the holder of
-    // org JWTs, AWS credentials, and the AI provider key; sending its
-    // bearer tokens over plain http would expose them on the wire to any
-    // network observer. Loopback addresses are the one documented dev
-    // exception where http is fine because the traffic never leaves the
-    // machine.
-    const isLoopback = _LOOPBACK_HOST_RE.test(u);
-    u = (isLoopback ? 'http://' : 'https://') + u;
-  }
-  return u.replace(/\/+$/, '');
+  return requireSecureEndpoint(url);
 }
 
 async function adapterFetch(pathname, opts = {}) {
@@ -13280,7 +13356,8 @@ async function adapterFetch(pathname, opts = {}) {
   // on both Windows and macOS. Same for every other org/S3 call in this file.
   // credentials:'omit' — the adapter authenticates via the Bearer header above,
   // not session cookies; net.fetch defaults to 'include', so be explicit.
-  const res = await net.fetch(session.adapterUrl + pathname, { ...opts, headers, credentials: 'omit' });
+  // Re-checked at use: a session saved by an older build may hold an http URL.
+  const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + pathname, { ...opts, headers, credentials: 'omit' });
   const text = await res.text();
   let body;
   try {
@@ -13299,7 +13376,7 @@ async function adapterFetch(pathname, opts = {}) {
       // has an HTTP error to handle and shouldn't block on a Python
       // subprocess.
       clearOrgSession();
-      restorePreAdapterProvider().catch(() => {});
+      restorePreAdapterProvider('session-lost').catch(() => {});
     }
     const err = new Error(body.detail || ('HTTP ' + res.status));
     err.status = res.status;
@@ -13337,8 +13414,9 @@ ipcMain.handle('org-status', async () => {
     clearOrgSession();
     // If the user was on 'adapter', drop them back to 'local' so the next
     // summary attempt doesn't error out with "adapter not configured".
-    // Same reasoning as the explicit-logout path; both end the session.
-    restorePreAdapterProvider().catch(() => {});
+    // Not the explicit-logout path: nobody chose to leave the org's
+    // routing, so this falls back to local (F10).
+    restorePreAdapterProvider('session-lost').catch(() => {});
     return { signedIn: false, everSignedIn };
   }
   // Hard lock: heal any provider drift while the session is valid.
@@ -13417,7 +13495,7 @@ ipcMain.handle('org-logout', async () => {
   // org-status's stale-session path stays fire-and-forget because that
   // handler is called frequently and any blocking would slow the UI.
   try {
-    await restorePreAdapterProvider();
+    await restorePreAdapterProvider('signout');
   } catch (_) {}
   return { success: true };
 });
@@ -13476,43 +13554,17 @@ async function _ssoOpenLoopback() {
             }
           };
           server.on('request', (req, sres) => {
-            // We only care about the /callback path; ignore favicon etc.
-            const u = new URL(req.url, `http://127.0.0.1:${port}`);
-            if (u.pathname !== '/callback') {
-              sres.writeHead(404).end('not found');
-              return;
-            }
-            const code = u.searchParams.get('code');
-            const cbState = u.searchParams.get('state');
-            const error = u.searchParams.get('error');
-            sres.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-            if (error) {
-              sres.end(
-                `<html><body style="font:14px -apple-system;padding:40px">` +
-                `Sign-in failed: <code>${String(error).slice(0, 80)}</code>. ` +
-                `You can close this window.</body></html>`,
-              );
-              cleanup();
-              rej(new Error(`Google returned error: ${error}`));
-              return;
-            }
-            if (!code || cbState !== state) {
-              sres.end(
-                `<html><body style="font:14px -apple-system;padding:40px">` +
-                `Sign-in failed: bad state or missing code. Close this window and retry.` +
-                `</body></html>`,
-              );
-              cleanup();
-              rej(new Error('Bad state or missing code on callback'));
-              return;
-            }
-            sres.end(
-              `<html><body style="font:14px -apple-system;padding:40px;color:#1B1B19;background:#FAF9F5">` +
-              `<h2 style="font-family:Georgia,serif;font-weight:400;margin:0 0 8px">Signed in.</h2>` +
-              `You can close this window and return to Steno.</body></html>`,
-            );
+            // State is checked before anything else, and nothing from the
+            // request is ever written back (app/org-sso.js, F08). A request
+            // that is not Google's redirect for THIS sign-in is answered and
+            // ignored; it can neither end the sign-in nor inject markup.
+            const result = classifyCallback(req.url, state);
+            sres.writeHead(result.status, SSO_RESPONSE_HEADERS);
+            sres.end(result.body);
+            if (result.outcome === 'ignore') return;
             cleanup();
-            res(code);
+            if (result.outcome === 'denied') rej(new Error('Google sign-in was cancelled or refused'));
+            else res(result.code);
           });
         });
       resolve({ server, port, waitForCallback });
@@ -13555,8 +13607,10 @@ ipcMain.handle('org-sso-google-start', async (_event, payload) => {
       return { success: false, error: startBody.detail || `HTTP ${startRes.status}` };
     }
 
-    // 4. Open browser.
-    await shell.openExternal(startBody.authorize_url);
+    // 4. Open browser. The adapter chose this URL, so only Google's own
+    //    authorisation endpoint is handed to the OS (app/org-sso.js, F07).
+    const authorizeUrl = validateGoogleAuthorizeUrl(startBody.authorize_url);
+    await shell.openExternal(authorizeUrl);
 
     // 5. Wait for the callback (5-minute hard cap). waitForCallback closes
     //    the server itself on resolve/reject.
@@ -14020,7 +14074,7 @@ ipcMain.on('org-chat-stream', async (event, streamId, payload) => {
   sender.once('destroyed', onDestroyed);
 
   try {
-    const res = await net.fetch(session.adapterUrl + '/ai/chat/stream', {
+    const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + '/ai/chat/stream', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -14038,7 +14092,7 @@ ipcMain.on('org-chat-stream', async (event, streamId, payload) => {
         // session AND restore pre-adapter provider so future processing
         // doesn't hit "adapter not configured".
         clearOrgSession();
-        restorePreAdapterProvider().catch(() => {});
+        restorePreAdapterProvider('session-lost').catch(() => {});
       }
       safeSend('query-done', { queryId: streamId, success: false, error: `HTTP ${res.status}: ${detail.slice(0, 200)}` });
       return;
