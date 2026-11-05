@@ -39,6 +39,11 @@ if [ -f "$ROOT/custom/DIARIZE_HELPER" ]; then
   fi
 fi
 
+# The official ffmpeg predates fixes the security review requires (F03). Use
+# the pinned minimal build instead; custom/build.sh checks the bundled copy.
+cp "$("$ROOT/custom/patched-ffmpeg.sh")" "$BIN/ffmpeg"
+echo "Using patched ffmpeg $("$BIN/ffmpeg" -hide_banner -version | head -1 | cut -d' ' -f3)."
+
 official_version=$(defaults read "$OFFICIAL/Contents/Info" CFBundleShortVersionString)
 echo "$official_version" > "$BIN/.official-version"
 echo "Staged binaries from official StenoAI $official_version:"
