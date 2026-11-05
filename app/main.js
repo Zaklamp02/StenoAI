@@ -2321,7 +2321,7 @@ if (!gotSingleInstanceLock) {
     powerMonitor.on('suspend', freezeInactivityWatchdogsForSleep);
     powerMonitor.on('resume', promptResumeAfterWake);
     powerMonitor.on('resume', thawInactivityWatchdogsAfterWake);
-    // Meetings held for mains power (Settings → When to process) start once
+    // Meetings held for mains power (Settings → Power saving mode) start once
     // the machine is plugged in. A no-op when nothing is waiting.
     powerMonitor.on('on-ac', () => { processNextInQueue(); });
     // Re-evaluate the idle auto-install gate when the machine wakes or the
@@ -5021,7 +5021,7 @@ ipcMain.handle('list-pending-deletes', async () => {
   return { success: true, pending };
 });
 
-// Settings → When to process ('always' | 'plugged_in'). Registered here, not in
+// Settings → Power saving mode ('always' | 'plugged_in'). Registered here, not in
 // settings-ipc.js, because a change must release or hold the live queue.
 ipcMain.handle('get-processing-power-policy', async () => ({
   success: true, processing_power_policy: powerPolicy.policy(), on_battery: powerPolicy.onBattery(),
@@ -5596,7 +5596,7 @@ function applyRecordingBackgroundThrottling() {
 let currentRecordingProcess = null;
 let currentRecordingSessionName = null;  // Surfaced in get-queue-status so renderer knows which meeting is live
 let processingQueue = [];
-// Settings → When to process. See power-policy.js.
+// Settings → Power saving mode. See power-policy.js.
 const powerPolicy = require('./power-policy').createPowerPolicy({
   getUserDataDir,
   isOnBatteryPower: () => powerMonitor.isOnBatteryPower(),

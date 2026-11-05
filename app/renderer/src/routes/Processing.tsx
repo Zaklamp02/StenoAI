@@ -432,7 +432,7 @@ export function Processing() {
     }
   }, [retryAudioFile, activeSession, retrying]);
 
-  // Held for mains power (Settings → When to process): nothing runs until the
+  // Held for mains power (Settings → Power saving mode): nothing runs until the
   // device is plugged in or the user asks to process now.
   const waitingForPower = recording.waitingForPower && !sawActivity;
 

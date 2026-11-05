@@ -5,8 +5,8 @@ import { makeWav } from '../fixtures/make-wav';
 import { readUserConfig, writeUserConfig } from '../fixtures/user-config';
 
 /**
- * T2 — Settings → When to process (`processing_power_policy`). With
- * "Only when plugged in" on battery, a queued meeting is held (journaled as
+ * T2 — Settings → Power saving mode (`processing_power_policy`). With
+ * power saving mode on (plugged_in) on battery, a queued meeting is held (journaled as
  * `waiting-power`), survives a quit, comes back on relaunch without a recovery
  * prompt, and runs on "Process now"; the live transcript is skipped too.
  *

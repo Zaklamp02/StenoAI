@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ipc, type LiveSegment } from '@/lib/ipc';
 
-/** 'waitingForPower': skipped on battery (Settings → When to process). */
+/** 'waitingForPower': skipped on battery (Settings → Power saving mode). */
 export type LiveTranscriptStatus = 'idle' | 'loading' | 'streaming' | 'error' | 'waitingForPower';
 
 export interface UseLiveTranscriptResult {
