@@ -74,6 +74,9 @@ const { STORE_DOCUMENT_LIMIT } = require('./meeting-transfer-store');
 const { registerPersonSampleIpc } = require('./person-sample-ipc');
 const { registerSpeakerIpc } = require('./speaker-ipc');
 const { requireSecureEndpoint } = require('./endpoint-policy');
+const {
+  validateGoogleAuthorizeUrl, classifyCallback, RESPONSE_HEADERS: SSO_RESPONSE_HEADERS,
+} = require('./org-sso');
 const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
@@ -13391,43 +13394,17 @@ async function _ssoOpenLoopback() {
             }
           };
           server.on('request', (req, sres) => {
-            // We only care about the /callback path; ignore favicon etc.
-            const u = new URL(req.url, `http://127.0.0.1:${port}`);
-            if (u.pathname !== '/callback') {
-              sres.writeHead(404).end('not found');
-              return;
-            }
-            const code = u.searchParams.get('code');
-            const cbState = u.searchParams.get('state');
-            const error = u.searchParams.get('error');
-            sres.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-            if (error) {
-              sres.end(
-                `<html><body style="font:14px -apple-system;padding:40px">` +
-                `Sign-in failed: <code>${String(error).slice(0, 80)}</code>. ` +
-                `You can close this window.</body></html>`,
-              );
-              cleanup();
-              rej(new Error(`Google returned error: ${error}`));
-              return;
-            }
-            if (!code || cbState !== state) {
-              sres.end(
-                `<html><body style="font:14px -apple-system;padding:40px">` +
-                `Sign-in failed: bad state or missing code. Close this window and retry.` +
-                `</body></html>`,
-              );
-              cleanup();
-              rej(new Error('Bad state or missing code on callback'));
-              return;
-            }
-            sres.end(
-              `<html><body style="font:14px -apple-system;padding:40px;color:#1B1B19;background:#FAF9F5">` +
-              `<h2 style="font-family:Georgia,serif;font-weight:400;margin:0 0 8px">Signed in.</h2>` +
-              `You can close this window and return to Steno.</body></html>`,
-            );
+            // State is checked before anything else, and nothing from the
+            // request is ever written back (app/org-sso.js, F08). A request
+            // that is not Google's redirect for THIS sign-in is answered and
+            // ignored; it can neither end the sign-in nor inject markup.
+            const result = classifyCallback(req.url, state);
+            sres.writeHead(result.status, SSO_RESPONSE_HEADERS);
+            sres.end(result.body);
+            if (result.outcome === 'ignore') return;
             cleanup();
-            res(code);
+            if (result.outcome === 'denied') rej(new Error('Google sign-in was cancelled or refused'));
+            else res(result.code);
           });
         });
       resolve({ server, port, waitForCallback });
@@ -13470,8 +13447,10 @@ ipcMain.handle('org-sso-google-start', async (_event, payload) => {
       return { success: false, error: startBody.detail || `HTTP ${startRes.status}` };
     }
 
-    // 4. Open browser.
-    await shell.openExternal(startBody.authorize_url);
+    // 4. Open browser. The adapter chose this URL, so only Google's own
+    //    authorisation endpoint is handed to the OS (app/org-sso.js, F07).
+    const authorizeUrl = validateGoogleAuthorizeUrl(startBody.authorize_url);
+    await shell.openExternal(authorizeUrl);
 
     // 5. Wait for the callback (5-minute hard cap). waitForCallback closes
     //    the server itself on resolve/reject.
