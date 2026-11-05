@@ -112,6 +112,7 @@ const stenoai = {
     recoverable: () => invoke('list-recoverable-recordings'),
     recover: (id) => invoke('recover-recording', id),
     dismissRecovery: (id) => invoke('dismiss-recoverable-recording', id),
+    processNow: () => invoke('process-queue-now'),
     start: (name, trigger, appendTo) =>
       invoke('start-recording-ui', name, trigger, appendTo),
     stop: () => invoke('stop-recording-ui'),
@@ -339,6 +340,8 @@ const stenoai = {
     setAutoSummarize: (v) => invoke('set-auto-summarize', v),
     getAutoInstallWhenIdle: () => invoke('get-auto-install-when-idle'),
     setAutoInstallWhenIdle: (v) => invoke('set-auto-install-when-idle', v),
+    getProcessingPowerPolicy: () => invoke('get-processing-power-policy'),
+    setProcessingPowerPolicy: (policy) => invoke('set-processing-power-policy', policy),
     getIdentityMatchingEnabled: () => invoke('get-identity-matching-enabled'),
     setIdentityMatchingEnabled: (v) => invoke('set-identity-matching-enabled', v),
     getSilenceAutoStop: () => invoke('get-silence-auto-stop'),

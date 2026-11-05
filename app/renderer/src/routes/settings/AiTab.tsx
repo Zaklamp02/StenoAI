@@ -26,7 +26,7 @@ import { MetaIcon } from '@/components/ui/meta-icon';
 import { QwenIcon } from '@/components/ui/qwen-icon';
 import { cn, isMac } from '@/lib/utils';
 import { t } from '@/i18n';
-import { ipc, type AiProvider, type CloudProvider, type DiarizationEngine, type TranscriptionEngine } from '@/lib/ipc';
+import { ipc, type AiProvider, type CloudProvider, type DiarizationEngine, type ProcessingPowerPolicy, type TranscriptionEngine } from '@/lib/ipc';
 import {
   useAiProvider,
   useSetAiProvider,
@@ -65,9 +65,11 @@ import {
   useAutoSummarizeSetting,
   useIdentityMatchingEnabledSetting,
   useLanguageSetting,
+  useProcessingPowerPolicySetting,
   useSetAutoSummarize,
   useSetIdentityMatchingEnabled,
   useSetLanguage,
+  useSetProcessingPowerPolicy,
 } from '@/hooks/useSettings';
 import { useOrgSession } from '@/hooks/useOrg';
 import { COMPACT_BTN, COMPACT_INPUT, COMPACT_TRIGGER, SectionHeading, SettingRow } from './primitives';
@@ -101,7 +103,36 @@ export function AiTab() {
         {t('settings.ai.stages.notesIntro')}
       </p>
       <SummarisationSection />
+
+      <SectionHeading>{t('settings.ai.stages.power')}</SectionHeading>
+      <ProcessingPowerSetting />
     </section>
+  );
+}
+
+function ProcessingPowerSetting() {
+  const policy = useProcessingPowerPolicySetting();
+  const setPolicy = useSetProcessingPowerPolicy();
+  return (
+    <SettingRow
+      label={t('settings.ai.power.label')}
+      description={t('settings.ai.power.description')}
+      noBorder
+    >
+      <Select
+        value={policy.data ?? 'always'}
+        onValueChange={(v) => setPolicy.mutate(v as ProcessingPowerPolicy)}
+        disabled={policy.data === undefined || setPolicy.isPending}
+      >
+        <SelectTrigger className={COMPACT_TRIGGER} aria-label={t('settings.ai.power.label')}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="always">{t('settings.ai.power.always')}</SelectItem>
+          <SelectItem value="plugged_in">{t('settings.ai.power.pluggedIn')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </SettingRow>
   );
 }
 

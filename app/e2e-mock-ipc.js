@@ -331,6 +331,7 @@ function install({ ipcMain }) {
     cloudModel: 'gpt-4o',
     remoteUrl: '', // remote Ollama URL (empty = not configured)
     autoInstallWhenIdle: true, // idle auto-install toggle (config default on)
+    processingPowerPolicy: 'always', // Settings → When to process
     transcriptionEngine: process.env.STENOAI_E2E_MOCK_ENGINE || 'parakeet',
     // The saved engine; defaults like the backend's (nemotron3 in this fork).
     diarizationEngine: process.env.STENOAI_E2E_MOCK_DIARIZATION_ENGINE || 'nemotron3',
@@ -777,6 +778,16 @@ function install({ ipcMain }) {
     'set-auto-install-when-idle': async (_event, enabled) => {
       state.autoInstallWhenIdle = !!enabled;
       return { success: true, auto_install_when_idle: state.autoInstallWhenIdle };
+    },
+    'get-processing-power-policy': async () => ({
+      success: true,
+      processing_power_policy: state.processingPowerPolicy,
+      on_battery: process.env.STENOAI_E2E_POWER_SOURCE === 'battery',
+    }),
+    'set-processing-power-policy': async (_event, policy) => {
+      if (policy !== 'always' && policy !== 'plugged_in') return { success: false, error: 'Unknown processing power policy' };
+      state.processingPowerPolicy = policy;
+      return { success: true, processing_power_policy: policy };
     },
 
     // Seed meetings for the specs that need them, gated per env so the

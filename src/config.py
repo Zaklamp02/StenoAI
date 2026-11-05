@@ -1110,6 +1110,10 @@ class Config:
             # notification is unchanged; this only removes the manual click,
             # and main.js keeps autoInstallOnAppQuit as the safe fallback.
             "auto_install_when_idle": True,
+            # When meetings are transcribed and summarised: "always", or
+            # "plugged_in" to hold processing (and skip the live transcript)
+            # while the device runs on battery. main.js enforces it.
+            "processing_power_policy": "always",
             # Default OFF: cross-recording speaker identification creates and
             # stores biometric voice profiles. The user must enable it before
             # Steno extracts or stores speaker embeddings.
@@ -2164,6 +2168,20 @@ class Config:
     def set_auto_install_when_idle(self, enabled: bool) -> bool:
         """Set whether idle auto-install is enabled."""
         self._config["auto_install_when_idle"] = enabled
+        return self._save()
+
+    VALID_PROCESSING_POWER_POLICIES = ("always", "plugged_in")
+
+    def get_processing_power_policy(self) -> str:
+        """Get when meetings are processed: 'always' or 'plugged_in'."""
+        value = self._config.get("processing_power_policy", "always")
+        return value if value in self.VALID_PROCESSING_POWER_POLICIES else "always"
+
+    def set_processing_power_policy(self, policy: str) -> bool:
+        """Set when meetings are processed. Rejects unknown values."""
+        if policy not in self.VALID_PROCESSING_POWER_POLICIES:
+            return False
+        self._config["processing_power_policy"] = policy
         return self._save()
 
     def get_identity_matching_enabled(self) -> bool:

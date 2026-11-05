@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ipc, type TelemetryToggleSource } from '@/lib/ipc';
+import { ipc, type ProcessingPowerPolicy, type TelemetryToggleSource } from '@/lib/ipc';
 import { unwrap } from '@/lib/result';
 
 export const settingsKeys = {
@@ -26,6 +26,7 @@ export const settingsKeys = {
   // factory like every other setting rather than two hand-written arrays.
   keepRecordings: () => [...settingsKeys.all, 'keepRecordings'] as const,
   autoSummarize: () => [...settingsKeys.all, 'autoSummarize'] as const,
+  processingPowerPolicy: () => [...settingsKeys.all, 'processingPowerPolicy'] as const,
   identityMatching: () => [...settingsKeys.all, 'identityMatchingEnabled'] as const,
   obsidianSync: () => [...settingsKeys.all, 'obsidianSync'] as const,
   obsidianVaultPath: () => [...settingsKeys.all, 'obsidianVaultPath'] as const,
@@ -431,6 +432,27 @@ export function useSetAutoSummarize() {
   return useToggleSetting(settingsKeys.autoSummarize(), async (v) =>
     unwrap(await ipc().settings.setAutoSummarize(v)),
   );
+}
+
+export function useProcessingPowerPolicySetting() {
+  return useQuery({
+    queryKey: settingsKeys.processingPowerPolicy(),
+    queryFn: async () =>
+      unwrap(await ipc().settings.getProcessingPowerPolicy()).processing_power_policy,
+  });
+}
+
+export function useSetProcessingPowerPolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (policy: ProcessingPowerPolicy) =>
+      unwrap(await ipc().settings.setProcessingPowerPolicy(policy)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: settingsKeys.processingPowerPolicy() });
+      // A change can release (or hold) queued meetings.
+      void qc.invalidateQueries({ queryKey: ['recording', 'queue'] });
+    },
+  });
 }
 
 /** Obsidian vault sync (#413): a toggle, a vault-folder path + picker, and a

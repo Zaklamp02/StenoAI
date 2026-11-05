@@ -1062,6 +1062,29 @@ class ConfigAutoInstallWhenIdleTests(unittest.TestCase):
             self.assertTrue(reloaded.get_auto_install_when_idle())
 
 
+class ConfigProcessingPowerPolicyTests(unittest.TestCase):
+    def test_default_processing_power_policy_is_always(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            self.assertEqual(config.get_processing_power_policy(), "always")
+
+    def test_processing_power_policy_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            config = Config(config_path=path)
+            self.assertTrue(config.set_processing_power_policy("plugged_in"))
+            reloaded = Config(config_path=path)
+            self.assertEqual(reloaded.get_processing_power_policy(), "plugged_in")
+
+    def test_processing_power_policy_rejects_unknown_values(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = Config(config_path=Path(tmp_dir) / "config.json")
+            self.assertFalse(config.set_processing_power_policy("sometimes"))
+            self.assertEqual(config.get_processing_power_policy(), "always")
+            config._config["processing_power_policy"] = "sometimes"
+            self.assertEqual(config.get_processing_power_policy(), "always")
+
+
 class ConfigIdentityMatchingEnabledTests(unittest.TestCase):
     def test_default_identity_matching_enabled_is_false(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
