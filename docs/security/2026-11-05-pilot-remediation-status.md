@@ -46,10 +46,7 @@ Recorded after rebuilding the backend from this branch:
 
 ## Before sharing with colleagues
 
-All ten findings are fixed. What remains is release work:
-
-- Publish a new colleague release from `main` with `custom/release.sh <tag>`
-  and point `custom/COLLEAGUE_QUICKSTART.md` at it (it still names
-  `test-2026-11-03`, which predates these fixes).
-- Agree the install path with IT for managed Macs (local signing, no
-  notarisation).
+All ten findings are fixed and released as the colleague pre-release
+`test-2026-11-06` (tag on `main` at `fe59ceb`), which
+`custom/COLLEAGUE_QUICKSTART.md` points to. Still to agree: the install path
+with IT for managed Macs (local signing, no notarisation).
