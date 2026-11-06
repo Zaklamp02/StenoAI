@@ -52,7 +52,7 @@ export const WHATS_NEW_COPY = {
 };
 
 export const LAST_SEEN_RELEASE_KEY = 'steno-last-seen-release';
-export const CHANGELOG_URL = `https://github.com/stenolabs/stenoai/releases/tag/v${RELEASE_VERSION}`;
+export const CHANGELOG_URL = 'https://github.com/Zaklamp02/StenoAI/releases';
 
 /** Stable releases only. Downgrades and same-version restarts stay quiet. */
 export function isUnseenRelease(current: string, seen: string | null): boolean {

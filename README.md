@@ -1,7 +1,3 @@
-> **Personal fork.** This is a customised build of [StenoAI](https://github.com/stenolabs/stenoai) by Steno Labs, based on the official v0.8.0 release and shared under the original [MIT license](LICENSE). All credit for the app goes to the StenoAI authors and contributors. This fork's changes are listed in [custom/README.md](custom/README.md). For the official app, downloads and support, use the [original repository](https://github.com/stenolabs/stenoai). This fork is not affiliated with or endorsed by Steno Labs.
->
-> **Try the test release:** download `StenoAI-test-2026-11-06b-arm64.dmg` from [Releases](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-06b) and follow [the install steps](custom/COLLEAGUE_QUICKSTART.md#download-the-app). Apple Silicon, macOS 14.4 or later.
-
 <div align="center">
   <img src="website/public/dragonfly-logo-512.png" alt="StenographAI Logo" width="120" height="120">
 
@@ -11,41 +7,32 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/stenolabs/stenoai/actions/workflows/build-release.yml"><img src="https://img.shields.io/github/actions/workflow/status/stenolabs/stenoai/build-release.yml?event=push&style=for-the-badge" alt="Build"></a>
-  <a href="https://github.com/stenolabs/stenoai/releases"><img src="https://img.shields.io/github/v/release/stenolabs/stenoai?style=for-the-badge" alt="Release"></a>
-  <a href="https://discord.gg/DZ6vcQnxxu"><img src="https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/Zaklamp02/StenoAI/releases"><img src="https://img.shields.io/github/v/release/Zaklamp02/StenoAI?include_prereleases&style=for-the-badge" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="License"></a>
-  <img src="https://img.shields.io/badge/macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS">
-  <img src="https://img.shields.io/badge/Windows-alpha-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows (alpha)">
-  <a href="#sponsors"><img src="https://img.shields.io/badge/Sponsors-%E2%9D%A4-EA4AAA?style=for-the-badge" alt="Sponsors"></a>
+  <img src="https://img.shields.io/badge/macOS-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="macOS, Apple Silicon">
 </p>
 
-<p align="center">StenographAI is the privacy-first AI notepad for all your confidential conversations. Local processing is available; optional cloud providers receive the audio or text you choose to process with them. Usage analytics is off by default in this fork. Record, summarize, and query your meetings using local AI models. Perfect for government, defence and C-suite professionals with confidential data needs.</p>
+<p align="center">StenographAI is a privacy-first AI notepad for confidential conversations. Record, transcribe, summarize and query your meetings with local AI models; optional cloud providers receive only the audio or text you choose to send them. Usage analytics is off by default.</p>
 
-<p align="center"><sub>Trusted by teams at <b>AWS</b>, <b>Deliveroo</b>, <b>Tesco</b>, <b>Hashicorp</b>, <b>Rutgers</b> & <b>European Union</b>.</sub></p>
+> **Try the test release:** download `StenoAI-test-2026-11-06b-arm64.dmg` from [Releases](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-06b) and follow [the install steps](custom/COLLEAGUE_QUICKSTART.md#download-the-app). Apple Silicon, macOS 14.4 or later.
 
 <div align="center">
   <picture>
     <source srcset="website/public/demo.gif" type="image/gif">
-    <img src="website/public/readme.png" alt="StenoAI" width="800">
+    <img src="website/public/readme.png" alt="StenographAI" width="800">
   </picture>
-
-  <br>
-
-  [![Twitter Follow](https://img.shields.io/twitter/follow/ruzin?style=social)](https://x.com/ruzin_saleem)
 </div>
 
-<p align="center"><sub>Sponsored by <b>Gitlab Founder's Open Core Ventures</b>.</sub></p>
+## About this project
 
-<p align="center"><sub><i>Disclaimer: This is an independent open-source project for meeting-notes productivity and is not affiliated with, endorsed by, or associated with any similarly named company.</i></sub></p>
+StenographAI is an independent project maintained at [Zaklamp02/StenoAI](https://github.com/Zaklamp02/StenoAI). It started from the v0.8.0 release of [StenoAI](https://github.com/stenolabs/stenoai) by Steno Labs and has since been developed separately; it is not intended to merge back. What has changed since that starting point is listed in [custom/README.md](custom/README.md).
 
-## Sponsors
-
-### Recall.ai - API for desktop recording
-
-If you're looking for a hosted desktop recording API, consider checking out [Recall.ai](https://www.recall.ai/product/desktop-recording-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=ruzin-stenoai), an API that records Zoom, Google Meet, Microsoft Teams, in-person meetings, and more.
+**Credit.** The original application, and most of the code here, is the work of the StenoAI authors and contributors. It is used under their [MIT license](LICENSE), which this project keeps. StenographAI is not affiliated with or endorsed by Steno Labs, so please report problems with this app on [this repository's issues](https://github.com/Zaklamp02/StenoAI/issues) rather than to them.
 
 ## 📢 What's New
+
+The most recent features inherited from the StenoAI v0.8.0 starting point. Changes made in this project are in [custom/README.md](custom/README.md).
+
 
 - **2026-10-03** 🤖 Agents and charts — Install the Steno skill in Claude Code or Codex from the Agents sidebar, and ask Chat for bar or line charts from your notes.
 - **2026-10-03** 💬 Chat while recording — Ask questions during a meeting and keep the conversation with the saved note.
@@ -170,7 +157,7 @@ This addon uses:
 - Without Rules (or another automation bridge), this cannot be fully event-driven from Calendar start time.
 - Keep using regular manual shortcuts (`Open URLs`) for non-automated scenarios.
 
-Have questions or suggestions? [Join our Discord](https://discord.gg/DZ6vcQnxxu) to chat with the community.
+Have questions or suggestions? [Open an issue](https://github.com/Zaklamp02/StenoAI/issues).
 </details>
 
 ## Models & Performance
@@ -193,11 +180,7 @@ Have questions or suggestions? [Join our Discord](https://discord.gg/DZ6vcQnxxu)
 
 ## Installation
 
-Download the latest release (**Apple Silicon Mac, macOS 14.4 or later**):
-
-- [Apple Silicon (M1-M5)](https://github.com/stenolabs/stenoai/releases/latest/download/stenoAI-macos-arm64.dmg)
-
-> **Intel Mac users**: v0.4.0 is Apple Silicon only. Stay on [v0.3.8](https://github.com/stenolabs/stenoai/releases/tag/v0.3.8) — the last release supporting Intel Macs. Auto-update on existing Intel installs will not push v0.4.0 to those machines.
+StenographAI is built for **Apple Silicon Macs on macOS 14.4 or later**. Download the newest DMG from [Releases](https://github.com/Zaklamp02/StenoAI/releases) (test releases are marked as pre-releases); [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md#download-the-app) walks through it.
 
 ### Installing on macOS
 
@@ -212,48 +195,17 @@ Download the latest release (**Apple Silicon Mac, macOS 14.4 or later**):
    - Or run in Terminal: `xattr -cr /Applications/StenoAI.app`
 5. **The app will work normally on subsequent launches**
 
-You can run it locally as well (see below) if you don't want to install a DMG.
+The app updates by installing a newer release, not automatically. You can also build it locally (see below) if you don't want to install a DMG.
 
-### Windows (alpha)
+### Windows and Linux
 
-Windows 10/11 (x64) is supported in **alpha**, with the full pipeline verified working: record → live Parakeet transcription → batch transcript → Ollama summary, **including system-audio loopback capture with `[You]`/`[Others]` diarisation**.
+The Windows and Linux code inherited from StenoAI is still in the tree, but this project does not build, test or release it. Only the Apple Silicon macOS app is supported.
 
-**Install:** download **`stenoAI-windows-x64.exe`** from the [latest release](https://github.com/stenolabs/stenoai/releases/latest) and run it — it installs per-user (no admin needed) and creates Start-menu/desktop shortcuts. On first launch, Windows SmartScreen warns because the alpha is unsigned — click **More info → Run anyway**. The first-run setup wizard then downloads the transcription model (~670 MB) and the default summarisation model, Gemma 4 E2B (~4.3 GB).
-
-> Before the first tagged Windows release lands, grab the installer from the [Windows build workflow](https://github.com/stenolabs/stenoai/actions/workflows/build-windows.yml): sign in to GitHub, open the latest green run, download the `stenoai-windows` artifact, and run the `.exe` inside.
-
-Known alpha limitations:
-
-- **Unsigned** — SmartScreen warns on first launch; we'll code-sign before 1.0.
-- **CPU-only summarisation** — the bundled Ollama runs on CPU (the NVIDIA GPU libraries are excluded to keep the download small); a separate GPU build is a follow-up. Transcription is CPU on every platform regardless.
-- **Auto-update** is wired (NSIS + `latest.yml`) but updates are unsigned until code signing is in place.
-- **Transcription** runs through `onnx-asr` (ONNX Runtime) instead of MLX, with the same Parakeet model and behaviour as macOS. Whisper is also available as an engine option.
-
-### Linux (Debian/Ubuntu, alpha)
-
-Verified on Ubuntu 26.04 LTS (GNOME/Wayland, PipeWire), including system-audio loopback capture with `[You]`/`[Others]` diarisation.
-
-**Install (`.deb`, recommended):** download [`stenoAI-linux-amd64.deb`](https://github.com/stenolabs/stenoai/releases/latest/download/stenoAI-linux-amd64.deb) from the [latest release](https://github.com/stenolabs/stenoai/releases/latest) and install it with `sudo apt install ./stenoAI-linux-amd64.deb` — apt pulls in the required system libraries automatically.
-
-**AppImage:** download [`stenoAI-linux-x86_64.AppImage`](https://github.com/stenolabs/stenoai/releases/latest/download/stenoAI-linux-x86_64.AppImage), `chmod +x` it, and run it. An AppImage carries no package metadata, so **you must install PortAudio yourself** or the setup check fails with `OSError: PortAudio library not found`:
-
-```bash
-sudo apt install libportaudio2
-```
-
-Known alpha limitations:
-
-- **Unsigned**, same as the Windows alpha.
-- **GPU support for summaries** — Linux packages retain Ollama's CUDA and Vulkan backends; acceleration depends on your GPU and drivers. Transcription uses `onnx-asr` on CPU. A separately installed Ollama can also be used through Settings → AI → Private Server.
-- **System audio requires PipeWire** (Ubuntu's default since 22.10). The toggle reports unsupported on a PulseAudio-only or headless install, and recording falls back to mic-only.
-- **No speaker diarization sidecar** — per-channel `[You]`/`[Others]` labelling works, but the acoustic multi-speaker split is macOS-only.
-- **No auto-update.** `.deb` installs update by downloading a new package; AppImage self-update is a follow-up.
-
-Issues + feedback welcome on the GitHub issues tracker.
+Issues and feedback are welcome on [the issue tracker](https://github.com/Zaklamp02/StenoAI/issues).
 
 ## Local Development/Use Locally
 
-For this Apple Silicon fork, either download the test release DMG or build from source; both are in [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
+Either download the test release DMG or build from source; both are in [the colleague quickstart](custom/COLLEAGUE_QUICKSTART.md).
 It contains the supported runtimes, verified native-helper setup, local signing,
 permissions, model choices and testing commands.
 
@@ -313,4 +265,4 @@ log stream --predicate 'eventMessage CONTAINS "ollama" OR process CONTAINS "Sten
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](LICENSE). Based on [StenoAI](https://github.com/stenolabs/stenoai) by Steno Labs; the original copyright notice is kept in the license file.

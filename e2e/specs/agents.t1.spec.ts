@@ -29,7 +29,7 @@ test("Agents exposes both install prompts and opens the selected setup guide", a
     ).toBeVisible();
     const text = await app.evaluate(({ clipboard }) => clipboard.readText());
     expect(text).toContain(
-      "https://github.com/stenolabs/stenoai/tree/main/skills/steno",
+      "https://github.com/Zaklamp02/StenoAI/tree/main/skills/steno",
     );
     expect(text).toContain(
       name === "Codex" ? "$skill-installer" : "~/.claude/skills/steno",
@@ -43,8 +43,8 @@ test("Agents exposes both install prompts and opens the selected setup guide", a
       ),
     )
     .toEqual([
-      "https://github.com/stenolabs/stenoai/blob/main/docs/features/agents.mdx#claude-code",
-      "https://github.com/stenolabs/stenoai/blob/main/docs/features/agents.mdx#codex",
+      "https://github.com/Zaklamp02/StenoAI/blob/main/docs/features/agents.mdx#claude-code",
+      "https://github.com/Zaklamp02/StenoAI/blob/main/docs/features/agents.mdx#codex",
     ]);
   await app.evaluate(({ shell }) => {
     shell.openExternal = async () => {

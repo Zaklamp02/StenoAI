@@ -129,7 +129,7 @@ stenoai/
 
 ## Getting Help
 
-- Check existing [issues](https://github.com/stenolabs/stenoai/issues)
+- Check existing [issues](https://github.com/Zaklamp02/StenoAI/issues)
 - Create a new issue for bugs or feature requests
 - Join discussions in the repository
 

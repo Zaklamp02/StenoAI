@@ -45,7 +45,7 @@ test("an acknowledged release leaves Settings interactive and can be reopened", 
   await expect(page.getByRole("dialog", { name: title })).toHaveCount(0);
   await expect.poll(() => app.evaluate(
     () => (globalThis as unknown as { openedUrls: string[] }).openedUrls,
-  )).toEqual([`https://github.com/stenolabs/stenoai/releases/tag/v${version}`]);
+  )).toEqual(["https://github.com/Zaklamp02/StenoAI/releases"]);
 });
 
 test("upgrade waits for foreground, dismisses across restarts, and reopens from About", async ({
