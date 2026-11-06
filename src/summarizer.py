@@ -16,7 +16,9 @@ from .meeting_context import MeetingContext
 from . import ollama_manager
 from .endpoint_policy import CLOUD_KEY_REENTER_MESSAGE, FIRST_PARTY_ORIGINS, require_secure_endpoint
 from .provider_errors import safe_error_text
-from .secure_http import RedirectRefused, open_authenticated
+from .secure_http import (
+    RedirectRefused, anthropic_client, ollama_client, open_authenticated, openai_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +242,13 @@ class OllamaSummarizer:
 
             if self.cloud_provider == "anthropic":
                 try:
-                    from anthropic import Anthropic
+                    import anthropic  # noqa: F401 - fail early with the install hint
                 except ImportError:
                     raise ImportError("anthropic package is required for Anthropic cloud mode. pip install anthropic")
                 # Explicit base URL: the SDK would otherwise honour an
                 # ANTHROPIC_BASE_URL from the environment and send the key
-                # past its destination binding (F04).
-                self.anthropic_client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
+                # past its destination binding (F04). No redirects (R1).
+                self.anthropic_client = anthropic_client(cloud_api_key, FIRST_PARTY_ORIGINS["anthropic"])
                 logger.info(f"Anthropic provider initialized: model={self.model_name}")
             elif self.cloud_provider == "bedrock":
                 # No SDK — we call Bedrock Converse directly over HTTPS with
@@ -265,7 +267,7 @@ class OllamaSummarizer:
                 )
             else:
                 try:
-                    from openai import OpenAI
+                    import openai  # noqa: F401 - fail early with the install hint
                 except ImportError:
                     raise ImportError("openai package is required for cloud mode. pip install openai")
                 # Never None: the SDK would read OPENAI_BASE_URL from the
@@ -274,7 +276,7 @@ class OllamaSummarizer:
                     cloud_api_url if self.cloud_provider == "custom"
                     else FIRST_PARTY_ORIGINS["openai"] + "/v1"
                 )
-                self.cloud_client = OpenAI(api_key=cloud_api_key, base_url=base_url)
+                self.cloud_client = openai_client(cloud_api_key, base_url)
                 logger.info(f"Cloud provider initialized: model={self.model_name}")
 
         elif self.ai_provider == "remote":
@@ -290,7 +292,7 @@ class OllamaSummarizer:
             if not self.remote_url:
                 raise ValueError("Remote Ollama URL is not configured. Set it in Settings > AI.")
 
-            self.client = ollama.Client(host=self.remote_url)
+            self.client = ollama_client(host=self.remote_url)
             logger.info(f"Remote Ollama initialized: host={self.remote_url}, model={self.model_name}")
 
         else:
@@ -308,7 +310,7 @@ class OllamaSummarizer:
 
             self.model_name = resolve_runtime_tag(model_name)
             self._ensure_ollama_ready()
-            self.client = ollama.Client()
+            self.client = ollama_client()
     
     def _is_ollama_running(self) -> bool:
         """Check if Ollama service is running."""
@@ -711,7 +713,7 @@ class OllamaSummarizer:
             return repaired
             
         except Exception as e:
-            logger.error(f"JSON repair failed: {e}")
+            logger.error(f"JSON repair failed: {safe_error_text(e)}")
             return None
     
     def _create_enhanced_fallback(self, malformed_response: str, transcript: str, duration_minutes: int) -> MeetingTranscript:
@@ -764,7 +766,7 @@ class OllamaSummarizer:
                     logger.info(f"Extracted {len(key_points)} key points from malformed response")
             
         except Exception as e:
-            logger.warning(f"Failed to extract data from malformed response: {e}")
+            logger.warning(f"Failed to extract data from malformed response: {safe_error_text(e)}")
         
         # Create fallback summary with extracted data
         fallback_summary = MeetingTranscript(
@@ -808,7 +810,7 @@ class OllamaSummarizer:
                 logger.info(f"Successfully downloaded model {self.model_name}")
                 return True
             except Exception as e:
-                logger.error(f"Failed to download model {self.model_name}: {e}")
+                logger.error(f"Failed to download model {self.model_name}: {safe_error_text(e)}")
 
             # Try fallback models: a preferred order (default, then small/fast)
             # followed by every other active supported model, so an
@@ -841,7 +843,7 @@ class OllamaSummarizer:
             return False
 
         except Exception as e:
-            logger.error(f"Error ensuring model availability: {e}")
+            logger.error(f"Error ensuring model availability: {safe_error_text(e)}")
             return False
     
     def _ensure_ollama_ready(self) -> bool:
@@ -1313,10 +1315,10 @@ Return ONLY the response in this exact JSON format:
                             if attempt > 0:
                                 logger.info(f"Retry attempt {attempt + 1}/{max_retries}")
                                 if self.ai_provider == "remote":
-                                    self.client = ollama.Client(host=self.remote_url)
+                                    self.client = ollama_client(host=self.remote_url)
                                 else:
                                     self._ensure_ollama_ready()
-                                    self.client = ollama.Client()
+                                    self.client = ollama_client()
 
                             # think=False: this JSON-summary path wants direct
                             # structured output, not reasoning. See _summarize_chunk.
@@ -1335,7 +1337,7 @@ Return ONLY the response in this exact JSON format:
                             break  # Success, exit retry loop
 
                         except Exception as e:
-                            logger.error(f"Ollama API attempt {attempt + 1} failed: {e}")
+                            logger.error(f"Ollama API attempt {attempt + 1} failed: {safe_error_text(e)}")
                             if attempt == max_retries - 1:
                                 raise
                             else:
@@ -1372,7 +1374,7 @@ Return ONLY the response in this exact JSON format:
                     logger.info("Successfully parsed JSON response")
                 
                 except json.JSONDecodeError as e:
-                    logger.error(f"Ollama returned invalid JSON: {e}")
+                    logger.error(f"Ollama returned invalid JSON: {safe_error_text(e)}")
                     logger.error(f"JSON parse error at position: {e.pos}")
                     # Log the size, not the body: the response is meeting content.
                     logger.error(f"Ollama response unparseable ({len(response_text)} chars)")
@@ -1464,7 +1466,7 @@ Return ONLY the response in this exact JSON format:
                 return meeting_summary
                 
             except Exception as e:
-                logger.error(f"Error creating MeetingTranscript object: {e}")
+                logger.error(f"Error creating MeetingTranscript object: {safe_error_text(e)}")
                 return None
                 
         except Exception as e:
@@ -1757,7 +1759,7 @@ TRANSCRIPT:
             return True
             
         except Exception as e:
-            logger.error(f"Ollama connection test failed: {e}")
+            logger.error(f"Ollama connection test failed: {safe_error_text(e)}")
             return False
     
     def set_model(self, model_name: str) -> bool:
@@ -1783,7 +1785,7 @@ TRANSCRIPT:
                 return False
                 
         except Exception as e:
-            logger.error(f"Error setting model: {e}")
+            logger.error(f"Error setting model: {safe_error_text(e)}")
             return False
     
     def cleanup(self):
@@ -1863,7 +1865,7 @@ TITLE:"""
                 response_text = self._cloud_chat(prompt, 30)
             else:
                 # HTTP-level timeout must account for model cold-start (~10s Metal init)
-                title_client = ollama.Client(
+                title_client = ollama_client(
                     host=self.remote_url if self.ai_provider == "remote" else None,
                     timeout=90
                 )
@@ -1926,10 +1928,12 @@ TITLE:"""
             )
             return None
 
-        except Exception:
-            logger.exception(
-                "Failed to generate meeting title (provider=%s, model=%s)",
-                self.ai_provider, self.model_name,
+        except Exception as e:
+            # No traceback: logger.exception would print the provider's
+            # exception text, which can quote the summary or the key (R2).
+            logger.error(
+                "Failed to generate meeting title (provider=%s, model=%s): %s",
+                self.ai_provider, self.model_name, safe_error_text(e),
             )
             return None
 
@@ -2007,10 +2011,10 @@ ANSWER:"""
             return
 
         if self.ai_provider == "remote":
-            self.client = ollama.Client(host=self.remote_url)
+            self.client = ollama_client(host=self.remote_url)
         else:
             self._ensure_ollama_ready()
-            self.client = ollama.Client()
+            self.client = ollama_client()
         stream = self.client.chat(
             model=self.model_name,
             messages=[{"role": "user", "content": prompt}],
@@ -2043,8 +2047,8 @@ ANSWER:"""
                 language=language,
             )
         except Exception as e:
-            logger.error(f"Streaming query failed: {e}")
-            yield f"\n[Error: {e}]"
+            logger.error(f"Streaming query failed: {safe_error_text(e)}")
+            yield f"\n[Error: {safe_error_text(e)}]"
 
     def query_transcript(self, transcript: str, question: str, language: str = "en") -> Optional[str]:
         """
@@ -2081,10 +2085,10 @@ ANSWER:"""
                         if attempt > 0:
                             logger.info(f"Retry attempt {attempt + 1}/{max_retries}")
                             if self.ai_provider == "remote":
-                                self.client = ollama.Client(host=self.remote_url)
+                                self.client = ollama_client(host=self.remote_url)
                             else:
                                 self._ensure_ollama_ready()
-                                self.client = ollama.Client()
+                                self.client = ollama_client()
 
                         ollama_response = self.client.chat(
                             model=self.model_name,
@@ -2099,7 +2103,7 @@ ANSWER:"""
                         break
 
                     except Exception as e:
-                        logger.error(f"Ollama API attempt {attempt + 1} failed: {e}")
+                        logger.error(f"Ollama API attempt {attempt + 1} failed: {safe_error_text(e)}")
                         if attempt == max_retries - 1:
                             raise
                         else:
@@ -2112,5 +2116,5 @@ ANSWER:"""
             return response_text
 
         except Exception as e:
-            logger.error(f"Query transcript failed: {e}")
+            logger.error(f"Query transcript failed: {safe_error_text(e)}")
             return None

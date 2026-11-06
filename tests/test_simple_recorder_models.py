@@ -4,6 +4,7 @@ import json
 import unittest
 from unittest import mock
 
+import ollama
 from click.testing import CliRunner
 
 
@@ -183,13 +184,13 @@ class VerifyModelCommandTests(unittest.TestCase):
         runner = CliRunner()
         with mock.patch("src.ollama_manager.start_ollama_server", return_value=True), \
              mock.patch("ollama.Client") as client_cls:
-            client_cls.return_value.chat.side_effect = RuntimeError("model not found")
+            client_cls.return_value.chat.side_effect = ollama.ResponseError("model 'gemma4:e2b-nvfp4' not found", 404)
             result = runner.invoke(cli, ["verify-model", "gemma4:e2b-nvfp4"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         data = json.loads(result.output)
         self.assertFalse(data["success"])
-        self.assertIn("model not found", data["error"])
+        self.assertEqual(data["error"], "Ollama could not find model (HTTP 404)")
 
 
 class PullModelCommandTests(unittest.TestCase):
@@ -252,13 +253,13 @@ class DeleteModelCommandTests(unittest.TestCase):
         from simple_recorder import cli
 
         runner = CliRunner()
-        with mock.patch("ollama.delete", side_effect=RuntimeError("not found")):
+        with mock.patch("ollama.delete", side_effect=ollama.ResponseError("model 'gemma4:e2b-it-qat' not found", 404)):
             result = runner.invoke(cli, ["delete-model", "gemma4:e2b-it-qat"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         data = json.loads(result.output)
         self.assertFalse(data["success"])
-        self.assertIn("not found", data["error"])
+        self.assertEqual(data["error"], "Ollama could not find model (HTTP 404)")
 
     def test_delete_model_refuses_unsupported_model(self):
         """delete-model is IPC-reachable and destructive, so it must not

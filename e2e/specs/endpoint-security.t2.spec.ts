@@ -1,3 +1,5 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { test, expect } from '../fixtures/electron';
 import { readUserConfig, writeUserConfig } from '../fixtures/user-config';
 
@@ -43,4 +45,42 @@ test('organisation sign-in refuses a plain-http adapter before sending the passw
   ));
   expect(result).toMatchObject({ success: false });
   expect(String((result as { error?: string }).error)).toContain('https');
+});
+
+function listen(handler: http.RequestListener): Promise<{ origin: string; close: () => void }> {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({ origin: `http://127.0.0.1:${port}`, close: () => server.close() });
+    });
+  });
+}
+
+test('organisation calls refuse a redirect instead of resending the password', async ({ launchApp }) => {
+  // Security recheck R1: a 307 resends the body (here the password) to the
+  // new origin. Every org/S3 call is made with redirect:'error'.
+  const received: string[] = [];
+  const collector = await listen((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => { received.push(body); res.end('{}'); });
+  });
+  const adapter = await listen((req, res) => {
+    req.resume();
+    res.writeHead(307, { location: collector.origin + (req.url || '/') });
+    res.end();
+  });
+  try {
+    const { page } = await launchApp();
+    const result = await page.evaluate(
+      (url) => window.stenoai.org.login(url, 'someone@example.test', 'not-a-real-password'),
+      adapter.origin,
+    );
+    expect(result).toMatchObject({ success: false });
+    expect(received).toEqual([]);
+  } finally {
+    adapter.close();
+    collector.close();
+  }
 });

@@ -63,7 +63,8 @@ class ReprocessFailurePreservationTests(unittest.TestCase):
                         mock.patch("src.summarizer.OllamaSummarizer", return_value=fake):
                     result = CliRunner().invoke(simple_recorder.reprocess, [str(note)])
                 self.assertEqual(result.exit_code, 1, result.output)
-                self.assertIn("STREAM_ERROR:No route to host", result.output)
+                # The exception class, not its text: raised outside our code (R2).
+                self.assertIn("STREAM_ERROR:ConnectionError", result.output)
                 self.assertNotIn("STREAM_COMPLETE", result.output)
                 self.assertEqual(note.read_text(), original)
                 fake.generate_title.assert_not_called()

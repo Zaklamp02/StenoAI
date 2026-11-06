@@ -1102,7 +1102,7 @@ def generate_default_template_report(summary_path, transcript, notes, language,
         _store.save_sidecar(summary_path, sidecar)
         return report
     except Exception as e:
-        logger.warning(f"Default-template report generation skipped: {e}")
+        logger.warning(f"Default-template report generation skipped: {safe_error_text(e)}")
         return None
 
 
@@ -1678,7 +1678,7 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
                     session_name = generated_title
                     print(f"TITLE:{session_name}", flush=True)
             except Exception as e:
-                logger.warning(f"Title generation failed: {e}")
+                logger.warning(f"Title generation failed: {safe_error_text(e)}")
 
         # Step 4: Save as .md
         audio_path = Path(audio_file)
@@ -3170,7 +3170,7 @@ def test():
             summarizer = OllamaSummarizer()
             print("✅ Ollama summarizer ready")
         except Exception as e:
-            print(f"❌ Ollama initialization failed: {e}")
+            print(f"❌ Ollama initialization failed: {safe_error_text(e)}")
             print(f"ERROR: {e}")
             return
         
@@ -3854,7 +3854,7 @@ def reprocess(summary_file, regenerate_title, retranscribe):
         print(f"Summary reprocessed successfully: {summary_path}")
 
     except Exception as e:
-        print(f"ERROR: Failed to reprocess summary: {e}")
+        print(f"ERROR: Failed to reprocess summary: {safe_error_text(e)}")
         sys.exit(1)
 
 
@@ -4250,7 +4250,7 @@ def regen_title(summary_file):
         print(f"Title updated: {generated_title}")
 
     except Exception as e:
-        print(f"ERROR: Failed to regenerate title: {e}")
+        print(f"ERROR: Failed to regenerate title: {safe_error_text(e)}")
         sys.exit(1)
 
 
@@ -4354,7 +4354,7 @@ def query(transcript_file, question):
         else:
             print(json.dumps({"success": False, "error": "Failed to get response from AI"}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"Query failed: {e}"}))
+        print(json.dumps({"success": False, "error": f"Query failed: {safe_error_text(e)}"}))
 
 
 @cli.command(name='query-streaming')
@@ -4441,7 +4441,7 @@ def query_streaming(transcript_file, question):
             sys.stdout.flush()
         print("CHAT_STREAM_COMPLETE", flush=True)
     except Exception as e:
-        print(f"CHAT_STREAM_ERROR:{e}", flush=True)
+        print(f"CHAT_STREAM_ERROR:{safe_error_text(e)}", flush=True)
 
 
 def _chat_corpus_char_budget(ai_provider: str, model: str) -> int:
@@ -4599,7 +4599,7 @@ def chat_global_streaming(question, folder):
             sys.stdout.flush()
         print("CHAT_STREAM_COMPLETE", flush=True)
     except Exception as e:
-        print(f"CHAT_STREAM_ERROR:{e}", flush=True)
+        print(f"CHAT_STREAM_ERROR:{safe_error_text(e)}", flush=True)
 
 
 @cli.command(name='chat-context-streaming')
@@ -4912,7 +4912,7 @@ def setup_check(as_json):
         else:
             checks.append(("❌ Ollama", "not found"))
     except Exception as e:
-        checks.append(("❌ Ollama", f"Error: {e}"))
+        checks.append(("❌ Ollama", f"Error: {safe_error_text(e)}"))
     
     # Check ffmpeg (bundled locations first, then system)
     try:
@@ -5094,8 +5094,8 @@ def list_models():
             return
 
         try:
-            import ollama as ollama_pkg
-            client = ollama_pkg.Client(host=remote_url)
+            from src.secure_http import ollama_client
+            client = ollama_client(host=remote_url)
             response = client.list()
             raw_models = getattr(response, 'models', []) or []
             models = {}
@@ -9754,14 +9754,20 @@ def set_bedrock_inference_profile(profile):
 @click.argument('url')
 def test_remote_ollama(url):
     """Test connection to a remote Ollama server"""
+    from src.endpoint_policy import InsecureEndpoint, require_secure_endpoint
     try:
-        import ollama as ollama_pkg
-        client = ollama_pkg.Client(host=url)
+        url = require_secure_endpoint(url)
+    except InsecureEndpoint as error:
+        print(json.dumps({"success": False, "error": str(error)}))
+        return
+    try:
+        from src.secure_http import ollama_client
+        client = ollama_client(host=url)
         response = client.list()
         models = [getattr(m, 'model', '') for m in getattr(response, 'models', [])]
         print(json.dumps({"success": True, "models": models}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 # Model families OpenAI's /models endpoint mixes in alongside chat models —
@@ -9834,9 +9840,9 @@ def test_cloud_api():
 
     try:
         if cloud_provider == "anthropic":
-            from anthropic import Anthropic
             from src.endpoint_policy import FIRST_PARTY_ORIGINS
-            client = Anthropic(api_key=cloud_api_key, base_url=FIRST_PARTY_ORIGINS["anthropic"])
+            from src.secure_http import anthropic_client
+            client = anthropic_client(cloud_api_key, FIRST_PARTY_ORIGINS["anthropic"])
             # Lightweight test: list models
             models_page = client.models.list(limit=10)
             model_ids = [m.id for m in models_page.data]
@@ -9882,13 +9888,13 @@ def test_cloud_api():
                     "error": f"Bedrock HTTP {he.code}",
                 }))
         else:
-            from openai import OpenAI
             from src.endpoint_policy import FIRST_PARTY_ORIGINS
+            from src.secure_http import openai_client
             base_url = (
                 cloud_api_url if cloud_provider == "custom"
                 else FIRST_PARTY_ORIGINS["openai"] + "/v1"
             )
-            client = OpenAI(api_key=cloud_api_key, base_url=base_url)
+            client = openai_client(cloud_api_key, base_url)
             models = client.models.list()
             # Newest first so current chat models lead the Settings dropdown.
             # OpenAI returns ~50+ models in arbitrary order, mixing in
@@ -9944,15 +9950,15 @@ def check_model(model_name):
             print(json.dumps({"installed": False, "model": model_name, "error": "No remote URL configured"}))
             return
         try:
-            import ollama as ollama_pkg
-            client = ollama_pkg.Client(host=remote_url)
+            from src.secure_http import ollama_client
+            client = ollama_client(host=remote_url)
             response = client.list()
             models = getattr(response, 'models', []) or []
             model_names = [getattr(m, 'model', '') for m in models]
             installed = model_name in model_names
             print(json.dumps({"installed": installed, "model": model_name}))
         except Exception as e:
-            print(json.dumps({"installed": False, "model": model_name, "error": str(e)}))
+            print(json.dumps({"installed": False, "model": model_name, "error": safe_error_text(e)}))
     else:
         from src.ollama_manager import start_ollama_server
         start_ollama_server()
@@ -9964,7 +9970,7 @@ def check_model(model_name):
             installed = model_name in model_names
             print(json.dumps({"installed": installed, "model": model_name}))
         except Exception as e:
-            print(json.dumps({"installed": False, "model": model_name, "error": str(e)}))
+            print(json.dumps({"installed": False, "model": model_name, "error": safe_error_text(e)}))
 
 
 @cli.command()
@@ -10003,7 +10009,7 @@ def pull_model(model_name):
                 print(status, flush=True)
         print(json.dumps({"success": True, "model": model_name}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 @cli.command(name='verify-model')
@@ -10020,8 +10026,8 @@ def verify_model(model_name):
     from src.ollama_manager import start_ollama_server
     start_ollama_server()
     try:
-        import ollama
-        client = ollama.Client(timeout=90)
+        from src.secure_http import ollama_client
+        client = ollama_client(timeout=90)
         client.chat(
             model=model_name,
             messages=[{"role": "user", "content": "hi"}],
@@ -10029,7 +10035,7 @@ def verify_model(model_name):
         )
         print(json.dumps({"success": True, "error": None}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 @cli.command(name='delete-model')
@@ -10056,7 +10062,7 @@ def delete_model(model_name):
         ollama.delete(model=model_name)
         print(json.dumps({"success": True, "error": None}))
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}))
+        print(json.dumps({"success": False, "error": safe_error_text(e)}))
 
 
 def pick_installed_supported_model(installed_names, preferred, supported_order, deprecated=()):
@@ -10147,7 +10153,7 @@ def resolve_setup_model():
             else Config.DEFAULT_MODEL
         )
     except Exception as e:
-        result["error"] = str(e)
+        result["error"] = safe_error_text(e)
     print(json.dumps(result))
 
 
@@ -10176,7 +10182,7 @@ def check_adapter_cmd(url: str):
         sys.exit(1)
     except Exception as e:
         print(f"FAIL {url}")
-        print(f"  error: {e}")
+        print(f"  error: {safe_error_text(e)}")
         sys.exit(1)
 
 
