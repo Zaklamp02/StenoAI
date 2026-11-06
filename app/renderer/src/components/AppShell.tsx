@@ -127,11 +127,11 @@ export function AppShell({
           route) so a toast survives MeetingDetail's post-delete navigate('/').
           Portals into #toast-host above. */}
       <UndoDeleteToast />
-      {/* Top-right pill that announces a downloaded update and lets the
-          user restart-to-install. Self-contained: subscribes to the
-          electron-updater IPC events and renders only when there's a
-          pending version. */}
-      <UpdateToast />
+      {/* Top-right pill for a downloaded update (restart-to-install) or a
+          newer release on GitHub (download). Self-contained: subscribes to
+          the update IPC events and renders only when there's something to
+          announce. */}
+      <UpdateToast recordingStatus={recordingStatus} />
     </div>
   );
 }

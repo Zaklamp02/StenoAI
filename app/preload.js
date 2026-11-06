@@ -422,6 +422,8 @@ const stenoai = {
     check: () => invoke('check-for-updates'),
     getStatus: () => invoke('get-update-status'),
     openReleasePage: (url) => invoke('open-release-page', url),
+    getReleaseNotice: () => invoke('get-release-notice'),
+    dismissReleaseNotice: (version) => invoke('dismiss-release-notice', version),
     install: () => send('install-update'),
   },
 
@@ -491,6 +493,7 @@ const stenoai = {
     updateAvailable: (cb) => subscribe('update-available', cb),
     updateDownloadProgress: (cb) => subscribe('update-download-progress', cb),
     updateDownloaded: (cb) => subscribe('update-downloaded', cb),
+    releaseAvailable: (cb) => subscribe('release-available', cb),
     updateError: (cb) => subscribe('update-error', cb),
     // Main cleared a failure the About tab may still be showing (a cycle that
     // came back clean). Without this the banner would linger on a mounted tab

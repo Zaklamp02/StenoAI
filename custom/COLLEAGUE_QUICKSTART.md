@@ -29,7 +29,7 @@ for notes, enter its API key once more in Settings → AI (keys are now tied to
 the address they were entered for). A remote Ollama server on another machine
 now needs an `https://` address.
 
-Maintainers create the DMG with `custom/release.sh <tag>`, which builds the tag
+Maintainers create the DMG with `custom/release.sh v<YYYY.M.N>`, which builds the tag
 from a clean checkout, refuses to package anything containing the builder's
 username, and writes the DMG and checksum to `.local/release/` for upload to
 the GitHub Release (never commit them).
@@ -109,10 +109,16 @@ Organisation sign-in is not part of this pilot.
 
 ## Updates and security fixes
 
-The app does not update itself (an automatic update would install the official
-app over this fork). The fork's maintainer is responsible for security updates:
-a fixed build is published as a new release with a note on what changed. Install
-it the same way as the first one; your notes and settings stay. If you build from
+The app does not install updates itself (an automatic update would install the
+official app over this fork). It does tell you about them: a few times a day it
+checks this repository's releases, and when a newer version is out it shows a
+**Version … available** pill with a Download button, or a notification if the
+window is closed (once per version), never during a recording. Close the pill
+and that version is not mentioned again.
+Settings → About → **Check for Updates** checks on demand. The fork's maintainer
+is responsible for security updates: a fixed build is published as a new release
+with a note on what changed. Install it the same way as the first one; your notes
+and settings stay. If you build from
 source, check out the new tag and run `custom/bootstrap.sh` and
 `custom/install.sh` again. After an update that changes where a cloud API key may
 be sent, Settings → AI asks for the key once more.
