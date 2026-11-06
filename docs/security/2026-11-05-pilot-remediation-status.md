@@ -78,7 +78,8 @@ Recorded after rebuilding the backend from this branch:
 
 ## Before sharing with colleagues
 
-All ten findings are fixed and released as the colleague pre-release
-`test-2026-11-06` (tag on `main` at `fe59ceb`), which
-`custom/COLLEAGUE_QUICKSTART.md` points to. Still to agree: the install path
+All ten findings and the two recheck gaps are fixed and released as the
+colleague pre-release `test-2026-11-06b` (tag on `main` at `7a58c1b`), which
+`custom/COLLEAGUE_QUICKSTART.md` points to. It replaces `test-2026-11-06`,
+which lacks the recheck fixes. Still to agree: the install path
 with IT for managed Macs (local signing, no notarisation).

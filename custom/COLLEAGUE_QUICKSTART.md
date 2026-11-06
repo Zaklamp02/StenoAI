@@ -7,9 +7,9 @@ or change the code.
 
 ## Download the app
 
-1. Download `StenoAI-test-2026-11-06-arm64.dmg` from the
-   [test-2026-11-06 release](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-06).
-   Optionally check it: `shasum -a 256 StenoAI-test-2026-11-06-arm64.dmg` must match
+1. Download `StenoAI-test-2026-11-06b-arm64.dmg` from the
+   [test-2026-11-06b release](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-06b).
+   Optionally check it: `shasum -a 256 StenoAI-test-2026-11-06b-arm64.dmg` must match
    the `.sha256` file on the release page.
 2. Open the DMG and drag StenoAI onto Applications.
 3. Open StenoAI. macOS says it cannot verify the app: click **Done**. Then go to
@@ -44,7 +44,7 @@ run `nvm install` in this repository. Confirm `node --version` and `python3.11 -
 ```sh
 git clone https://github.com/Zaklamp02/StenoAI.git
 cd StenoAI
-git checkout test-2026-11-06   # the current colleague test release
+git checkout test-2026-11-06b   # the current colleague test release
 custom/setup-signing.sh
 custom/bootstrap.sh
 custom/install.sh
