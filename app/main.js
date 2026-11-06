@@ -1942,7 +1942,7 @@ function updateTrayMenu() {
     {
       label: 'Report a Bug',
       click: () => {
-        shell.openExternal('https://discord.gg/DZ6vcQnxxu');
+        shell.openExternal('https://github.com/Zaklamp02/StenoAI/issues');
       }
     },
     { type: 'separator' },

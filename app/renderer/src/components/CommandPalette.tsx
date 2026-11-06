@@ -90,7 +90,7 @@ const SETTINGS_INDEX: SettingsEntry[] = [
   { id: 'advanced-analytics', tab: 'advanced', title: 'Anonymous usage analytics', sub: 'Opt in or out' },
   { id: 'developer', tab: 'developer', title: 'Developer', sub: 'Diagnostics and logs' },
   { id: 'about', tab: 'about', title: 'About', sub: 'Version, release notes, check for updates' },
-  { id: 'about-discord', tab: 'about', title: 'Discord', sub: 'Join the community, ask questions, share feedback' },
+  { id: 'about-report', tab: 'about', title: 'Report a problem', sub: 'Open an issue on GitHub' },
 ];
 
 // Only the settings that actually render on this platform. macOS-only rows

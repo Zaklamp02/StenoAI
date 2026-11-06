@@ -133,21 +133,9 @@ stenoai/
 - Create a new issue for bugs or feature requests
 - Join discussions in the repository
 
-## Contributor License Agreement
+## License
 
-By contributing to Steno, you agree to our [Contributor License Agreement (CLA)](CLA.md).
-
-**What this means:**
-- You retain ownership of your contributions
-- You grant us broad, irrevocable rights to use, modify, and relicense your contributions
-- This allows us to offer commercial licenses while keeping the project free for personal use
-
-**How it works:**
-- When you submit your first pull request, CLA Assistant will prompt you to sign
-- Simply comment "I have read the CLA Document and I hereby sign the CLA" on the PR
-- This is a one-time process - future contributions are automatically covered
-
-The project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Contributions are accepted under the same [MIT License](LICENSE) as the rest of the project.
 
 ## Recognition
 
