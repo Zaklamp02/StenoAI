@@ -133,7 +133,7 @@ test('index titles match the rendered setting labels', async ({ launchApp }) => 
 
   const cases: Array<{ query: string; label: string }> = [
     { query: 'ai provider', label: 'AI provider' },
-    { query: 'discord', label: 'Discord' },
+    { query: 'report a problem', label: 'Report a problem' },
     { query: 'launch on login', label: 'Launch on login' },
   ];
 

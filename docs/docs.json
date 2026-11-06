@@ -94,7 +94,7 @@
         },
         {
           "anchor": "GitHub",
-          "href": "https://github.com/stenolabs/stenoai",
+          "href": "https://github.com/Zaklamp02/StenoAI",
           "icon": "github"
         },
         {
@@ -120,7 +120,7 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/stenolabs/stenoai"
+        "href": "https://github.com/Zaklamp02/StenoAI"
       }
     ],
     "primary": {
@@ -131,7 +131,7 @@
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/stenolabs/stenoai",
+      "github": "https://github.com/Zaklamp02/StenoAI",
       "discord": "https://discord.gg/DZ6vcQnxxu",
       "x": "https://x.com/ruzin_saleem"
     }

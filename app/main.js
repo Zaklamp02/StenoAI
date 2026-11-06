@@ -1942,7 +1942,7 @@ function updateTrayMenu() {
     {
       label: 'Report a Bug',
       click: () => {
-        shell.openExternal('https://discord.gg/DZ6vcQnxxu');
+        shell.openExternal('https://github.com/Zaklamp02/StenoAI/issues');
       }
     },
     { type: 'separator' },
@@ -2213,8 +2213,8 @@ if (!gotSingleInstanceLock) {
     const helpSubmenu = {
       role: 'help',
       submenu: [
-        { label: 'Learn More', click: () => shell.openExternal('https://github.com/stenolabs/stenoai') },
-        { label: 'Report a Bug', click: () => shell.openExternal('https://discord.gg/DZ6vcQnxxu') }
+        { label: 'Learn More', click: () => shell.openExternal('https://github.com/Zaklamp02/StenoAI') },
+        { label: 'Report a Bug', click: () => shell.openExternal('https://github.com/Zaklamp02/StenoAI/issues') }
       ]
     };
     const appMenu = Menu.buildFromTemplate(

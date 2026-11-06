@@ -25,8 +25,12 @@ function ExternalLinkAction({ label, onClick }: { label: string; onClick: () => 
   );
 }
 
-const DISCORD_URL = 'https://discord.gg/DZ6vcQnxxu';
 const GITHUB_URL = 'https://github.com/Zaklamp02/StenoAI';
+const REPORT_PROBLEM_COPY = {
+  label: 'Report a problem',
+  description: 'Open an issue on GitHub',
+  action: 'Open',
+};
 const TERMS_URL = 'https://stenoai.co/terms.html';
 const PRIVACY_URL = 'https://stenoai.co/privacy.html';
 
@@ -320,10 +324,10 @@ export function AboutTab() {
         </SettingRow>
       )}
 
-      <SettingRow label="Discord" description="Join the community, ask questions, share feedback">
+      <SettingRow label={REPORT_PROBLEM_COPY.label} description={REPORT_PROBLEM_COPY.description}>
         <ExternalLinkAction
-          label="Join"
-          onClick={() => void ipc().shell.openExternal(DISCORD_URL)}
+          label={REPORT_PROBLEM_COPY.action}
+          onClick={() => void ipc().shell.openExternal(`${GITHUB_URL}/issues`)}
         />
       </SettingRow>
 

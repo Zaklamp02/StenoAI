@@ -1,5 +1,5 @@
-export const STENO_SKILL_URL = 'https://github.com/stenolabs/stenoai/tree/main/skills/steno';
-export const STENO_AGENTS_DOCS_URL = 'https://github.com/stenolabs/stenoai/blob/main/docs/features/agents.mdx';
+export const STENO_SKILL_URL = 'https://github.com/Zaklamp02/StenoAI/tree/main/skills/steno';
+export const STENO_AGENTS_DOCS_URL = 'https://github.com/Zaklamp02/StenoAI/blob/main/docs/features/agents.mdx';
 
 export const AGENTS_COPY = {
   nav: 'Agents',
