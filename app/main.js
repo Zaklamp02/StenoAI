@@ -87,6 +87,7 @@ const { registerObsidianSync } = require('./obsidian-managed-sync');
 const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
 const { isSafeToAutoInstall } = require('./update-idle-gate');
+const releaseCheck = require('./release-check');
 const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError } = require('./update-error-copy');
 const { isOSUpdateEligible, MIN_MACOS_FOR_AUTOUPDATE } = require('./update-os-gate');
 const processingLog = require('./processing-log');
@@ -2310,6 +2311,7 @@ if (!gotSingleInstanceLock) {
     createWindow();
     if (!IS_E2E && loadShowMenuBarIconEnabled()) createTray();
     setupAutoUpdater();
+    scheduleReleaseChecks();
     setupAutoMeetingDetector();
     setupDevNotificationTriggers();
     // Pre-meeting heads-up scheduler (calendar-time based). Skipped under E2E —
@@ -11126,11 +11128,11 @@ async function findOllamaExecutable() {
   return null;
 }
 
-// Where the manual "Check for updates" reads the latest release from. Kept as a
-// named constant so the repo path has a single source of truth (and is the one
-// line to change if the repo is renamed/transferred — though the redirect
-// following below means an old build keeps working through GitHub's 301 too).
-const UPDATE_CHECK_URL = 'https://api.github.com/repos/stenolabs/stenoai/releases/latest';
+// Where "Check for updates" and the background release check read releases
+// from: release-check.RELEASES_URL, this repository's own releases. The
+// redirect following below keeps an old build working through GitHub's 301 if
+// the repo is renamed or transferred.
+const UPDATE_CHECK_URL = releaseCheck.RELEASES_URL;
 
 // Update checking functionality. Follows HTTP redirects (301/302/307/308):
 // GitHub's REST API returns a 301 to the new owner/repo path when a repo is
@@ -11190,28 +11192,13 @@ async function checkForUpdates() {
 
         res.on('end', () => {
           try {
-            const release = JSON.parse(data);
-            const latestVersion = release.tag_name.replace(/^v/, ''); // Remove 'v' prefix if present
-
-            // Get current version from package.json
-            const packagePath = path.join(__dirname, 'package.json');
-            const packageContent = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-            const currentVersion = packageContent.version;
-
-            console.log(`Current version: ${currentVersion}, Latest version: ${latestVersion}`);
-
-            // Simple version comparison (works for semantic versioning)
-            const isUpdateAvailable = compareVersions(currentVersion, latestVersion) < 0;
-
-            resolve({
-              success: true,
-              updateAvailable: isUpdateAvailable,
-              currentVersion: currentVersion,
-              latestVersion: latestVersion,
-              releaseUrl: release.html_url,
-              releaseName: release.name || `Version ${latestVersion}`,
-              downloadUrl: getDownloadUrl(release.assets)
-            });
+            const summary = releaseCheck.summarizeReleases(
+              JSON.parse(data),
+              app.getVersion(),
+              process.arch
+            );
+            console.log(`Current version: ${summary.currentVersion}, Latest version: ${summary.latestVersion}`);
+            resolve({ success: true, ...summary });
           } catch (error) {
             console.error('Error parsing GitHub API response:', error);
             resolve({ success: false, error: 'Failed to parse update data' });
@@ -11236,45 +11223,6 @@ async function checkForUpdates() {
   }
 
   return fetchLatest(UPDATE_CHECK_URL, MAX_REDIRECTS);
-}
-
-function compareVersions(current, latest) {
-  const currentParts = current.split('.').map(Number);
-  const latestParts = latest.split('.').map(Number);
-
-  for (let i = 0; i < Math.max(currentParts.length, latestParts.length); i++) {
-    const currentPart = currentParts[i] || 0;
-    const latestPart = latestParts[i] || 0;
-
-    if (currentPart < latestPart) return -1;
-    if (currentPart > latestPart) return 1;
-  }
-
-  return 0;
-}
-
-function getDownloadUrl(assets) {
-  // Find the appropriate download URL based on platform/architecture
-  const platform = process.platform;
-  const arch = process.arch;
-
-  if (platform === 'darwin') {
-    // Look for macOS DMG files
-    const armAsset = assets.find(asset =>
-      asset.name.includes('arm64') && asset.name.includes('dmg')
-    );
-    const intelAsset = assets.find(asset =>
-      asset.name.includes('x64') && asset.name.includes('dmg')
-    );
-
-    // Prefer ARM64 for Apple Silicon, fallback to Intel
-    if (arch === 'arm64' && armAsset) return armAsset.browser_download_url;
-    if (intelAsset) return intelAsset.browser_download_url;
-    if (armAsset) return armAsset.browser_download_url;
-  }
-
-  // Fallback to first asset or releases page
-  return assets.length > 0 ? assets[0].browser_download_url : null;
 }
 
 ipcMain.handle('check-for-updates', async () => {
@@ -11307,6 +11255,71 @@ ipcMain.handle('check-for-updates', async () => {
   // won't auto-install on an under-floor Mac, rather than offering a broken
   // Restart. (Display-only; the safety is the gated kick above.)
   return { ...result, osUpdateEligible: osEligible };
+});
+
+// ── New-release notice ──────────────────────────────────────────────────────
+// Updates are installed by downloading the DMG from GitHub (the custom build
+// has no in-app installer), so a background check tells the user when a newer
+// release is out: a pill in the window, or a notification while the window is
+// hidden. Each version is announced once; release-notice.json remembers which
+// were dismissed or notified. Never while recording or processing.
+let releaseNotice = null;
+
+function isBusyForReleaseNotice() {
+  return currentRecordingProcess !== null || systemAudioRecordingActive || isProcessing;
+}
+
+async function runReleaseCheck() {
+  const result = await checkForUpdates();
+  if (!result.success) {
+    sendDebugLog(`Release check failed: ${result.error}`);
+    return;
+  }
+  const dir = getUserDataDir();
+  const state = releaseCheck.readNoticeState(dir);
+  releaseNotice = releaseCheck.releaseNoticeFor(result, state);
+  if (!releaseNotice) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('release-available', releaseNotice);
+  }
+  const windowVisible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
+  if (windowVisible || isBusyForReleaseNotice() || state.notifiedVersion === releaseNotice.version) return;
+  if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
+  const notice = releaseNotice;
+  const notif = new Notification({
+    title: `StenoAI ${notice.version} is available`,
+    body: 'Download it from GitHub and drag it to Applications.',
+    actions: [{ type: 'button', text: 'Download' }],
+  });
+  const download = () => void shell.openExternal(notice.downloadUrl || notice.releaseUrl);
+  notif.on('action', download);
+  notif.on('click', download);
+  trackNotificationLifecycle(notif, 'release_available');
+  notif.show();
+  releaseCheck.writeNoticeState(dir, { ...state, notifiedVersion: notice.version });
+}
+
+function scheduleReleaseChecks() {
+  if (IS_E2E || !app.isPackaged) return;
+  const run = () => {
+    runReleaseCheck().catch((error) => sendDebugLog(`Release check failed: ${error.message}`));
+  };
+  setTimeout(run, releaseCheck.FIRST_CHECK_DELAY_MS);
+  setInterval(run, releaseCheck.CHECK_INTERVAL_MS);
+}
+
+ipcMain.handle('get-release-notice', async () => ({ success: true, notice: releaseNotice }));
+
+ipcMain.handle('dismiss-release-notice', async (_event, version) => {
+  if (!releaseCheck.parseVersion(version)) return { success: false, error: 'invalid version' };
+  try {
+    const dir = getUserDataDir();
+    releaseCheck.writeNoticeState(dir, { ...releaseCheck.readNoticeState(dir), dismissedVersion: version });
+    if (releaseNotice?.version === version) releaseNotice = null;
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });
 
 // Lets a freshly-(re)mounted About tab recover "an update already

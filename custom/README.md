@@ -18,6 +18,7 @@ are shared with the official app, so switching back and forth is safe.
 | Settings: model suggestions + hint for cloud transcription | `app/renderer/src/routes/settings/AiTab.tsx`, `en.json` | candidate PR |
 | Speakers panel appears without leaving the note after processing | `app/renderer/src/hooks/useSpeakerSuggestions.ts`, `SpeakerReviewPanel.tsx`, `useRecording.ts` | candidate PR |
 | Auto-update off (it would install the stock app over this one) | `app/main.js` (`IS_CUSTOM_BUILD`) | custom only |
+| Update check reads this repository's releases; a background check (30 s after launch, then every 6 h) announces a newer version once with a Download pill, or a notification while the window is hidden, never during recording or processing | `app/release-check.js`, `app/main.js`, `UpdateToast.tsx`, `update-notice.t1` | custom only |
 | Calendar invitees as speaker-name shortcuts; invited known people first; confirmed invitee emails on People, stored locally by person ID | `SpeakerReviewPanel.tsx`, `person-contacts.js`, `speaker-ipc.js`, `PeopleTab.tsx` | custom only |
 | Stop while processing reports "Processing stopped", not a failure | `app/main.js`, `noteGenerationError.ts`, `MeetingDetail.tsx` | candidate PR |
 | Per-meeting language (recording screen, Re-transcribe dialog) via `STENOAI_LANGUAGE_OVERRIDE`; Settings stays the default | `app/note-language.js`, `src/config.py`, `MeetingLanguageSelect.tsx` | candidate PR |
@@ -159,6 +160,24 @@ entitlements, disable notarization and network timestamps, and fail if signing
 is unavailable. The package step verifies the signature, runtime flag and a
 certificate-based designated requirement (rather than a build-specific hash).
 `STENOAI_SIGNING_IDENTITY` can select another certificate by name.
+
+## Publishing a release
+
+Releases are versioned `YYYY.M.N`: year, month, and the number of the release
+within that month (`2026.11.1`, `2026.11.2`, then `2026.12.1`). Installed apps
+compare their own version against release tags, so the two must match:
+
+```bash
+# set "version": "2026.11.1" in app/package.json (and app/package-lock.json), commit, merge
+git tag -a v2026.11.1 -m "StenoAI 2026.11.1" && git push zaklamp02 v2026.11.1
+custom/release.sh v2026.11.1   # refuses a tag whose package.json version differs
+```
+
+Upload the DMG and `.sha256` to a GitHub Release for that tag. Pre-releases are
+fine: the app reads the release list, not GitHub's "latest". Tags that are not
+versions (the older `test-…` ones) are ignored by the update check. If the
+release has What's new highlights, update `app/renderer/src/lib/releaseHighlights.ts`
+in the same commit; otherwise empty that list so no panel is shown.
 
 ## New official release
 

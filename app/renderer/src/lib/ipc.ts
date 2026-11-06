@@ -1093,6 +1093,13 @@ export interface UpdateProgressEvent {
 export interface UpdateDownloadedEvent {
   version: string;
 }
+/** A newer release on GitHub that the user has not dismissed. Updates are
+ *  installed by downloading the DMG, so this only points at it. */
+export interface ReleaseNotice {
+  version: string;
+  releaseUrl: string;
+  downloadUrl: string | null;
+}
 export interface UpdateErrorEvent {
   message: string;
 }
@@ -1584,6 +1591,8 @@ export interface StenoaiBridge {
     check: RequestFn<[], CheckForUpdatesResponse>;
     getStatus: RequestFn<[], GetUpdateStatusResponse>;
     openReleasePage: RequestFn<[url: string], Result<Record<string, never>>>;
+    getReleaseNotice: RequestFn<[], Result<{ notice: ReleaseNotice | null }>>;
+    dismissReleaseNotice: RequestFn<[version: string], Result<Record<string, never>>>;
     install: SendFn<[]>;
   };
 
@@ -1623,6 +1632,7 @@ export interface StenoaiBridge {
     updateAvailable: Subscribe<UpdateAvailableEvent>;
     updateDownloadProgress: Subscribe<UpdateProgressEvent>;
     updateDownloaded: Subscribe<UpdateDownloadedEvent>;
+    releaseAvailable: Subscribe<ReleaseNotice>;
     updateError: Subscribe<UpdateErrorEvent>;
     updateErrorCleared: Subscribe<void>;
     googleAuthChanged: Subscribe<{ connected: boolean }>;

@@ -1,18 +1,29 @@
 import * as React from 'react';
 import { ArrowDownToLine, X } from 'lucide-react';
-import { ipc } from '@/lib/ipc';
+import { ipc, type ReleaseNotice } from '@/lib/ipc';
+import type { RecordingStatus } from '@/hooks/useRecording';
+
+const RELEASE_NOTICE_COPY = {
+  available: (version: string) => `Version ${version} available`,
+  download: 'Download',
+  dismiss: 'Dismiss new version notice',
+};
 
 /**
- * Top-right toast that appears when electron-updater has finished
- * downloading a new release in the background. Click "Restart" to call
- * the main-side `install-update` IPC, which triggers `quitAndInstall` and
- * relaunches into the new version. Dismiss with × to hide for the rest
- * of the session — the next launch will surface it again if a newer
- * version is still pending.
+ * Top-right pill for updates, in two forms:
+ *
+ * - electron-updater finished downloading a release in the background:
+ *   "Restart" calls the main-side `install-update` IPC (`quitAndInstall`).
+ *   Dismiss with × hides it for the rest of the session.
+ * - The background release check found a newer release on GitHub (the custom
+ *   build has no in-app installer): "Download" opens the DMG in the browser.
+ *   Dismissing remembers that version, so each release is announced once.
+ *   Hidden while recording or processing.
  */
-export function UpdateToast() {
+export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingStatus }) {
   const [pendingVersion, setPendingVersion] = React.useState<string | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
+  const [release, setRelease] = React.useState<ReleaseNotice | null>(null);
 
   React.useEffect(() => {
     return ipc().on.updateDownloaded((evt) => {
@@ -23,8 +34,58 @@ export function UpdateToast() {
     });
   }, []);
 
-  if (!pendingVersion || dismissed) return null;
+  React.useEffect(() => {
+    let cancelled = false;
+    const off = ipc().on.releaseAvailable((notice) => setRelease(notice));
+    // The launch check can finish before this mounts; the event alone would miss it.
+    void ipc()
+      .updates.getReleaseNotice()
+      .then((result) => {
+        if (!cancelled && result.success && result.notice) {
+          setRelease((current) => current ?? result.notice);
+        }
+      });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, []);
 
+  if (pendingVersion && !dismissed) {
+    return (
+      <ToastPill>
+        <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
+        <span>
+          Update <span className="tabular-nums">v{pendingVersion}</span> ready
+        </span>
+        <PrimaryButton onClick={() => ipc().updates.install()}>Restart</PrimaryButton>
+        <DismissButton label="Dismiss update notification" onClick={() => setDismissed(true)} />
+      </ToastPill>
+    );
+  }
+
+  if (!release || recordingStatus !== 'idle') return null;
+
+  const dismissRelease = () => {
+    void ipc().updates.dismissReleaseNotice(release.version);
+    setRelease(null);
+  };
+
+  return (
+    <ToastPill>
+      <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
+      <span className="tabular-nums">{RELEASE_NOTICE_COPY.available(release.version)}</span>
+      <PrimaryButton
+        onClick={() => void ipc().updates.openReleasePage(release.downloadUrl ?? release.releaseUrl)}
+      >
+        {RELEASE_NOTICE_COPY.download}
+      </PrimaryButton>
+      <DismissButton label={RELEASE_NOTICE_COPY.dismiss} onClick={dismissRelease} />
+    </ToastPill>
+  );
+}
+
+function ToastPill({ children }: { children: React.ReactNode }) {
   return (
     <div
       className="pointer-events-auto fixed right-4 top-4 z-50 flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px]"
@@ -44,30 +105,37 @@ export function UpdateToast() {
       role="status"
       aria-live="polite"
     >
-      <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
-      <span>
-        Update <span className="tabular-nums">v{pendingVersion}</span> ready
-      </span>
-      <button
-        type="button"
-        onClick={() => ipc().updates.install()}
-        className="ml-1 cursor-pointer rounded-full border-0 px-2.5 py-1 text-[12px] font-medium"
-        style={{
-          background: 'var(--fg-1)',
-          color: 'var(--fg-inverse)',
-        }}
-      >
-        Restart
-      </button>
-      <button
-        type="button"
-        onClick={() => setDismissed(true)}
-        aria-label="Dismiss update notification"
-        className="ml-0.5 inline-flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-1"
-        style={{ color: 'var(--fg-2)' }}
-      >
-        <X size={12} />
-      </button>
+      {children}
     </div>
+  );
+}
+
+function PrimaryButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="ml-1 cursor-pointer rounded-full border-0 px-2.5 py-1 text-[12px] font-medium"
+      style={{
+        background: 'var(--fg-1)',
+        color: 'var(--fg-inverse)',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DismissButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="ml-0.5 inline-flex cursor-pointer items-center justify-center rounded-full border-0 bg-transparent p-1"
+      style={{ color: 'var(--fg-2)' }}
+    >
+      <X size={12} />
+    </button>
   );
 }

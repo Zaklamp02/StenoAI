@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build a tester DMG from a clean checkout of a release tag.
 #
-#   custom/release.sh test-2026-10-17
+#   custom/release.sh v2026.11.1
 #
 # The DMG is signed with the local signing identity but NOT notarized (no Apple
 # Developer ID yet), so testers confirm it once in System Settings → Privacy &
@@ -12,6 +12,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAG="${1:?usage: custom/release.sh <tag>}"
 git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null \
   || { echo "Unknown tag: $TAG" >&2; exit 1; }
+# Installed apps compare their version against release tags (app/release-check.js),
+# so a release is vYYYY.M.N and app/package.json at that tag carries YYYY.M.N.
+case "$TAG" in
+  v[0-9]*.[0-9]*.[0-9]*)
+    TAGGED_VERSION="$(git -C "$ROOT" show "$TAG:app/package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
+    [ "$TAGGED_VERSION" = "${TAG#v}" ] \
+      || { echo "app/package.json at $TAG says $TAGGED_VERSION; bump it to ${TAG#v} and re-tag." >&2; exit 1; } ;;
+  *) echo "Note: $TAG is not a vYYYY.M.N tag, so installed apps will not offer it as an update." >&2 ;;
+esac
 IDENTITY="${STENOAI_SIGNING_IDENTITY:-StenoAI Local Signing}"
 PYTHON311="${PYTHON311:-/opt/homebrew/bin/python3.11}"
 # A Python installed under the home folder (Anaconda, pyenv) writes that path,

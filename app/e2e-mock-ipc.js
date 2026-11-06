@@ -1517,6 +1517,15 @@ function install({ ipcMain }) {
       ? "Steno couldn't reach the update server. Check your connection — it will try again later."
       : null;
 
+  let seededReleaseNotice =
+    process.env.STENOAI_E2E_SEED_RELEASE_NOTICE === '1'
+      ? {
+          version: '2099.1.1',
+          releaseUrl: 'https://github.com/Zaklamp02/StenoAI/releases/tag/v2099.1.1',
+          downloadUrl: 'https://github.com/Zaklamp02/StenoAI/releases/download/v2099.1.1/StenoAI-v2099.1.1-arm64.dmg',
+        }
+      : null;
+
   // Only the FIRST get-update-status is delayed, so the About tab's mount-time
   // request is still in flight when the check that settles the error completes,
   // and its stale reply lands last. Delaying every call would let the check's
@@ -1528,6 +1537,19 @@ function install({ ipcMain }) {
     // Read-only display poll for the About tab's "Check for Updates" button
     // (settings-about.t1). Fully hermetic — no real GitHub call under mock
     // IPC, so this is the only source of truth for that flow in T1.
+    // The background release check's notice (UpdateToast). Seeded with
+    // STENOAI_E2E_SEED_RELEASE_NOTICE=1; dismissing clears it like main.js
+    // does, so a reload asserts it stays dismissed (update-notice.t1).
+    'get-release-notice': () => ({ success: true, notice: seededReleaseNotice }),
+    'dismiss-release-notice': (_event, version) => {
+      global.__dismissedReleaseVersions = [...(global.__dismissedReleaseVersions || []), version];
+      if (seededReleaseNotice?.version === version) seededReleaseNotice = null;
+      return { success: true };
+    },
+    'open-release-page': (_event, url) => {
+      global.__openedReleasePages = [...(global.__openedReleasePages || []), url];
+      return { success: true };
+    },
     'check-for-updates': () => {
       // STENOAI_E2E_SEED_UPDATE_BLOCKED_OS=1 simulates an under-floor Mac: an
       // update exists on GitHub but this OS is below the 14.4 launch floor, so
@@ -1539,10 +1561,24 @@ function install({ ipcMain }) {
           updateAvailable: true,
           currentVersion: '0.0.0-e2e',
           latestVersion: '9.9.9',
-          releaseUrl: 'https://github.com/stenolabs/stenoai/releases/latest',
+          releaseUrl: 'https://github.com/Zaklamp02/StenoAI/releases',
           releaseName: 'Version 9.9.9',
           downloadUrl: null,
           osUpdateEligible: false,
+        };
+      }
+      // STENOAI_E2E_SEED_UPDATE_AVAILABLE=1: a newer release on this repo, so
+      // the About tab offers "View release" (update-notice.t1).
+      if (process.env.STENOAI_E2E_SEED_UPDATE_AVAILABLE === '1') {
+        return {
+          success: true,
+          updateAvailable: true,
+          currentVersion: '0.0.0-e2e',
+          latestVersion: '2099.1.1',
+          releaseUrl: 'https://github.com/Zaklamp02/StenoAI/releases/tag/v2099.1.1',
+          releaseName: 'Version 2099.1.1',
+          downloadUrl: null,
+          osUpdateEligible: true,
         };
       }
       // Up to date, and that settles a previously failed check — main.js
