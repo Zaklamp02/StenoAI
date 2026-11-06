@@ -16,6 +16,9 @@ test('real org sign-in persists session + config into the temp dir, real dir unt
   launchApp,
   userDataDir,
 }) => {
+  // Launch, a real sign-in and the backend provider switch each wait on cold
+  // subprocesses; together they can exceed the default 30 s on a CI runner.
+  test.slow();
   const realOrgSession = path.join(realUserDataDir(), '.org-session');
   const realConfig = path.join(realUserDataDir(), 'config.json');
   const realOrgSessionBefore = fileSig(realOrgSession);
@@ -70,8 +73,12 @@ test('real org sign-in persists session + config into the temp dir, real dir unt
     // which wrote config.json into the same temp dir. Asserting the provider is
     // 'adapter' ties the write to the keystone path — it's the backend honoring
     // STENOAI_USER_DATA_DIR that produced this file, not a coincidental temp.
+    // The switch is fire-and-forget after sign-in and runs two backend
+    // subprocesses (get-ai-provider, then set-ai-provider); on a cold CI runner
+    // that regularly took longer than 5 s, so it gets the same budget as the
+    // sign-in itself. config.json already exists (the fixture seeds it), so
+    // only the provider value proves the write.
     const tempConfig = path.join(userDataDir, 'config.json');
-    await expect.poll(() => existsSync(tempConfig), { timeout: 15_000 }).toBe(true);
     await expect
       .poll(() => {
         try {
@@ -79,7 +86,7 @@ test('real org sign-in persists session + config into the temp dir, real dir unt
         } catch {
           return undefined;
         }
-      }, { timeout: 5_000 })
+      }, { timeout: 30_000 })
       .toBe('adapter');
 
     // The real user-data dir's keystone files are byte-for-byte untouched.
