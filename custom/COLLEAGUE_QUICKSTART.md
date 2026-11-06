@@ -7,9 +7,9 @@ or change the code.
 
 ## Download the app
 
-1. Download `StenoAI-test-2026-11-03-arm64.dmg` from the
-   [test-2026-11-03 release](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-03).
-   Optionally check it: `shasum -a 256 StenoAI-test-2026-11-03-arm64.dmg` must match
+1. Download `StenoAI-test-2026-11-06-arm64.dmg` from the
+   [test-2026-11-06 release](https://github.com/Zaklamp02/StenoAI/releases/tag/test-2026-11-06).
+   Optionally check it: `shasum -a 256 StenoAI-test-2026-11-06-arm64.dmg` must match
    the `.sha256` file on the release page.
 2. Open the DMG and drag StenoAI onto Applications.
 3. Open StenoAI. macOS says it cannot verify the app: click **Done**. Then go to
@@ -22,6 +22,12 @@ notarized by Apple (no Apple Developer ID yet). Every release uses the same
 signature, so macOS keeps your permissions across updates. Managed work Macs may
 block apps that are not notarized; build from source or ask IT in that case.
 Then continue with **First run** below.
+
+Upgrading from an earlier test build: quit StenoAI and replace the app; your
+notes, settings and permissions stay. If you use a custom OpenAI-compatible URL
+for notes, enter its API key once more in Settings → AI (keys are now tied to
+the address they were entered for). A remote Ollama server on another machine
+now needs an `https://` address.
 
 Maintainers create the DMG with `custom/release.sh <tag>`, which builds the tag
 from a clean checkout, refuses to package anything containing the builder's
@@ -38,7 +44,7 @@ run `nvm install` in this repository. Confirm `node --version` and `python3.11 -
 ```sh
 git clone https://github.com/Zaklamp02/StenoAI.git
 cd StenoAI
-git checkout test-2026-11-03   # the current colleague test release
+git checkout test-2026-11-06   # the current colleague test release
 custom/setup-signing.sh
 custom/bootstrap.sh
 custom/install.sh
