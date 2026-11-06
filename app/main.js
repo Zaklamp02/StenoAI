@@ -13921,7 +13921,10 @@ ipcMain.handle('org-get-policy', async () => {
 async function seedOrgAutoBackupDefault() {
   try {
     const policy = await fetchOrgPolicy();
-    const def = policy?.auto_share_default !== false; // default true
+    // Only an explicit `true` turns automatic org-wide sharing on. A policy
+    // that leaves the field out (an older or misconfigured adapter) must not
+    // silently start sharing every note and transcript with the organisation.
+    const def = policy?.auto_share_default === true;
     await runPythonScript('simple_recorder.py', ['seed-org-auto-backup', def ? 'True' : 'False']);
   } catch (e) {
     sendDebugLog('seed-org-auto-backup-default: ' + (e?.message || e));

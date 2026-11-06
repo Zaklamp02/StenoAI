@@ -269,5 +269,7 @@
   "debugReport.copied": "Copied",
   "debugReport.close": "Close",
   "privacy.optionalAnalytics": "Anonymous usage analytics is off by default. If enabled, it sends crash and usage signals to StenoLabs via PostHog, excluding meeting content. Launch on login is a separate setting. You can change either preference anytime in Settings.",
-  "aiTab.cloudKeyReentry": "Your saved key was entered for a different provider or address, so it is not sent here. Enter the key for this one."
+  "aiTab.cloudKeyReentry": "Your saved key was entered for a different provider or address, so it is not sent here. Enter the key for this one.",
+  "orgTab.autoShareLabel": "Share new notes with your organisation",
+  "orgTab.autoShareDescription": "When a note is ready, it is uploaded to your organisation, including the full transcript, and everyone in the organisation can open it under Shared notes. You can unshare a note there. Off unless your organisation turns it on by default."
 }
