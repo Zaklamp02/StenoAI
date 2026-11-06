@@ -13357,7 +13357,10 @@ async function adapterFetch(pathname, opts = {}) {
   // credentials:'omit' — the adapter authenticates via the Bearer header above,
   // not session cookies; net.fetch defaults to 'include', so be explicit.
   // Re-checked at use: a session saved by an older build may hold an http URL.
-  const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + pathname, { ...opts, headers, credentials: 'omit' });
+  // redirect:'error' — a redirect would resend the token and the body (note
+  // text) to wherever it points (security recheck R1); the adapter answers
+  // directly, so any redirect is refused. Same on every org/S3 call below.
+  const res = await net.fetch(requireSecureEndpoint(session.adapterUrl) + pathname, { ...opts, headers, credentials: 'omit', redirect: 'error' });
   const text = await res.text();
   let body;
   try {
@@ -13449,6 +13452,7 @@ ipcMain.handle('org-login', async (_event, payload) => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email, password }),
       credentials: 'omit',
+      redirect: 'error',
     });
     const text = await res.text();
     let body;
@@ -13600,6 +13604,7 @@ ipcMain.handle('org-sso-google-start', async (_event, payload) => {
         state,
       }),
       credentials: 'omit',
+      redirect: 'error',
     });
     const startBody = await startRes.json().catch(() => ({}));
     if (!startRes.ok) {
@@ -13626,6 +13631,7 @@ ipcMain.handle('org-sso-google-start', async (_event, payload) => {
         redirect_uri: redirectUri,
       }),
       credentials: 'omit',
+      redirect: 'error',
     });
     const cbBody = await cbRes.json().catch(() => ({}));
     if (!cbRes.ok) {
@@ -13789,6 +13795,7 @@ async function uploadMeetingToOrg({ title, body, transcript = '', visibility = '
     // Presigned URL carries its own auth in the query string — don't let the
     // session attach cookies/credentials to the S3 request.
     credentials: 'omit',
+    redirect: 'error',
   });
   if (!putRes.ok) {
     const detail = await putRes.text().catch(() => '');
@@ -13818,6 +13825,7 @@ async function uploadMeetingToOrg({ title, body, transcript = '', visibility = '
         headers: { 'content-type': 'text/plain' },
         body: transcriptText,
         credentials: 'omit',
+        redirect: 'error',
       });
       if (tPut.ok) {
         transcriptKey = tPresign.s3_key;
@@ -14086,6 +14094,7 @@ ipcMain.on('org-chat-stream', async (event, streamId, payload) => {
       body: JSON.stringify(payload || {}),
       signal: controller.signal,
       credentials: 'omit',
+      redirect: 'error',
     });
     if (!res.ok) {
       let detail = '';
