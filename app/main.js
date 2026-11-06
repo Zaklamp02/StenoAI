@@ -11159,7 +11159,7 @@ async function checkForUpdates() {
         hostname: url.hostname,
         path: url.pathname + url.search,
         method: 'GET',
-        headers: { 'User-Agent': 'Steno-Updater' },
+        headers: { 'User-Agent': 'Steno-Updater', Accept: 'application/vnd.github+json' },
       };
 
       const req = https.request(options, (res) => {
@@ -11191,6 +11191,17 @@ async function checkForUpdates() {
         });
 
         res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            const limited = (res.statusCode === 403 || res.statusCode === 429)
+              && res.headers['x-ratelimit-remaining'] === '0';
+            resolve({
+              success: false,
+              error: limited
+                ? 'GitHub rate limit reached. Try again later.'
+                : `GitHub returned ${res.statusCode}`,
+            });
+            return;
+          }
           try {
             const summary = releaseCheck.summarizeReleases(
               JSON.parse(data),
@@ -11264,6 +11275,7 @@ ipcMain.handle('check-for-updates', async () => {
 // hidden. Each version is announced once; release-notice.json remembers which
 // were dismissed or notified. Never while recording or processing.
 let releaseNotice = null;
+let releaseNotifiedVersion = null;
 
 function isBusyForReleaseNotice() {
   return currentRecordingProcess !== null || systemAudioRecordingActive || isProcessing;
@@ -11276,16 +11288,19 @@ async function runReleaseCheck() {
     return;
   }
   const dir = getUserDataDir();
-  const state = releaseCheck.readNoticeState(dir);
-  releaseNotice = releaseCheck.releaseNoticeFor(result, state);
+  releaseNotice = releaseCheck.releaseNoticeFor(result, releaseCheck.readNoticeState(dir));
   if (!releaseNotice) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('release-available', releaseNotice);
   }
-  const windowVisible = mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible();
-  if (windowVisible || isBusyForReleaseNotice() || state.notifiedVersion === releaseNotice.version) return;
-  if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
+  const windowShown =
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
   const notice = releaseNotice;
+  if (windowShown || isBusyForReleaseNotice() || releaseNotifiedVersion === notice.version) return;
+  if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
+  // Re-read after the await: a dismissal (or an earlier run) may have landed meanwhile.
+  const state = releaseCheck.readNoticeState(dir);
+  if (state.dismissedVersion === notice.version || state.notifiedVersion === notice.version) return;
   const notif = new Notification({
     title: `StenoAI ${notice.version} is available`,
     body: 'Download it from GitHub and drag it to Applications.',
@@ -11296,11 +11311,19 @@ async function runReleaseCheck() {
   notif.on('click', download);
   trackNotificationLifecycle(notif, 'release_available');
   notif.show();
-  releaseCheck.writeNoticeState(dir, { ...state, notifiedVersion: notice.version });
+  // Also kept in memory, so a release-notice.json that cannot be written
+  // still means one notification per version per session, not one per check.
+  releaseNotifiedVersion = notice.version;
+  try {
+    releaseCheck.updateNoticeState(dir, { notifiedVersion: notice.version });
+  } catch (error) {
+    sendDebugLog(`Could not save release notice state: ${error.message}`);
+  }
 }
 
+// Releases from this repository are macOS DMGs only.
 function scheduleReleaseChecks() {
-  if (IS_E2E || !app.isPackaged) return;
+  if (IS_E2E || !app.isPackaged || process.platform !== 'darwin') return;
   const run = () => {
     runReleaseCheck().catch((error) => sendDebugLog(`Release check failed: ${error.message}`));
   };
@@ -11310,12 +11333,12 @@ function scheduleReleaseChecks() {
 
 ipcMain.handle('get-release-notice', async () => ({ success: true, notice: releaseNotice }));
 
-ipcMain.handle('dismiss-release-notice', async (_event, version) => {
-  if (!releaseCheck.parseVersion(version)) return { success: false, error: 'invalid version' };
+ipcMain.handle('dismiss-release-notice', async (_event, rawVersion) => {
+  const version = releaseCheck.normalizeVersion(rawVersion);
+  if (!version) return { success: false, error: 'invalid version' };
+  if (releaseNotice?.version === version) releaseNotice = null;
   try {
-    const dir = getUserDataDir();
-    releaseCheck.writeNoticeState(dir, { ...releaseCheck.readNoticeState(dir), dismissedVersion: version });
-    if (releaseNotice?.version === version) releaseNotice = null;
+    releaseCheck.updateNoticeState(getUserDataDir(), { dismissedVersion: version });
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

@@ -24,6 +24,8 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
   const [pendingVersion, setPendingVersion] = React.useState<string | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
   const [release, setRelease] = React.useState<ReleaseNotice | null>(null);
+  // A mount-time read still in flight must not bring back a dismissed notice.
+  const dismissedReleaseRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     return ipc().on.updateDownloaded((evt) => {
@@ -41,8 +43,9 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
     void ipc()
       .updates.getReleaseNotice()
       .then((result) => {
-        if (!cancelled && result.success && result.notice) {
-          setRelease((current) => current ?? result.notice);
+        const notice = result.success ? result.notice : null;
+        if (!cancelled && notice && notice.version !== dismissedReleaseRef.current) {
+          setRelease((current) => current ?? notice);
         }
       });
     return () => {
@@ -67,6 +70,7 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
   if (!release || recordingStatus !== 'idle') return null;
 
   const dismissRelease = () => {
+    dismissedReleaseRef.current = release.version;
     void ipc().updates.dismissReleaseNotice(release.version);
     setRelease(null);
   };

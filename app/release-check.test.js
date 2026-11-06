@@ -8,11 +8,13 @@ const path = require('path');
 const {
   RELEASES_URL,
   compareVersions,
+  normalizeVersion,
   parseVersion,
   pickDmgAsset,
   readNoticeState,
   releaseNoticeFor,
   summarizeReleases,
+  updateNoticeState,
   writeNoticeState,
 } = require('./release-check');
 
@@ -101,6 +103,25 @@ test('notice state round-trips and ignores a missing or corrupt file', () => {
     assert.deepEqual(readNoticeState(dir), { dismissedVersion: '2026.11.3', notifiedVersion: '2026.11.4' });
     fs.writeFileSync(path.join(dir, 'release-notice.json'), '{not json');
     assert.deepEqual(readNoticeState(dir), { dismissedVersion: null, notifiedVersion: null });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('versions are stored in one canonical form', () => {
+  assert.equal(normalizeVersion('v2026.11.1'), '2026.11.1');
+  assert.equal(normalizeVersion(' 2026.11.1 '), '2026.11.1');
+  assert.equal(normalizeVersion(['2026.11.1']), null);
+  assert.equal(normalizeVersion('2026.11.1-rc1'), null);
+});
+
+test('updating one field keeps the other', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-notice-'));
+  try {
+    updateNoticeState(dir, { dismissedVersion: '2026.11.3' });
+    updateNoticeState(dir, { notifiedVersion: '2026.11.4' });
+    assert.deepEqual(readNoticeState(dir), { dismissedVersion: '2026.11.3', notifiedVersion: '2026.11.4' });
+    assert.deepEqual(fs.readdirSync(dir), ['release-notice.json']);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

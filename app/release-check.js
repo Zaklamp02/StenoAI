@@ -22,6 +22,12 @@ function parseVersion(value) {
   return match ? match.slice(1).map(Number) : null;
 }
 
+// Canonical form (no "v", no padding), so stored and compared versions agree.
+function normalizeVersion(value) {
+  const parts = typeof value === 'string' ? parseVersion(value) : null;
+  return parts ? parts.join('.') : null;
+}
+
 function compareVersions(a, b) {
   const left = parseVersion(a);
   const right = parseVersion(b);
@@ -81,8 +87,8 @@ function readNoticeState(dir) {
   try {
     const state = JSON.parse(fs.readFileSync(path.join(dir, NOTICE_FILE), 'utf8'));
     return {
-      dismissedVersion: parseVersion(state.dismissedVersion) ? state.dismissedVersion : null,
-      notifiedVersion: parseVersion(state.notifiedVersion) ? state.notifiedVersion : null,
+      dismissedVersion: normalizeVersion(state.dismissedVersion),
+      notifiedVersion: normalizeVersion(state.notifiedVersion),
     };
   } catch {
     return { dismissedVersion: null, notifiedVersion: null };
@@ -91,10 +97,18 @@ function readNoticeState(dir) {
 
 function writeNoticeState(dir, state) {
   const file = path.join(dir, NOTICE_FILE);
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
   fs.renameSync(tmp, file);
+}
+
+// Read-merge-write in one synchronous step, so a dismissal and a notification
+// recorded around the same time never overwrite each other.
+function updateNoticeState(dir, patch) {
+  const next = { ...readNoticeState(dir), ...patch };
+  writeNoticeState(dir, next);
+  return next;
 }
 
 function releaseNoticeFor(result, state) {
@@ -111,11 +125,13 @@ module.exports = {
   FIRST_CHECK_DELAY_MS,
   CHECK_INTERVAL_MS,
   parseVersion,
+  normalizeVersion,
   compareVersions,
   pickDmgAsset,
   pickLatestRelease,
   summarizeReleases,
   readNoticeState,
   writeNoticeState,
+  updateNoticeState,
   releaseNoticeFor,
 };

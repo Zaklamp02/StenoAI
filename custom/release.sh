@@ -14,13 +14,17 @@ git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null \
   || { echo "Unknown tag: $TAG" >&2; exit 1; }
 # Installed apps compare their version against release tags (app/release-check.js),
 # so a release is vYYYY.M.N and app/package.json at that tag carries YYYY.M.N.
-case "$TAG" in
-  v[0-9]*.[0-9]*.[0-9]*)
-    TAGGED_VERSION="$(git -C "$ROOT" show "$TAG:app/package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')"
-    [ "$TAGGED_VERSION" = "${TAG#v}" ] \
-      || { echo "app/package.json at $TAG says $TAGGED_VERSION; bump it to ${TAG#v} and re-tag." >&2; exit 1; } ;;
-  *) echo "Note: $TAG is not a vYYYY.M.N tag, so installed apps will not offer it as an update." >&2 ;;
-esac
+if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  TAGGED_VERSION="$(git -C "$ROOT" show "$TAG:app/package.json" \
+    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).version))')" \
+    || { echo "Could not read app/package.json at $TAG." >&2; exit 1; }
+  [ "$TAGGED_VERSION" = "${TAG#v}" ] \
+    || { echo "app/package.json at $TAG says $TAGGED_VERSION; bump it to ${TAG#v} and re-tag." >&2; exit 1; }
+elif [[ "$TAG" =~ ^v[0-9] ]]; then
+  echo "$TAG looks like a version but is not vYYYY.M.N; installed apps would ignore it." >&2; exit 1
+else
+  echo "Note: $TAG is not a vYYYY.M.N tag, so installed apps will not offer it as an update." >&2
+fi
 IDENTITY="${STENOAI_SIGNING_IDENTITY:-StenoAI Local Signing}"
 PYTHON311="${PYTHON311:-/opt/homebrew/bin/python3.11}"
 # A Python installed under the home folder (Anaconda, pyenv) writes that path,
