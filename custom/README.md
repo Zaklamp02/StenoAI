@@ -17,8 +17,8 @@ are shared with the official app, so switching back and forth is safe.
 | Complete transcript + available summary/My notes exported to Obsidian, with versioned speaker suggestions/confirmations, exact turn references and calendar invitees; later profile/review/calendar edits refresh archived exports while preserving vault annotations | `custom/obsidian_sync.py`, `custom/OBSIDIAN_SYNC.md`, tests | custom only |
 | Settings: model suggestions + hint for cloud transcription | `app/renderer/src/routes/settings/AiTab.tsx`, `en.json` | candidate PR |
 | Speakers panel appears without leaving the note after processing | `app/renderer/src/hooks/useSpeakerSuggestions.ts`, `SpeakerReviewPanel.tsx`, `useRecording.ts` | candidate PR |
-| Auto-update off (it would install the stock app over this one) | `app/main.js` (`IS_CUSTOM_BUILD`) | custom only |
-| Update check reads this repository's releases; a background check (30 s after launch, then every 6 h) announces a newer version once with a Download pill, or a notification while the window is hidden, never during recording or processing | `app/release-check.js`, `app/main.js`, `UpdateToast.tsx`, `update-notice.t1` | custom only |
+| In-app updates from this repository's full releases (never the stock app's feed), only for an install signed with the release certificate: downloaded in the background, installed on Restart, on quit, or when idle | `app/update-signing.js`, `app/update-manifest.js`, `app/main.js` (`startAutoUpdater`), `custom/release.sh` | custom only |
+| Update check reads this repository's releases; a background check (30 s after launch, then every 6 h) announces a newer version once: download progress then Restart on an install that updates itself, otherwise a Download pill; a notification while the window is hidden; never during recording or processing | `app/release-check.js`, `app/main.js`, `UpdateToast.tsx`, `update-notice.t1` | custom only |
 | Calendar invitees as speaker-name shortcuts; invited known people first; confirmed invitee emails on People, stored locally by person ID | `SpeakerReviewPanel.tsx`, `person-contacts.js`, `speaker-ipc.js`, `PeopleTab.tsx` | custom only |
 | Stop while processing reports "Processing stopped", not a failure | `app/main.js`, `noteGenerationError.ts`, `MeetingDetail.tsx` | candidate PR |
 | Per-meeting language (recording screen, Re-transcribe dialog) via `STENOAI_LANGUAGE_OVERRIDE`; Settings stays the default | `app/note-language.js`, `src/config.py`, `MeetingLanguageSelect.tsx` | candidate PR |
@@ -173,11 +173,31 @@ git tag -a v2026.11.1 -m "StenoAI 2026.11.1" && git push zaklamp02 v2026.11.1
 custom/release.sh v2026.11.1   # refuses a tag whose package.json version differs
 ```
 
-Upload the DMG and `.sha256` to a GitHub Release for that tag. Pre-releases are
-fine: the app reads the release list, not GitHub's "latest". Tags that are not
-versions (the older `test-…` ones) are ignored by the update check. If the
+`release.sh` writes four files to `.local/release/`: the DMG and its `.sha256`
+for new installs, and `StenoAI-<tag>-arm64-mac.zip` plus `latest-mac.yml` for
+in-app updates. It ends by printing the `gh release create` command that
+uploads all four. Publish it as a **full release, not a pre-release**: installed
+apps update from the newest full release (GitHub's "latest"). A pre-release is
+still announced with a Download pill, but no app installs it in place. Tags that
+are not versions (the older `test-…` ones) are ignored. If the
 release has What's new highlights, update `app/renderer/src/lib/releaseHighlights.ts`
 in the same commit; otherwise empty that list so no panel is shown.
+
+### In-app updates and the signing certificate
+
+macOS installs an update only when it is signed like the running app. This
+build's designated requirement pins the leaf certificate of "StenoAI Local
+Signing", so:
+
+- Build every release with the same certificate (the maintainer's Mac). Its
+  SHA-1 is pinned as `RELEASE_SIGNING_CERT_SHA1` in `app/update-signing.js`;
+  an install signed with any other certificate (a colleague's own
+  `setup-signing.sh` identity, an ad-hoc build) skips the updater and keeps
+  the Download pill.
+- Keep the certificate. A new one cannot update existing installs: update the
+  pin, and every tester reinstalls from the DMG once.
+- Settings → General → *Install updates automatically* controls the idle
+  install; downloading happens either way, and Restart or quitting installs.
 
 ## New official release
 

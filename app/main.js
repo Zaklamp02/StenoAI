@@ -7177,6 +7177,9 @@ let autoUpdateEnabled = false;
 // The version electron-updater is fetching, so the pill and a remounted About
 // tab can say which one ('update-available' fires once per cycle).
 let pendingDownloadVersion = null;
+// The updater's last check found no feed (only pre-releases, or a release
+// without latest-mac.yml). The release notice then falls back to Download.
+let updateFeedMissing = false;
 
 // ── Idle auto-install ──
 // True once an update has finished downloading and is staged for install.
@@ -7361,9 +7364,16 @@ function setupAutoUpdater() {
 }
 
 function startAutoUpdater() {
-  // This repository's releases, not the stock app's feed in package.json's
-  // publish config. Only full releases: tester pre-releases carry no
-  // update manifest (see custom/README.md).
+  // This repository's releases, not the stock app's feed. Only full releases:
+  // tester pre-releases carry no update manifest (see custom/README.md).
+  // The config file also names the download cache folder, which the updater
+  // needs and a `--mac dir` build does not ship (release-check.js).
+  try {
+    autoUpdater.updateConfigPath = releaseCheck.writeUpdateConfig(getUserDataDir());
+  } catch (error) {
+    sendDebugLog(`Auto-updater: skipped (could not write its config: ${error.message})`);
+    return;
+  }
   autoUpdater.setFeedURL({
     provider: 'github',
     owner: releaseCheck.RELEASE_OWNER,
@@ -7409,6 +7419,7 @@ function startAutoUpdater() {
     // a download as started before the first real progress tick arrives.
     if (pendingDownloadPercent === null) pendingDownloadPercent = 0;
     pendingDownloadVersion = info.version;
+    updateFeedMissing = false;
     // Only the non-sticky ones. This event says a version was FOUND, i.e. the
     // feed was readable — it does not say a single byte was written, so it
     // cannot disprove a full disk or a permission problem. Those clear one
@@ -7504,6 +7515,7 @@ function startAutoUpdater() {
     // renderer as an error. See isMissingUpdateFeedError for why the match
     // is not spelled out inline any more.
     if (isMissingUpdateFeedError(msg)) {
+      updateFeedMissing = true;
       sendDebugLog('Auto-updater: no update feed published for this release yet — skipping.');
       return;
     }
@@ -11339,7 +11351,7 @@ async function runReleaseCheck() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('release-available', releaseNotice);
   }
-  if (autoUpdateEnabled && !pendingUpdateError) {
+  if (autoUpdateEnabled && !pendingUpdateError && !updateFeedMissing) {
     // Start fetching now rather than at the updater's next 30-minute check;
     // the pill and notification follow the download from here.
     if (!pendingUpdateVersion && pendingDownloadPercent === null) {

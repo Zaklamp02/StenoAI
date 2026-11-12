@@ -29,10 +29,14 @@ for notes, enter its API key once more in Settings → AI (keys are now tied to
 the address they were entered for). A remote Ollama server on another machine
 now needs an `https://` address.
 
+After this first install, new releases install themselves: StenoAI downloads
+them in the background and shows **Restart** in the top-right corner when one
+is ready (or installs it the next time you quit).
+
 Maintainers create the DMG with `custom/release.sh v<YYYY.M.N>`, which builds the tag
 from a clean checkout, refuses to package anything containing the builder's
-username, and writes the DMG and checksum to `.local/release/` for upload to
-the GitHub Release (never commit them).
+username, and writes the DMG, checksum and in-app update files to
+`.local/release/` for upload to a full GitHub Release (never commit them).
 
 ## Build from source
 

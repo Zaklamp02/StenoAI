@@ -17,6 +17,42 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const NOTICE_FILE = 'release-notice.json';
 
+// electron-updater reads its feed and download cache folder from
+// Resources/app-update.yml, which electron-builder writes only for packaged
+// targets (dmg, zip), not for the `--mac dir` builds custom/ produces. The app
+// writes this file to its data folder and points the updater at it instead.
+const UPDATE_CONFIG_FILE = 'app-update.yml';
+const UPDATER_CACHE_DIR_NAME = 'stenoai-updater';
+
+function updateConfigYaml() {
+  return [
+    'provider: github',
+    `owner: ${RELEASE_OWNER}`,
+    `repo: ${RELEASE_REPO}`,
+    `updaterCacheDirName: ${UPDATER_CACHE_DIR_NAME}`,
+    '',
+  ].join('\n');
+}
+
+// Writes the file only when its content differs; returns its path.
+function writeUpdateConfig(dir) {
+  const file = path.join(dir, UPDATE_CONFIG_FILE);
+  const content = updateConfigYaml();
+  let current = null;
+  try {
+    current = fs.readFileSync(file, 'utf8');
+  } catch {
+    // Missing: written below.
+  }
+  if (current !== content) {
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, file);
+  }
+  return file;
+}
+
 // Release tags are versions (v2026.11.1). Anything else, such as the earlier
 // test-2026-11-06b tags, is not a release the app can compare against.
 function parseVersion(value) {
@@ -126,6 +162,9 @@ module.exports = {
   RELEASE_OWNER,
   RELEASE_REPO,
   RELEASES_URL,
+  UPDATER_CACHE_DIR_NAME,
+  updateConfigYaml,
+  writeUpdateConfig,
   FIRST_CHECK_DELAY_MS,
   CHECK_INTERVAL_MS,
   parseVersion,

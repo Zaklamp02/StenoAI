@@ -126,3 +126,26 @@ test('updating one field keeps the other', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the update config names this repository and a cache folder', () => {
+  const yaml = require('js-yaml');
+  const releaseCheck = require('./release-check');
+  const parsed = yaml.load(releaseCheck.updateConfigYaml());
+  assert.deepStrictEqual(parsed, {
+    provider: 'github',
+    owner: 'Zaklamp02',
+    repo: 'StenoAI',
+    updaterCacheDirName: 'stenoai-updater',
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-config-'));
+  try {
+    const file = releaseCheck.writeUpdateConfig(dir);
+    assert.strictEqual(file, path.join(dir, 'app-update.yml'));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), releaseCheck.updateConfigYaml());
+    fs.writeFileSync(file, 'provider: generic\n');
+    releaseCheck.writeUpdateConfig(dir);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), releaseCheck.updateConfigYaml());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
