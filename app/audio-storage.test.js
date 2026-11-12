@@ -70,3 +70,22 @@ test('rejects a limit below the minimum', () => withFolder(({ root, recordings }
   storage.setLimitMb(null);
   assert.equal(storage.getLimitMb(), null);
 }));
+
+test('summary counts kept audio, its size and the oldest file', () => withFolder(({ root, recordings, add }) => {
+  add('old.webm', 2, 48);
+  add('new.wav', 3, 1);
+  fs.writeFileSync(path.join(recordings, 'notes.txt'), 'not audio');
+  const storage = storageFor(root, recordings);
+  assert.deepEqual(storage.summary(), {
+    usedBytes: 5 * MB,
+    count: 2,
+    oldestAt: new Date(NOW - 48 * 3600 * 1000).toISOString(),
+  });
+}));
+
+test('a missing recordings folder reads as nothing saved', () => withFolder(({ root }) => {
+  const storage = storageFor(root, path.join(root, 'not-created-yet'));
+  assert.deepEqual(storage.summary(), { usedBytes: 0, count: 0, oldestAt: null });
+  assert.equal(storage.usedBytes(), 0);
+  assert.deepEqual(storage.enforce(), []);
+}));

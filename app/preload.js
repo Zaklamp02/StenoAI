@@ -336,6 +336,7 @@ const stenoai = {
     getKeepRecordings: () => invoke('get-keep-recordings'),
     getAudioStorage: () => invoke('get-audio-storage'),
     setAudioStorage: (limitMb) => invoke('set-audio-storage', limitMb),
+    openRecordingsFolder: () => invoke('open-recordings-folder'),
     getKeychainState: () => invoke('get-keychain-state'),
     getCloudConcurrency: () => invoke('get-cloud-concurrency'),
     setCloudConcurrency: (n) => invoke('set-cloud-concurrency', n),

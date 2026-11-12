@@ -1542,6 +1542,17 @@ function install({ ipcMain }) {
     // The background release check's notice (UpdateToast). Seeded with
     // STENOAI_E2E_SEED_RELEASE_NOTICE=1; dismissing clears it like main.js
     // does, so a reload asserts it stays dismissed (update-notice.t1).
+    // Settings -> General -> Saved recordings (recordings-storage.t1).
+    // STENOAI_E2E_SEED_SAVED_RECORDINGS=1 reports three kept recordings with
+    // saving switched off, so the summary row shows on its own.
+    'get-audio-storage': () =>
+      process.env.STENOAI_E2E_SEED_SAVED_RECORDINGS === '1'
+        ? { success: true, limitMb: null, usedBytes: 1_500_000_000, count: 3, oldestAt: '2026-10-03T09:00:00.000Z' }
+        : { success: true, limitMb: null, usedBytes: 0, count: 0, oldestAt: null },
+    'open-recordings-folder': () => {
+      global.__openedRecordingsFolder = true;
+      return { success: true };
+    },
     'get-release-notice': () => ({ success: true, notice: seededReleaseNotice }),
     'dismiss-release-notice': (_event, version) => {
       global.__dismissedReleaseVersions = [...(global.__dismissedReleaseVersions || []), version];
