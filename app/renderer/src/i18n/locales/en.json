@@ -107,7 +107,7 @@
   "setup.save_recordings": "Save recordings",
   "setup.keep_audio_for_listening_language_retries_and": "Keep audio for listening, language retries and speaker review. When off, audio is deleted after successful transcription. Unfinished audio is kept for recovery.",
   "aiTab.recordings_storage_limit": "Recordings storage limit",
-  "aiTab.when_saved_audio_passes_this_size_the": "When saved audio passes this size, the oldest completed recordings are deleted. Unfinished recordings stay protected and can exceed this limit. Notes and transcripts are kept. Now using {{used}}.",
+  "aiTab.when_saved_audio_passes_this_size_the": "When saved audio passes this size, the oldest completed recordings are deleted. Unfinished recordings stay protected and can exceed this limit. Notes and transcripts are kept.",
   "aiTab.no_limit": "No limit",
   "aiTab.parallel_requests": "Parallel requests",
   "aiTab.n_default": "{{n}} (default)",
@@ -271,5 +271,12 @@
   "privacy.optionalAnalytics": "Anonymous usage analytics is off by default. If enabled, it sends crash and usage signals to StenoLabs via PostHog, excluding meeting content. Launch on login is a separate setting. You can change either preference anytime in Settings.",
   "aiTab.cloudKeyReentry": "Your saved key was entered for a different provider or address, so it is not sent here. Enter the key for this one.",
   "orgTab.autoShareLabel": "Share new notes with your organisation",
-  "orgTab.autoShareDescription": "When a note is ready, it is uploaded to your organisation, including the full transcript, and everyone in the organisation can open it under Shared notes. You can unshare a note there. Off unless your organisation turns it on by default."
+  "orgTab.autoShareDescription": "When a note is ready, it is uploaded to your organisation, including the full transcript, and everyone in the organisation can open it under Shared notes. You can unshare a note there. Off unless your organisation turns it on by default.",
+  "recordingStorage.saved_recordings": "Saved recordings",
+  "recordingStorage.summary_none": "No recordings saved yet.",
+  "recordingStorage.summary_one": "1 recording, {{size}}, saved {{date}}.",
+  "recordingStorage.summary_other": "{{count}} recordings, {{size}}, oldest from {{date}}.",
+  "recordingStorage.show_in_finder": "Show in Finder",
+  "recordingStorage.open_folder": "Open folder",
+  "recordingStorage.open_failed": "Could not open the recordings folder."
 }

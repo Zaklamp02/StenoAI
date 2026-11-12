@@ -1097,6 +1097,15 @@ export interface UpdateDownloadedEvent {
 }
 /** A newer release on GitHub that the user has not dismissed. Updates are
  *  installed by downloading the DMG, so this only points at it. */
+/** Settings -> Save recordings: the limit and what kept audio uses now. */
+export interface AudioStorageState {
+  limitMb: number | null;
+  usedBytes: number;
+  /** Kept audio files in the recordings folder. */
+  count: number;
+  /** When the oldest of them was written (ISO), or null when there are none. */
+  oldestAt: string | null;
+}
 export interface ReleaseNotice {
   version: string;
   releaseUrl: string;
@@ -1469,8 +1478,9 @@ export interface StenoaiBridge {
     setWhisperModel: RequestFn<[model: string], Result<Record<string, never>>>;
     getKeepRecordings: RequestFn<[], GetKeepRecordingsResponse>;
     /** Disk cap for kept recordings; null = no limit. Oldest audio goes first. */
-    getAudioStorage: RequestFn<[], Result<{ limitMb: number | null; usedBytes: number }>>;
-    setAudioStorage: RequestFn<[limitMb: number | null], Result<{ limitMb: number | null; usedBytes: number }>>;
+    getAudioStorage: RequestFn<[], Result<AudioStorageState>>;
+    setAudioStorage: RequestFn<[limitMb: number | null], Result<AudioStorageState>>;
+    openRecordingsFolder: RequestFn<[], Result<Record<string, never>>>;
     /** Startup Keychain gate: 'closed' until the window shows, 'waiting'
      *  while the first Keychain access runs, then 'open'. */
     getKeychainState: RequestFn<[], Result<{ state: KeychainState }>>;

@@ -6616,7 +6616,7 @@ const RECORDING_TRIGGERS = new Set(['manual', 'notification_click', 'hotkey', 't
 
 ipcMain.handle('get-audio-storage', async () => {
   try {
-    return { success: true, limitMb: audioStorage.getLimitMb(), usedBytes: audioStorage.usedBytes() };
+    return { success: true, limitMb: audioStorage.getLimitMb(), ...audioStorage.summary() };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -6626,7 +6626,25 @@ ipcMain.handle('set-audio-storage', async (_event, limitMb) => {
   try {
     audioStorage.setLimitMb(limitMb === null ? null : Number(limitMb));
     enforceAudioStorage();
-    return { success: true, limitMb: audioStorage.getLimitMb(), usedBytes: audioStorage.usedBytes() };
+    return { success: true, limitMb: audioStorage.getLimitMb(), ...audioStorage.summary() };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// Settings -> Save recordings: open the folder kept audio lives in. Takes no
+// path from the renderer; it is always the configured recordings folder.
+ipcMain.handle('open-recordings-folder', async () => {
+  try {
+    const dir = resolveRecordingsDir();
+    fs.mkdirSync(dir, { recursive: true });
+    // e2e asserts the folder rather than opening a Finder window.
+    if (IS_E2E) {
+      global.__openedRecordingsFolder = dir;
+      return { success: true };
+    }
+    const error = await shell.openPath(dir);
+    return error ? { success: false, error } : { success: true };
   } catch (e) {
     return { success: false, error: e.message };
   }

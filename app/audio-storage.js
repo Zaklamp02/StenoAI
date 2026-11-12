@@ -36,7 +36,15 @@ function createAudioStorage({ getUserDataDir, resolveRecordingsDir, isProtected 
   function listAudio() {
     const dir = resolveRecordingsDir();
     const files = [];
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      // No recordings folder yet: nothing saved.
+      if (error.code === 'ENOENT') return files;
+      throw error;
+    }
+    for (const entry of entries) {
       if (!entry.isFile() || !AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) continue;
       const full = path.join(dir, entry.name);
       try {
@@ -49,6 +57,17 @@ function createAudioStorage({ getUserDataDir, resolveRecordingsDir, isProtected 
 
   function usedBytes() {
     return listAudio().reduce((sum, f) => sum + f.bytes, 0);
+  }
+
+  // What Settings shows next to the limit: how many audio files are kept,
+  // their total size, and when the oldest was written.
+  function summary() {
+    const files = listAudio();
+    return {
+      usedBytes: files.reduce((sum, f) => sum + f.bytes, 0),
+      count: files.length,
+      oldestAt: files.length ? new Date(files[0].mtimeMs).toISOString() : null,
+    };
   }
 
   // Delete oldest-first until the folder fits. The newest recording, files
@@ -73,7 +92,7 @@ function createAudioStorage({ getUserDataDir, resolveRecordingsDir, isProtected 
     return deleted;
   }
 
-  return { getLimitMb, setLimitMb, usedBytes, enforce };
+  return { getLimitMb, setLimitMb, usedBytes, summary, enforce };
 }
 
 module.exports = { createAudioStorage, MIN_LIMIT_MB };
