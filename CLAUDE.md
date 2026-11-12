@@ -136,7 +136,8 @@ overrides an agent's own test-level defaults.
     collapses; the harness paces one per animation frame and counts DOM writes to prove it.
   - **Current specs:** `org-lock.t1`, `shared-notes-policy.t1`, `update-notice.t1`
     (a newer release on this repo is announced once with a Download pill and stays
-    dismissed; Check for Updates opens its release page), `calendar-settings.t1`
+    dismissed; an install that updates itself shows the download, falls back to
+    Download if it fails, then Restart; Check for Updates opens its release page), `calendar-settings.t1`
     (Settings -> Integrations -> Calendar: sources are offered only while none is
     connected, and an account Apple Calendar overrides says it is not in use), `live-transcript-lanes.t1`
     (the live panel's rendering contract: a partial is replaced in place per speaker, a

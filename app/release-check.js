@@ -6,7 +6,9 @@ const path = require('path');
 // This build's releases, not the original StenoAI project's: its DMG would
 // install the stock app over this one. The list (not /releases/latest) is read
 // because tester releases are published as pre-releases, which /latest skips.
-const RELEASES_URL = 'https://api.github.com/repos/Zaklamp02/StenoAI/releases?per_page=30';
+const RELEASE_OWNER = 'Zaklamp02';
+const RELEASE_REPO = 'StenoAI';
+const RELEASES_URL = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases?per_page=30`;
 
 // First check shortly after launch, then a few times a day so a Mac that stays
 // open for weeks still hears about a release.
@@ -14,6 +16,42 @@ const FIRST_CHECK_DELAY_MS = 30 * 1000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const NOTICE_FILE = 'release-notice.json';
+
+// electron-updater reads its feed and download cache folder from
+// Resources/app-update.yml, which electron-builder writes only for packaged
+// targets (dmg, zip), not for the `--mac dir` builds custom/ produces. The app
+// writes this file to its data folder and points the updater at it instead.
+const UPDATE_CONFIG_FILE = 'app-update.yml';
+const UPDATER_CACHE_DIR_NAME = 'stenoai-updater';
+
+function updateConfigYaml() {
+  return [
+    'provider: github',
+    `owner: ${RELEASE_OWNER}`,
+    `repo: ${RELEASE_REPO}`,
+    `updaterCacheDirName: ${UPDATER_CACHE_DIR_NAME}`,
+    '',
+  ].join('\n');
+}
+
+// Writes the file only when its content differs; returns its path.
+function writeUpdateConfig(dir) {
+  const file = path.join(dir, UPDATE_CONFIG_FILE);
+  const content = updateConfigYaml();
+  let current = null;
+  try {
+    current = fs.readFileSync(file, 'utf8');
+  } catch {
+    // Missing: written below.
+  }
+  if (current !== content) {
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, file);
+  }
+  return file;
+}
 
 // Release tags are versions (v2026.11.1). Anything else, such as the earlier
 // test-2026-11-06b tags, is not a release the app can compare against.
@@ -78,6 +116,9 @@ function summarizeReleases(releases, currentVersion, arch) {
     releaseUrl: latest.html_url,
     releaseName: latest.name || `Version ${latestVersion}`,
     downloadUrl: pickDmgAsset(latest.assets, arch),
+    // In-app updates read full releases only, so a pre-release is always
+    // announced for download.
+    prerelease: Boolean(latest.prerelease),
   };
 }
 
@@ -117,11 +158,17 @@ function releaseNoticeFor(result, state) {
     version: result.latestVersion,
     releaseUrl: result.releaseUrl,
     downloadUrl: result.downloadUrl,
+    prerelease: Boolean(result.prerelease),
   };
 }
 
 module.exports = {
+  RELEASE_OWNER,
+  RELEASE_REPO,
   RELEASES_URL,
+  UPDATER_CACHE_DIR_NAME,
+  updateConfigYaml,
+  writeUpdateConfig,
   FIRST_CHECK_DELAY_MS,
   CHECK_INTERVAL_MS,
   parseVersion,

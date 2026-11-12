@@ -5,35 +5,80 @@ import type { RecordingStatus } from '@/hooks/useRecording';
 
 const RELEASE_NOTICE_COPY = {
   available: (version: string) => `Version ${version} available`,
+  downloading: (version: string) => `Downloading version ${version}`,
   download: 'Download',
   dismiss: 'Dismiss new version notice',
 };
 
 /**
- * Top-right pill for updates, in two forms:
+ * Top-right pill for updates:
  *
  * - electron-updater finished downloading a release in the background:
  *   "Restart" calls the main-side `install-update` IPC (`quitAndInstall`).
  *   Dismiss with × hides it for the rest of the session.
- * - The background release check found a newer release on GitHub (the custom
- *   build has no in-app installer): "Download" opens the DMG in the browser.
- *   Dismissing remembers that version, so each release is announced once.
- *   Hidden while recording or processing.
+ * - electron-updater is fetching a release (an install that updates
+ *   itself): the pill shows its version and progress. Dismissing hides it for
+ *   the session; a failure brings back the "Download" pill below.
+ * - The background release check found a newer release on GitHub that is not
+ *   downloading: "Download" opens the DMG in the browser. Dismissing
+ *   remembers the version, so each release is announced once.
+ * The last two are hidden while recording or processing.
  */
 export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingStatus }) {
   const [pendingVersion, setPendingVersion] = React.useState<string | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
   const [release, setRelease] = React.useState<ReleaseNotice | null>(null);
+  // Non-null while electron-updater is fetching a release.
+  const [download, setDownload] = React.useState<{ version: string; percent: number } | null>(null);
+  const [downloadDismissed, setDownloadDismissed] = React.useState(false);
   // A mount-time read still in flight must not bring back a dismissed notice.
   const dismissedReleaseRef = React.useRef<string | null>(null);
+  // Set by any live updater event, so a slower mount-time status read cannot
+  // reopen a download that has since finished or failed.
+  const updaterEventSeenRef = React.useRef(false);
 
   React.useEffect(() => {
-    return ipc().on.updateDownloaded((evt) => {
+    const offAvailable = ipc().on.updateAvailable((evt) => {
+      updaterEventSeenRef.current = true;
+      setDownload((d) => (d && d.version === evt.version ? d : { version: evt.version, percent: 0 }));
+    });
+    const offProgress = ipc().on.updateDownloadProgress((evt) => {
+      updaterEventSeenRef.current = true;
+      setDownload((d) => (d ? { ...d, percent: evt.percent } : d));
+    });
+    const offDownloaded = ipc().on.updateDownloaded((evt) => {
+      updaterEventSeenRef.current = true;
+      setDownload(null);
       setPendingVersion(evt.version);
       // A newer version arriving overrides any prior dismiss for this
       // session — the user dismissed v0.2.14, but v0.2.15 just landed.
       setDismissed(false);
     });
+    // A failed download falls back to the "Download" pill.
+    const offError = ipc().on.updateError(() => {
+      updaterEventSeenRef.current = true;
+      setDownload(null);
+      setDownloadDismissed(false);
+    });
+    // The window can open after the download started or finished.
+    let cancelled = false;
+    void ipc()
+      .updates.getStatus()
+      .then((status) => {
+        if (cancelled || !status.success || updaterEventSeenRef.current) return;
+        if (status.downloadedVersion) setPendingVersion(status.downloadedVersion);
+        else if (status.downloadPercent !== null && status.downloadingVersion) {
+          setDownload({ version: status.downloadingVersion, percent: status.downloadPercent });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      offAvailable();
+      offProgress();
+      offDownloaded();
+      offError();
+    };
   }, []);
 
   React.useEffect(() => {
@@ -47,7 +92,8 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
         if (!cancelled && notice && notice.version !== dismissedReleaseRef.current) {
           setRelease((current) => current ?? notice);
         }
-      });
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
       off();
@@ -67,7 +113,23 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
     );
   }
 
-  if (!release || recordingStatus !== 'idle') return null;
+  if (recordingStatus !== 'idle') return null;
+
+  if (download && !downloadDismissed) {
+    return (
+      <ToastPill>
+        <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
+        <span className="tabular-nums">
+          {RELEASE_NOTICE_COPY.downloading(download.version)}
+          <span style={{ color: 'var(--fg-2)' }}>{` · ${download.percent}%`}</span>
+        </span>
+        <DismissButton label={RELEASE_NOTICE_COPY.dismiss} onClick={() => setDownloadDismissed(true)} />
+      </ToastPill>
+    );
+  }
+
+  // Already on its way in; nothing to download by hand.
+  if (!release || download?.version === release.version) return null;
 
   const dismissRelease = () => {
     dismissedReleaseRef.current = release.version;

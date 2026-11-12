@@ -91,6 +91,7 @@ test('a dismissed version is not announced again, a newer one is', () => {
     version: '2026.11.3',
     releaseUrl: 'https://github.com/Zaklamp02/StenoAI/releases/tag/v2026.11.3',
     downloadUrl: 'https://github.com/dl/v2026.11.3.dmg',
+    prerelease: true,
   });
   assert.equal(releaseNoticeFor({ ...result, updateAvailable: false }, {}), null);
 });
@@ -125,4 +126,49 @@ test('updating one field keeps the other', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the update config names this repository and a cache folder', () => {
+  const yaml = require('js-yaml');
+  const releaseCheck = require('./release-check');
+  const parsed = yaml.load(releaseCheck.updateConfigYaml());
+  assert.deepStrictEqual(parsed, {
+    provider: 'github',
+    owner: 'Zaklamp02',
+    repo: 'StenoAI',
+    updaterCacheDirName: 'stenoai-updater',
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-config-'));
+  try {
+    const file = releaseCheck.writeUpdateConfig(dir);
+    assert.strictEqual(file, path.join(dir, 'app-update.yml'));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), releaseCheck.updateConfigYaml());
+    fs.writeFileSync(file, 'provider: generic\n');
+    releaseCheck.writeUpdateConfig(dir);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), releaseCheck.updateConfigYaml());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a pre-release is marked so it is announced for download, not installed', () => {
+  const releaseCheck = require('./release-check');
+  const result = releaseCheck.summarizeReleases(
+    [
+      { tag_name: 'v2026.12.1', prerelease: true, html_url: 'https://github.com/x/y/releases/tag/v2026.12.1', assets: [] },
+      { tag_name: 'v2026.11.2', prerelease: false, html_url: 'https://github.com/x/y/releases/tag/v2026.11.2', assets: [] },
+    ],
+    '2026.11.1',
+    'arm64',
+  );
+  assert.equal(result.latestVersion, '2026.12.1');
+  assert.equal(result.prerelease, true);
+  const notice = releaseCheck.releaseNoticeFor(result, { dismissedVersion: null, notifiedVersion: null });
+  assert.equal(notice.prerelease, true);
+  const full = releaseCheck.summarizeReleases(
+    [{ tag_name: 'v2026.11.2', html_url: 'https://github.com/x/y/releases/tag/v2026.11.2', assets: [] }],
+    '2026.11.1',
+    'arm64',
+  );
+  assert.equal(full.prerelease, false);
 });

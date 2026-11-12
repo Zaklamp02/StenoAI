@@ -241,6 +241,14 @@ test('the missing-feed 404 is recognised on every platform\'s feed name', () => 
 test('a real failure is not mistaken for a missing feed', () => {
   // No feed filename at all.
   assert.strictEqual(isMissingUpdateFeedError('net::ERR_INTERNET_DISCONNECTED'), false);
+  // A repository whose releases are all pre-releases has no feed for the
+  // GitHub provider yet; that is the same quiet state.
+  assert.strictEqual(
+    isMissingUpdateFeedError(
+      'Error: Unable to find latest version on GitHub (https://github.com/Zaklamp02/StenoAI/releases/latest), please ensure a production release exists: HttpError: 404',
+    ),
+    true,
+  );
   // Names a manifest, but app-update.yml is the packaged config, not the feed —
   // and its absence is a genuine packaging fault worth surfacing.
   assert.strictEqual(

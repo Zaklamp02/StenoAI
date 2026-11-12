@@ -2,13 +2,23 @@ import type { ElectronApplication } from '@playwright/test';
 import { test, expect } from '../fixtures/electron';
 
 /**
- * T1 — mock IPC. The custom build has no in-app installer, so new releases are
- * announced and downloaded from GitHub: the background check's pill (seeded
- * via STENOAI_E2E_SEED_RELEASE_NOTICE) and the About tab's manual check
- * (STENOAI_E2E_SEED_UPDATE_AVAILABLE). See app/e2e-mock-ipc.js.
+ * T1 — mock IPC. New releases are announced by the background check's pill
+ * (seeded via STENOAI_E2E_SEED_RELEASE_NOTICE) and the About tab's manual check
+ * (STENOAI_E2E_SEED_UPDATE_AVAILABLE). An install that cannot update itself
+ * downloads the DMG from GitHub; one that can follows electron-updater's
+ * events, driven here on the real update-* channels. See app/e2e-mock-ipc.js.
  */
 const releasePages = (app: ElectronApplication) =>
   app.evaluate(() => (globalThis as unknown as { __openedReleasePages?: string[] }).__openedReleasePages ?? []);
+
+// What main.js's autoUpdater listeners send the window.
+const sendUpdaterEvent = (app: ElectronApplication, channel: string, payload: unknown) =>
+  app.evaluate(
+    ({ BrowserWindow }, [ch, data]) => {
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send(ch as string, data);
+    },
+    [channel, payload] as const,
+  );
 
 test('a new release is announced once, downloads from GitHub, and stays dismissed', async ({
   launchApp,
@@ -66,4 +76,73 @@ test('Check for Updates finds a newer release and opens its page', async ({ laun
   await expect.poll(() => releasePages(app)).toEqual([
     'https://github.com/Zaklamp02/StenoAI/releases/tag/v2099.1.1',
   ]);
+});
+
+test('an install that updates itself shows the download, then Restart', async ({ launchApp }) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_RELEASE_NOTICE: '1' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  await expect(page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' })).toBeVisible();
+
+  await sendUpdaterEvent(app, 'update-available', { version: '2099.1.1' });
+  await sendUpdaterEvent(app, 'update-download-progress', { percent: 40 });
+  const downloading = page.getByRole('status').filter({ hasText: 'Downloading version 2099.1.1 · 40%' });
+  await expect(downloading).toBeVisible();
+  // While the updater has it, there is nothing to download by hand.
+  await expect(downloading.getByRole('button', { name: 'Download' })).toHaveCount(0);
+
+  // A failed download falls back to the GitHub download.
+  await sendUpdaterEvent(app, 'update-error', { message: 'The download failed.' });
+  const fallback = page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' });
+  await expect(fallback.getByRole('button', { name: 'Download' })).toBeVisible();
+
+  await sendUpdaterEvent(app, 'update-available', { version: '2099.1.1' });
+  await sendUpdaterEvent(app, 'update-download-progress', { percent: 100 });
+  await sendUpdaterEvent(app, 'update-downloaded', { version: '2099.1.1' });
+  const ready = page.getByRole('status').filter({ hasText: 'Update v2099.1.1 ready' });
+  await expect(ready).toBeVisible();
+  await ready.getByRole('button', { name: 'Restart' }).click();
+  await expect
+    .poll(() =>
+      app.evaluate(() => (globalThis as unknown as { __installUpdateRequested?: boolean }).__installUpdateRequested ?? false),
+    )
+    .toBe(true);
+});
+
+test('a dismissed download comes back as Download if it fails, and names the version it fetches', async ({
+  launchApp,
+}) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_RELEASE_NOTICE: '1' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  await expect(page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' })).toBeVisible();
+
+  // The notice can name a newer pre-release than the full release the updater
+  // fetches; the pill names what is actually downloading.
+  await sendUpdaterEvent(app, 'update-available', { version: '2099.1.0' });
+  await sendUpdaterEvent(app, 'update-download-progress', { percent: 10 });
+  const downloading = page.getByRole('status').filter({ hasText: 'Downloading version 2099.1.0 · 10%' });
+  await expect(downloading).toBeVisible();
+
+  // Dismissing the download hides it for now and records no dismissal.
+  await downloading.getByRole('button', { name: 'Dismiss new version notice' }).click();
+  await expect(downloading).toHaveCount(0);
+  const dismissed = () =>
+    app.evaluate(
+      () => (globalThis as unknown as { __dismissedReleaseVersions?: string[] }).__dismissedReleaseVersions ?? [],
+    );
+  expect(await dismissed()).toEqual([]);
+
+  // A failure brings back the GitHub download for the announced release.
+  await sendUpdaterEvent(app, 'update-error', { message: 'The download failed.' });
+  const fallback = page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' });
+  await expect(fallback.getByRole('button', { name: 'Download' })).toBeVisible();
 });
