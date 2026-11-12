@@ -179,7 +179,9 @@ in-app updates. It ends by printing the `gh release create` command that
 uploads all four. Publish it as a **full release, not a pre-release**: installed
 apps update from the newest full release (GitHub's "latest"). A pre-release is
 still announced with a Download pill, but no app installs it in place. Tags that
-are not versions (the older `test-…` ones) are ignored. If the
+are not versions (the older `test-…` ones) are ignored, and must stay
+pre-releases: as a full release one would become GitHub's "latest" and hide the
+real latest version from the updater. If the
 release has What's new highlights, update `app/renderer/src/lib/releaseHighlights.ts`
 in the same commit; otherwise empty that list so no panel is shown.
 

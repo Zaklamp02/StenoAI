@@ -1101,6 +1101,8 @@ export interface ReleaseNotice {
   version: string;
   releaseUrl: string;
   downloadUrl: string | null;
+  /** Announced for download only; the in-app updater reads full releases. */
+  prerelease?: boolean;
 }
 export interface UpdateErrorEvent {
   message: string;

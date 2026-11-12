@@ -7437,6 +7437,7 @@ function startAutoUpdater() {
 
   autoUpdater.on('update-not-available', () => {
     sendDebugLog('Auto-updater: up to date');
+    updateFeedMissing = false;
     // A completed cycle with nothing pending — clear even a sticky failure.
     // This is the updater itself reporting success, unlike the GitHub poll in
     // the check-for-updates handler (our own request, which proves nothing
@@ -11351,7 +11352,7 @@ async function runReleaseCheck() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('release-available', releaseNotice);
   }
-  if (autoUpdateEnabled && !pendingUpdateError && !updateFeedMissing) {
+  if (autoUpdateEnabled && !releaseNotice.prerelease && !pendingUpdateError && !updateFeedMissing) {
     // Start fetching now rather than at the updater's next 30-minute check;
     // the pill and notification follow the download from here.
     if (!pendingUpdateVersion && pendingDownloadPercent === null) {
@@ -11362,7 +11363,7 @@ async function runReleaseCheck() {
   const windowShown =
     mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
   const notice = releaseNotice;
-  if (windowShown || isBusyForReleaseNotice() || releaseNotifiedVersion === notice.version) return;
+  if (windowShown || isBusyForReleaseNotice() || releaseNotifiedVersion === (releaseCheck.normalizeVersion(notice.version) || notice.version)) return;
   if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
   // Re-read after the await: a dismissal (or an earlier run) may have landed meanwhile.
   const state = releaseCheck.readNoticeState(dir);
@@ -11379,7 +11380,7 @@ async function runReleaseCheck() {
   notif.show();
   // Also kept in memory, so a release-notice.json that cannot be written
   // still means one notification per version per session, not one per check.
-  releaseNotifiedVersion = notice.version;
+  releaseNotifiedVersion = releaseCheck.normalizeVersion(notice.version) || notice.version;
   try {
     releaseCheck.updateNoticeState(dir, { notifiedVersion: notice.version });
   } catch (error) {
@@ -11393,19 +11394,28 @@ async function runReleaseCheck() {
 async function notifyUpdateReady(version) {
   const shown =
     mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
-  if (shown || releaseNotifiedVersion === version) return;
+  const normalized = releaseCheck.normalizeVersion(version) || String(version);
+  if (shown || isBusyForReleaseNotice() || releaseNotifiedVersion === normalized) return;
   if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
   const dir = getUserDataDir();
-  const state = releaseCheck.readNoticeState(dir);
-  const normalized = releaseCheck.normalizeVersion(version);
-  if (state.dismissedVersion === normalized || state.notifiedVersion === normalized) return;
+  // Only an earlier "is ready" notification counts: dismissing the
+  // announcement is not a reason to keep quiet about an install now waiting.
+  if (releaseCheck.readNoticeState(dir).notifiedVersion === normalized) return;
   const notif = new Notification({
     title: `StenoAI ${version} is ready`,
     body: 'Restart StenoAI to finish updating.',
     actions: [{ type: 'button', text: 'Restart' }],
   });
   notif.on('action', () => {
-    if (isBusyForReleaseNotice()) {
+    // Same fail-closed gate as the idle install, minus the idle requirement
+    // (the user is right here). With work in flight, show the window, whose
+    // pill offers Restart once the user is ready.
+    const state = {
+      ...gatherIdleInstallState(),
+      enabled: true,
+      idleSeconds: IDLE_AUTO_INSTALL_THRESHOLD_SECONDS,
+    };
+    if (!isSafeToAutoInstall(state)) {
       exposeMainWindow();
       return;
     }
@@ -11416,9 +11426,9 @@ async function notifyUpdateReady(version) {
   notif.on('click', () => exposeMainWindow());
   trackNotificationLifecycle(notif, 'update_ready');
   notif.show();
-  releaseNotifiedVersion = version;
+  releaseNotifiedVersion = normalized;
   try {
-    releaseCheck.updateNoticeState(dir, { notifiedVersion: normalized || version });
+    releaseCheck.updateNoticeState(dir, { notifiedVersion: normalized });
   } catch (error) {
     sendDebugLog(`Could not save release notice state: ${error.message}`);
   }

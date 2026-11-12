@@ -30,6 +30,7 @@ elif [[ "$TAG" =~ ^v[0-9] ]]; then
   echo "$TAG looks like a version but is not vYYYY.M.N; installed apps would ignore it." >&2; exit 1
 else
   echo "Note: $TAG is not a vYYYY.M.N tag, so installed apps will not offer it as an update." >&2
+  echo "Publish it as a pre-release: a full release would hide the real latest version from the updater." >&2
 fi
 UPDATE_VERSION="${UPDATE_VERSION:-}"
 IDENTITY="${STENOAI_SIGNING_IDENTITY:-StenoAI Local Signing}"
@@ -92,9 +93,13 @@ ZIP="$OUT/StenoAI-$TAG-arm64-mac.zip"
 MANIFEST="$OUT/latest-mac.yml"
 rm -f "$ZIP" "$MANIFEST"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-node "$ROOT/app/update-manifest.js" "$ZIP" "$UPDATE_VERSION" "$MANIFEST"
+# The tag's own script, so the macOS floor matches the build being shipped.
+[ -f "$WORK/app/update-manifest.js" ] \
+  || { echo "$TAG predates in-app updates (no app/update-manifest.js); publish the DMG only." >&2; exit 1; }
+node "$WORK/app/update-manifest.js" "$ZIP" "$UPDATE_VERSION" "$MANIFEST"
 echo "==> $ZIP ($(du -h "$ZIP" | cut -f1))"
 echo
 echo "Publish as a full release (not a pre-release), so installed apps update to it:"
-echo "  gh release create $TAG --repo Zaklamp02/StenoAI --verify-tag --title 'StenoAI $TAG' --notes-file <notes.md> \\"
+echo "(write the release notes to notes.md first)"
+echo "  gh release create $TAG --repo Zaklamp02/StenoAI --verify-tag --title 'StenoAI $TAG' --notes-file notes.md \\"
 echo "    '$DMG' '$DMG.sha256' '$ZIP' '$MANIFEST'"

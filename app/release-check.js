@@ -116,6 +116,9 @@ function summarizeReleases(releases, currentVersion, arch) {
     releaseUrl: latest.html_url,
     releaseName: latest.name || `Version ${latestVersion}`,
     downloadUrl: pickDmgAsset(latest.assets, arch),
+    // In-app updates read full releases only, so a pre-release is always
+    // announced for download.
+    prerelease: Boolean(latest.prerelease),
   };
 }
 
@@ -155,6 +158,7 @@ function releaseNoticeFor(result, state) {
     version: result.latestVersion,
     releaseUrl: result.releaseUrl,
     downloadUrl: result.downloadUrl,
+    prerelease: Boolean(result.prerelease),
   };
 }
 
