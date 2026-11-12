@@ -221,9 +221,31 @@ _ACTION_BOLD_OWNER = re.compile(r'^\*\*([^*\n]{1,80}?)(?::\*\*|\*\*:)\s+')
 _ACTION_BRACKET_OWNER = re.compile(r'^\[([^\[\]\n]{1,80})\]:\s+')
 _ACTION_PLACEHOLDER_OWNER = re.compile(
     r'^(?:unassigned|tbd|tba|unknown|n/?a|none|owner|name|nobody|someone|'
-    r'onbekend|niemand|nvt|n\.v\.t\.)\s*:\s+',
+    r'not specified|unspecified|not stated|not mentioned|unclear|'
+    r'action|task|todo|actie|taak|'
+    r'onbekend|niemand|nvt|n\.v\.t\.|niet gespecificeerd|niet vermeld|niet genoemd|onduidelijk|'
+    r'nicht angegeben|unbekannt|non spécifié|non précisé|inconnu|'
+    r'no especificado|desconocido)\s*:\s+',
     re.IGNORECASE,
 )
+# Owner and due written before the task instead of in it, as small models do:
+# "[Owner] (due D) - task", "Owner (due D): task", "[Owner] - task".
+_ACTION_OWNER_DUE_FIRST = re.compile(
+    r'^(?:\[([^\[\]\n]{1,80})\]|([^\s(\[:][^\s(:]*(?: [^\s(:]+){0,3}))\s*'
+    r'(\(\s*(?:due|deadline)\b[^)\n]*\))\s*[-–—:]\s+(\S.*)$',
+    re.IGNORECASE,
+)
+_ACTION_BRACKET_OWNER_DASH = re.compile(r'^\[([^\[\]\n]{1,80})\]\s+[-–—]\s+(\S.*)$')
+# A line that names only an owner, the task following on the next bullet:
+# "[You] (due D)", "Speaker 3", "Matthijs:".
+_ACTION_OWNER_ONLY = re.compile(
+    r'^(?:\[([^\[\]\n]{1,80})\]|(speaker \d+|you|jij|ik))\s*'
+    r'(?:\(due (\d{4}-\d{2}-\d{2})\))?\s*:?$'
+    r'|^([^\s:\[\]()][^\s:\[\]()]*(?: [^\s:\[\]()]+){0,3}):$',
+    re.IGNORECASE,
+)
+_NESTED_BULLET_LINE = re.compile(r'^\s+(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(\S.*)$')
+_ACTION_DUE_SUFFIX = re.compile(r'\s*\(due (\d{4}-\d{2}-\d{2})\)')
 _ACTION_DUE_ISO = re.compile(r'\(\s*(?:due|deadline|by)\s*:?\s*(\d{4}-\d{2}-\d{2})\s*\)', re.IGNORECASE)
 _ACTION_DUE_PLACEHOLDER = re.compile(
     r'\s*\(\s*(?:due|deadline)\s*:?\s*(?:yyyy-mm-dd|unknown|n/?a|none|null|tbd|tba|'
@@ -236,6 +258,12 @@ def _normalize_action_item(text: str) -> str:
     """One action item as ``Name: task (due YYYY-MM-DD)``, owner and due date
     optional; never adds either, only tidies what the model wrote."""
     tidy = _ACTION_BOLD_OWNER.sub(r'\1: ', text, count=1)
+    first = _ACTION_OWNER_DUE_FIRST.match(tidy)
+    if first:
+        owner = (first.group(1) or first.group(2)).strip()
+        tidy = f'{owner}: {first.group(4)} {first.group(3)}'
+    else:
+        tidy = _ACTION_BRACKET_OWNER_DASH.sub(r'\1: \2', tidy, count=1)
     tidy = _ACTION_BRACKET_OWNER.sub(r'\1: ', tidy, count=1)
     tidy = _ACTION_PLACEHOLDER_OWNER.sub('', tidy, count=1)
     tidy = _ACTION_DUE_PLACEHOLDER.sub('', tidy)
@@ -243,27 +271,107 @@ def _normalize_action_item(text: str) -> str:
     return tidy or text
 
 
-def _action_items_as_tasks(md_text: str) -> str:
+def _owner_only(text: str):
+    """``(owner, due)`` when an action item names only an owner — the task is
+    on the following bullet — else None. ``owner`` is None for a placeholder."""
+    m = _ACTION_OWNER_ONLY.match(text.strip())
+    if not m:
+        return None
+    owner = (m.group(1) or m.group(2) or m.group(4) or '').strip()
+    if _ACTION_PLACEHOLDER_OWNER.match(f'{owner}: '):
+        owner = None
+    return owner, m.group(3)
+
+
+def _with_owner(owner, due, task: str) -> str:
+    """Join an owner-only line with the task that followed it."""
+    text = f'{owner}: {task}' if owner else task
+    if due and '(due ' not in text:
+        text = f'{text} (due {due})'
+    return _normalize_action_item(text)
+
+
+def _meeting_date_of(meeting_context):
+    """The meeting date (YYYY-MM-DD) of a MeetingContext, or None."""
+    return getattr(meeting_context, 'meeting_date', None) if meeting_context else None
+
+
+def _drop_meeting_date_dues(lines: list, meeting_date) -> list:
+    """Drop due dates that only echo the meeting date. A model that stamps
+    the meeting date on several items, and no other date on any, is filling
+    the slot rather than reporting a deadline; one such item is left alone,
+    as a task can really be due the same day."""
+    if not meeting_date:
+        return lines
+    dues = [m.group(1) for line in lines for m in [_ACTION_DUE_SUFFIX.search(line)] if m]
+    if len(dues) < 2 or any(d != meeting_date for d in dues):
+        return lines
+    return [_ACTION_DUE_SUFFIX.sub('', line) for line in lines]
+
+
+def _action_items_as_tasks(md_text: str, meeting_date: str = None) -> str:
     """Write top-level ``## Action Items`` bullets as Markdown tasks (``- [ ]``).
 
     Task-list syntax works in Obsidian, GitHub and most Markdown editors, so
     exported notes can be ticked off where they land. Items already written
-    as tasks keep their state; other sections and nested lines are untouched.
-    Owners and due dates are tidied to ``Name: task (due YYYY-MM-DD)``.
+    as tasks keep their state; other sections are untouched.
+    Owners and due dates are tidied to ``Name: task (due YYYY-MM-DD)``. A
+    bullet naming only an owner is joined with the task that follows it (the
+    next bullet, or each bullet nested under it), and due dates that merely
+    repeat ``meeting_date`` on every item are dropped.
     """
     out = []
+    actions = []          # indices in ``out`` of this note's action-item lines
     in_actions = False
+    pending = None        # [state, owner, due, used, text, position] of an owner-only bullet
+
+    def emit(state, text, at=None):
+        at = len(out) if at is None else at
+        actions.append(at)
+        out.insert(at, f'- [{state}] {text}')
+
+    def settle():
+        # An owner-only bullet that no task followed is kept as written.
+        nonlocal pending
+        if pending and not pending[3]:
+            emit(pending[0], pending[4], at=pending[5])
+        pending = None
+
     for line in md_text.split('\n'):
         if line.startswith('## '):
+            settle()
             in_actions = line.strip().startswith('## Action Items')
-        elif in_actions:
-            task = _ACTION_TASK_LINE.match(line)
-            match = None if task else _ACTION_ITEM_LINE.match(line)
-            if task:
-                line = f'- [{task.group(1)}] {_normalize_action_item(task.group(2))}'
-            elif match:
-                line = f'- [ ] {_normalize_action_item(match.group(1))}'
-        out.append(line)
+            out.append(line)
+            continue
+        if not in_actions or not line.strip():
+            out.append(line)
+            continue
+        nested = _NESTED_BULLET_LINE.match(line) if pending else None
+        if nested:
+            pending[3] = True
+            emit(pending[0], _with_owner(pending[1], pending[2], nested.group(1)))
+            continue
+        task = _ACTION_TASK_LINE.match(line)
+        match = None if task else _ACTION_ITEM_LINE.match(line)
+        if not (task or match):
+            settle()
+            out.append(line)
+            continue
+        state = task.group(1) if task else ' '
+        text = _normalize_action_item(task.group(2) if task else match.group(1))
+        only = _owner_only(text)
+        if only:
+            settle()
+            pending = [state, only[0], only[1], False, text, len(out)]
+            continue
+        if pending and not pending[3]:
+            text = _with_owner(pending[1], pending[2], text)
+        pending = None
+        emit(state, text)
+    settle()
+    kept = _drop_meeting_date_dues([out[i] for i in actions], meeting_date)
+    for i, line in zip(actions, kept):
+        out[i] = line
     return '\n'.join(out)
 
 
@@ -978,7 +1086,8 @@ Summary output language: {config.get_language_name(output_language)}
             err_msg = safe_error_text(e)
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             raise
-        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '',
+                                             _meeting_date_of(meeting_context))
 
         print("STREAM_COMPLETE", flush=True)
 
@@ -1662,7 +1771,8 @@ def process_streaming(audio_file, name, notes, live_transcript, append_to):
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
-        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '',
+                                             _meeting_date_of(meeting_context))
 
         print("STREAM_COMPLETE", flush=True)
 
@@ -3713,7 +3823,8 @@ def reprocess(summary_file, regenerate_title, retranscribe):
             print(f"STREAM_ERROR:{err_msg}", flush=True)
             sys.exit(1)
 
-        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '')
+        streamed_md = _action_items_as_tasks(_apply_chinese_variant(''.join(streamed_chunks)) or '',
+                                             _meeting_date_of(meeting_context))
 
         # Regenerate the title when explicitly forced OR when the note still has
         # an auto/placeholder name. The latter is the common case now that the

@@ -139,13 +139,14 @@ def _action_item_rules(meeting_date: Optional[str] = None) -> str:
     if meeting_date:
         dates = (
             f"Resolve a relative deadline (\"Friday\", \"next week Tuesday\", \"end of the month\") "
-            f"against the meeting date {meeting_date}. "
+            f"against the meeting date {meeting_date}. Never use the meeting date itself as "
+            "a deadline unless the task is explicitly due that same day. "
         )
     else:
         dates = "Only use a deadline that is stated as a full calendar date. "
     return (
         "ACTION ITEM FORMAT: write each action item on one line as "
-        "\"- Name: task (due YYYY-MM-DD)\". "
+        "\"- Name: task (due YYYY-MM-DD)\", with the owner and the task on the same line. "
         "Add \"Name: \" only when the transcript makes clear who will do it (someone "
         "volunteers, or is asked and agrees); use the name as spoken or as listed in the "
         "meeting context, and for [You] the recorder's name when it is known, otherwise "
@@ -156,6 +157,59 @@ def _action_item_rules(meeting_date: Optional[str] = None) -> str:
         "When no owner or deadline is stated, write just \"- task\". Never guess an owner "
         "or a date, and never write placeholders such as Unassigned, TBD or Unknown. "
         "Keep the word \"due\" and the YYYY-MM-DD format whatever the output language."
+    )
+
+
+# The note's writing rules and section layout, shared by the single-pass
+# summary prompt and the reduce step of a chunked one. The four ``##`` headers
+# are fixed: simple_recorder._parse_streamed_markdown, app/note-sections.js
+# and the exports all match on them. Decisions and open questions therefore
+# live inside Key Points as labelled bullets instead of new sections.
+_SUMMARY_WRITING_RULES = (
+    "WRITING RULES\n"
+    "- Write for a colleague who missed the meeting and has to act on it. Be concrete: "
+    "say who said, proposed or agreed what, and keep the numbers, dates, amounts, "
+    "systems, products and organisations that came up.\n"
+    "- Refer to people by name when the transcript, the user notes or the meeting "
+    "context give one; for [You] use the recorder's name when it is known. Use a "
+    "label such as \"Speaker 3\" only when no name is known.\n"
+    "- The transcript comes from speech recognition and contains errors. Where a word "
+    "is clearly a mis-hearing of a name or term from the meeting context or the user "
+    "notes, use the correct spelling. Leave out fragments you cannot make sense of "
+    "rather than reporting them.\n"
+    "- Stay faithful to what was said: never add facts, owners or dates that were not "
+    "stated. Being specific about what was said is not inferring.\n"
+    "- Skip small talk and logistics unless they lead to a decision or an action.\n"
+    "- Do not narrate the meeting (\"X was discussed\", \"the participants talked "
+    "about\"); state what was said, decided or found out."
+)
+
+
+def _summary_sections_spec(meeting_date: Optional[str] = None) -> str:
+    """The markdown skeleton the model fills, plus the action-item rules."""
+    return (
+        "## Summary\n"
+        "2-4 sentences, written directly: what the meeting was for, the main outcomes "
+        "and decisions, and what happens next. Do not refer to \"the transcript\", "
+        "\"the meeting\" or \"the recording\", and do not open with phrases like "
+        "\"The transcript discusses\" or \"In this meeting\".\n\n"
+        "## Key Topics\n"
+        "### [Specific topic title]\n"
+        "What was said about this topic: the facts, figures and positions, who holds "
+        "them, and where it ended up.\n\n"
+        "(One ### per substantive topic, in the order discussed; a short meeting may "
+        "have only one or two.)\n\n"
+        "## Key Points\n"
+        "- Decision: [what was decided or agreed, and by whom when clear]\n"
+        "- Open question: [what is still unresolved or waiting for an answer]\n"
+        "- [Another fact a reader must not miss]\n\n"
+        "(Decisions first, then open questions, then other key facts. Write the "
+        "\"Decision:\" and \"Open question:\" labels in the output language, and leave "
+        "them out when there were none. Do not repeat sentences from Key Topics.)\n\n"
+        "## Action Items\n"
+        "- Name: action (due YYYY-MM-DD)\n"
+        "- action\n\n"
+        f"{_action_item_rules(meeting_date)}"
     )
 
 
@@ -415,7 +469,8 @@ class OllamaSummarizer:
         return (
             f"This is part {chunk_num} of {total_chunks} of a meeting transcript.\n"
             f"{context}"
-            "Extract only what is explicitly stated. Be concise.\n\n"
+            "Extract only what is explicitly stated. Be concise, but keep who said what "
+            "and the names, numbers and dates.\n\n"
             "KEY POINTS\n- ...\n\n"
             "DECISIONS\n- ...\n\n"
             "ACTION ITEMS\n- Name: action (due YYYY-MM-DD)\n"
@@ -548,22 +603,12 @@ class OllamaSummarizer:
             "Merge and deduplicate into a single coherent summary. "
             "Do not refer to \"the extracts\" or \"the segments\" — "
             "write as if summarising the original meeting directly.\n"
+            "Fold the extracts' DECISIONS and OPEN QUESTIONS into Key Points as labelled "
+            "bullets, and keep every action item with its owner and due date.\n"
             "Output ONLY the markdown below with no preamble. Start directly with ## Summary.\n\n"
-            "## Summary\n"
-            "A 1-3 sentence overview of the main topics and outcomes, written directly. "
-            "Do not open with phrases like \"The meeting discussed\" or \"This meeting\".\n\n"
-            "## Key Topics\n"
-            "### [Topic title]\n"
-            "Brief analysis of what was discussed about this topic.\n\n"
-            "(Repeat for each major topic)\n\n"
-            "## Key Points\n"
-            "- [Key point 1]\n"
-            "- [Key point 2]\n\n"
-            "## Action Items\n"
-            "- Name: action (due YYYY-MM-DD)\n"
-            "- action\n\n"
-            f"{_action_item_rules(meeting_context.meeting_date if meeting_context else None)}\n\n"
-            f"Only include information explicitly discussed. Do not infer or assume.{language_instruction}\n\n"
+            f"{_SUMMARY_WRITING_RULES}\n\n"
+            f"{_summary_sections_spec(meeting_context.meeting_date if meeting_context else None)}"
+            f"{language_instruction}\n\n"
             f"EXTRACTS:\n{combined}"
         )
 
@@ -1517,30 +1562,13 @@ Return ONLY the response in this exact JSON format:
             notes_context = f"USER NOTES (written during the meeting):\n{notes.strip()}\n\n"
 
         context_block = self._meeting_context_block(meeting_context)
-        action_rules = _action_item_rules(meeting_context.meeting_date if meeting_context else None)
+        sections = _summary_sections_spec(meeting_context.meeting_date if meeting_context else None)
 
         return f"""{context_block}{diarisation_note}{notes_context}Summarise this meeting transcript as markdown. Output ONLY the markdown below with no preamble, commentary, or explanation. Start directly with ## Summary.
 
-## Summary
-A 1-3 sentence overview of the main topics and outcomes, written directly. Do not refer to "the transcript", "the meeting", or "the recording", and do not open with phrases like "The transcript discusses" or "In this meeting".
+{_SUMMARY_WRITING_RULES}
 
-## Key Topics
-### [Topic title]
-Brief analysis of what was discussed about this topic.
-
-(Repeat for each major topic)
-
-## Key Points
-- [Key point 1]
-- [Key point 2]
-
-## Action Items
-- Name: action (due YYYY-MM-DD)
-- action
-
-{action_rules}
-
-Only include information explicitly discussed. Do not infer or assume.{language_instruction}
+{sections}{language_instruction}
 
 TRANSCRIPT:
 {transcript}"""
