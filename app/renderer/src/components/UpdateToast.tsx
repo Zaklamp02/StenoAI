@@ -5,35 +5,73 @@ import type { RecordingStatus } from '@/hooks/useRecording';
 
 const RELEASE_NOTICE_COPY = {
   available: (version: string) => `Version ${version} available`,
+  downloading: (version: string) => `Downloading version ${version}`,
   download: 'Download',
   dismiss: 'Dismiss new version notice',
 };
 
 /**
- * Top-right pill for updates, in two forms:
+ * Top-right pill for updates:
  *
  * - electron-updater finished downloading a release in the background:
  *   "Restart" calls the main-side `install-update` IPC (`quitAndInstall`).
  *   Dismiss with × hides it for the rest of the session.
- * - The background release check found a newer release on GitHub (the custom
- *   build has no in-app installer): "Download" opens the DMG in the browser.
- *   Dismissing remembers that version, so each release is announced once.
- *   Hidden while recording or processing.
+ * - The background release check found a newer release on GitHub. On an
+ *   install that updates itself, electron-updater is fetching it and the pill
+ *   shows the progress. Otherwise, or when that download failed, "Download"
+ *   opens the DMG in the browser. Dismissing remembers the version, so each
+ *   release is announced once. Hidden while recording or processing.
  */
 export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingStatus }) {
   const [pendingVersion, setPendingVersion] = React.useState<string | null>(null);
   const [dismissed, setDismissed] = React.useState(false);
   const [release, setRelease] = React.useState<ReleaseNotice | null>(null);
+  // Non-null while electron-updater is fetching a release.
+  const [downloadPercent, setDownloadPercent] = React.useState<number | null>(null);
   // A mount-time read still in flight must not bring back a dismissed notice.
   const dismissedReleaseRef = React.useRef<string | null>(null);
+  // Set by any live updater event, so a slower mount-time status read cannot
+  // reopen a download that has since finished or failed.
+  const updaterEventSeenRef = React.useRef(false);
 
   React.useEffect(() => {
-    return ipc().on.updateDownloaded((evt) => {
+    const offAvailable = ipc().on.updateAvailable(() => {
+      updaterEventSeenRef.current = true;
+      setDownloadPercent((p) => p ?? 0);
+    });
+    const offProgress = ipc().on.updateDownloadProgress((evt) => {
+      updaterEventSeenRef.current = true;
+      setDownloadPercent(evt.percent);
+    });
+    const offDownloaded = ipc().on.updateDownloaded((evt) => {
+      updaterEventSeenRef.current = true;
+      setDownloadPercent(null);
       setPendingVersion(evt.version);
       // A newer version arriving overrides any prior dismiss for this
       // session — the user dismissed v0.2.14, but v0.2.15 just landed.
       setDismissed(false);
     });
+    // A failed download falls back to the "Download" pill.
+    const offError = ipc().on.updateError(() => {
+      updaterEventSeenRef.current = true;
+      setDownloadPercent(null);
+    });
+    // The window can open after the download started or finished.
+    let cancelled = false;
+    void ipc()
+      .updates.getStatus()
+      .then((status) => {
+        if (cancelled || !status.success || updaterEventSeenRef.current) return;
+        if (status.downloadedVersion) setPendingVersion(status.downloadedVersion);
+        else if (status.downloadPercent !== null) setDownloadPercent(status.downloadPercent);
+      });
+    return () => {
+      cancelled = true;
+      offAvailable();
+      offProgress();
+      offDownloaded();
+      offError();
+    };
   }, []);
 
   React.useEffect(() => {
@@ -74,6 +112,19 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
     void ipc().updates.dismissReleaseNotice(release.version);
     setRelease(null);
   };
+
+  if (downloadPercent !== null) {
+    return (
+      <ToastPill>
+        <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
+        <span className="tabular-nums">
+          {RELEASE_NOTICE_COPY.downloading(release.version)}
+          <span style={{ color: 'var(--fg-2)' }}>{` · ${downloadPercent}%`}</span>
+        </span>
+        <DismissButton label={RELEASE_NOTICE_COPY.dismiss} onClick={dismissRelease} />
+      </ToastPill>
+    );
+  }
 
   return (
     <ToastPill>

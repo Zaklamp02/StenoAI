@@ -7,6 +7,11 @@
 # Developer ID yet), so testers confirm it once in System Settings → Privacy &
 # Security → Open Anyway. Output: .local/release/StenoAI-<tag>-arm64.dmg plus a
 # .sha256 file. Upload both to the GitHub Release for that tag; never commit them.
+#
+# A vYYYY.M.N tag also gets the in-app update files: StenoAI-<tag>-arm64-mac.zip
+# and latest-mac.yml. Installed apps signed with the same certificate download
+# the zip from the newest full (not pre-) release and install it on restart, so
+# publish those releases as full releases with all four files attached.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAG="${1:?usage: custom/release.sh <tag>}"
@@ -20,11 +25,13 @@ if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     || { echo "Could not read app/package.json at $TAG." >&2; exit 1; }
   [ "$TAGGED_VERSION" = "${TAG#v}" ] \
     || { echo "app/package.json at $TAG says $TAGGED_VERSION; bump it to ${TAG#v} and re-tag." >&2; exit 1; }
+  UPDATE_VERSION="$TAGGED_VERSION"
 elif [[ "$TAG" =~ ^v[0-9] ]]; then
   echo "$TAG looks like a version but is not vYYYY.M.N; installed apps would ignore it." >&2; exit 1
 else
   echo "Note: $TAG is not a vYYYY.M.N tag, so installed apps will not offer it as an update." >&2
 fi
+UPDATE_VERSION="${UPDATE_VERSION:-}"
 IDENTITY="${STENOAI_SIGNING_IDENTITY:-StenoAI Local Signing}"
 PYTHON311="${PYTHON311:-/opt/homebrew/bin/python3.11}"
 # A Python installed under the home folder (Anaconda, pyenv) writes that path,
@@ -75,3 +82,19 @@ codesign --verify "$DMG"
 (cd "$OUT" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
 echo "==> $DMG ($(du -h "$DMG" | cut -f1))"
 cat "$DMG.sha256"
+
+[ -n "$UPDATE_VERSION" ] || exit 0
+
+# In-app update files. ditto keeps the signature intact and puts StenoAI.app at
+# the top of the zip, which is what ShipIt expects.
+echo "==> Packaging in-app update"
+ZIP="$OUT/StenoAI-$TAG-arm64-mac.zip"
+MANIFEST="$OUT/latest-mac.yml"
+rm -f "$ZIP" "$MANIFEST"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+node "$ROOT/app/update-manifest.js" "$ZIP" "$UPDATE_VERSION" "$MANIFEST"
+echo "==> $ZIP ($(du -h "$ZIP" | cut -f1))"
+echo
+echo "Publish as a full release (not a pre-release), so installed apps update to it:"
+echo "  gh release create $TAG --repo Zaklamp02/StenoAI --verify-tag --title 'StenoAI $TAG' --notes-file <notes.md> \\"
+echo "    '$DMG' '$DMG.sha256' '$ZIP' '$MANIFEST'"

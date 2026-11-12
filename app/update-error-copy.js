@@ -214,10 +214,14 @@ function describeUpdateError(
  */
 const MISSING_FEED = /latest(-[a-z0-9]+)*\.yml/i;
 const MISSING_FEED_CAUSE = /(404|cannot find)/i;
+// The GitHub feed reads the repository's latest full (non-pre-) release. A
+// repository whose releases are all pre-releases has none, which is the same
+// "nothing published for the updater yet" state, not a fault.
+const NO_PRODUCTION_RELEASE = /ERR_UPDATER_LATEST_VERSION_NOT_FOUND|please ensure a production release exists/i;
 
 function isMissingUpdateFeedError(message) {
   const msg = typeof message === 'string' ? message : String(message ?? '');
-  return MISSING_FEED.test(msg) && MISSING_FEED_CAUSE.test(msg);
+  return (MISSING_FEED.test(msg) && MISSING_FEED_CAUSE.test(msg)) || NO_PRODUCTION_RELEASE.test(msg);
 }
 
 module.exports = {

@@ -212,6 +212,7 @@ const { findMeetingUrl, teamsAppUrl } = require('./meeting-links');
 const { resolvePosthogConfig } = require('./telemetry-config');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
+const updateSigning = require('./update-signing');
 
 // E2E test-harness hooks. Set via env vars; production sees none of these.
 //   STENOAI_USER_DATA_DIR — per-test temp userData dir (must be set before app.whenReady)
@@ -7168,6 +7169,14 @@ let pendingUpdateErrorSticky = false;
 // error that fires in that window is reported as a failed install rather than
 // as a failed check.
 let installingUpdate = false;
+// True once setupAutoUpdater has confirmed this install can take releases in
+// place (update-signing.js) and wired electron-updater to this repository.
+// While false, a new release is announced with the "Download from GitHub"
+// notice instead.
+let autoUpdateEnabled = false;
+// The version electron-updater is fetching, so the pill and a remounted About
+// tab can say which one ('update-available' fires once per cycle).
+let pendingDownloadVersion = null;
 
 // ── Idle auto-install ──
 // True once an update has finished downloading and is staged for install.
@@ -7312,18 +7321,14 @@ ipcMain.handle('cancel-processing', async (_event, summaryFile) => {
   return { success: true };
 });
 
-// Custom build (see custom/README.md): it is not signed by Steno Labs, so an
-// official update would replace it with the stock app. New releases are pulled
-// in with custom/update.sh instead; the read-only "latest version" check stays.
+// Custom build (see custom/README.md): not signed by Steno Labs, so it never
+// reads the official update feed. It updates from this repository's releases
+// instead, and only when it carries the release signature (update-signing.js).
 const IS_CUSTOM_BUILD = true;
 
 function setupAutoUpdater() {
   if (IS_E2E) {
     sendDebugLog('Auto-updater: skipped (E2E mode)');
-    return;
-  }
-  if (IS_CUSTOM_BUILD) {
-    sendDebugLog('Auto-updater: skipped (custom build; update with custom/update.sh)');
     return;
   }
   // Don't check for updates in dev mode
@@ -7340,6 +7345,33 @@ function setupAutoUpdater() {
     sendDebugLog(`Auto-updater: skipped — macOS ${currentSystemVersionSafe()} is below the ${MIN_MACOS_FOR_AUTOUPDATE} floor; this build won't launch here (#432).`);
     return;
   }
+  // macOS installs a release only over an app signed with the same
+  // certificate. Any other build keeps the "Download from GitHub" notice
+  // rather than downloading releases it can never install.
+  updateSigning
+    .checkUpdateSigning()
+    .then(({ eligible, reason }) => {
+      if (!eligible) {
+        sendDebugLog(`Auto-updater: skipped (${reason}); new releases are announced for download instead.`);
+        return;
+      }
+      startAutoUpdater();
+    })
+    .catch((error) => sendDebugLog(`Auto-updater: signature check failed: ${error.message}`));
+}
+
+function startAutoUpdater() {
+  // This repository's releases, not the stock app's feed in package.json's
+  // publish config. Only full releases: tester pre-releases carry no
+  // update manifest (see custom/README.md).
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: releaseCheck.RELEASE_OWNER,
+    repo: releaseCheck.RELEASE_REPO,
+  });
+  autoUpdater.allowPrerelease = false;
+  autoUpdateEnabled = true;
+  sendDebugLog(`Auto-updater: enabled (${releaseCheck.RELEASE_OWNER}/${releaseCheck.RELEASE_REPO} releases)`);
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -7376,6 +7408,7 @@ function setupAutoUpdater() {
     // Matches the renderer's own `setDownloadPercent((p) => p ?? 0)` — marks
     // a download as started before the first real progress tick arrives.
     if (pendingDownloadPercent === null) pendingDownloadPercent = 0;
+    pendingDownloadVersion = info.version;
     // Only the non-sticky ones. This event says a version was FOUND, i.e. the
     // feed was readable — it does not say a single byte was written, so it
     // cannot disprove a full disk or a permission problem. Those clear one
@@ -7421,12 +7454,15 @@ function setupAutoUpdater() {
   autoUpdater.on('update-downloaded', (info) => {
     sendDebugLog(`Auto-updater: v${info.version} ready to install`);
     pendingDownloadPercent = null;
+    pendingDownloadVersion = null;
     pendingUpdateError = null;
     pendingUpdateErrorSticky = false;
     pendingUpdateVersion = info.version;
     if (mainWindow) {
       mainWindow.webContents.send('update-downloaded', { version: info.version });
     }
+    notifyUpdateReady(info.version).catch((error) =>
+      sendDebugLog(`Could not show the update-ready notification: ${error.message}`));
     // The notification above is unchanged. Additionally, mark the update as
     // staged and start the idle checker so it can install + relaunch on its
     // own when the machine is idle and nothing is in flight. Try once right
@@ -7459,6 +7495,7 @@ function setupAutoUpdater() {
     // download is still running forever, and About would show a stuck
     // progress bar with no way to tell it failed.
     pendingDownloadPercent = null;
+    pendingDownloadVersion = null;
     // Until a release carrying this platform's update feed is published
     // (latest.yml on Windows, latest-linux*.yml on Linux — which ships none
     // at all today), the updater 404s on the feed file. That's an expected
@@ -7498,6 +7535,11 @@ function setupAutoUpdater() {
 }
 
 ipcMain.on('install-update', () => {
+  // Under E2E the pill's Restart is asserted, not executed (update-notice.t1).
+  if (IS_E2E) {
+    global.__installUpdateRequested = true;
+    return;
+  }
   // Defense in depth for #432: today the renderer only shows "Restart to
   // Update" once a real 'update-downloaded' fired (impossible under the floor,
   // since setupAutoUpdater is skipped), so this is unreachable on an under-floor
@@ -11246,7 +11288,7 @@ ipcMain.handle('check-for-updates', async () => {
   // tag and waiting for the next scheduled interval. Same guards as
   // setupAutoUpdater(): no-op (and network-free) in e2e/dev, and never on a
   // Mac below the launch floor, which must not download a build it can't run (#432).
-  if (!IS_E2E && !IS_CUSTOM_BUILD && app.isPackaged && osEligible) {
+  if (!IS_E2E && autoUpdateEnabled && app.isPackaged && osEligible) {
     autoUpdater.checkForUpdates().catch(() => {});
   }
   // A check that just succeeded and found nothing settles an earlier FAILED
@@ -11269,11 +11311,15 @@ ipcMain.handle('check-for-updates', async () => {
 });
 
 // ── New-release notice ──────────────────────────────────────────────────────
-// Updates are installed by downloading the DMG from GitHub (the custom build
-// has no in-app installer), so a background check tells the user when a newer
-// release is out: a pill in the window, or a notification while the window is
-// hidden. Each version is announced once; release-notice.json remembers which
-// were dismissed or notified. Never while recording or processing.
+// A background check tells the user when a newer release is out: a pill in the
+// window, or a notification while the window is hidden. Each version is
+// announced once; release-notice.json remembers which were dismissed or
+// notified. Never while recording or processing.
+//
+// An install that updates itself (autoUpdateEnabled) fetches the release in
+// the background, and the pill follows it: downloading, then "Restart". Its
+// notification waits for the download (notifyUpdateReady). Any other install,
+// or one whose updater failed, gets "Download", which opens the DMG.
 let releaseNotice = null;
 let releaseNotifiedVersion = null;
 
@@ -11292,6 +11338,14 @@ async function runReleaseCheck() {
   if (!releaseNotice) return;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('release-available', releaseNotice);
+  }
+  if (autoUpdateEnabled && !pendingUpdateError) {
+    // Start fetching now rather than at the updater's next 30-minute check;
+    // the pill and notification follow the download from here.
+    if (!pendingUpdateVersion && pendingDownloadPercent === null) {
+      autoUpdater.checkForUpdates().catch(() => {});
+    }
+    return;
   }
   const windowShown =
     mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
@@ -11316,6 +11370,43 @@ async function runReleaseCheck() {
   releaseNotifiedVersion = notice.version;
   try {
     releaseCheck.updateNoticeState(dir, { notifiedVersion: notice.version });
+  } catch (error) {
+    sendDebugLog(`Could not save release notice state: ${error.message}`);
+  }
+}
+
+// The update is downloaded and installs on restart (or when idle, see
+// maybeAutoInstallWhenIdle). Said once per version, only while the window is
+// hidden: a shown window already has the pill.
+async function notifyUpdateReady(version) {
+  const shown =
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
+  if (shown || releaseNotifiedVersion === version) return;
+  if (!(await notificationsEnabled()) || !Notification.isSupported()) return;
+  const dir = getUserDataDir();
+  const state = releaseCheck.readNoticeState(dir);
+  const normalized = releaseCheck.normalizeVersion(version);
+  if (state.dismissedVersion === normalized || state.notifiedVersion === normalized) return;
+  const notif = new Notification({
+    title: `StenoAI ${version} is ready`,
+    body: 'Restart StenoAI to finish updating.',
+    actions: [{ type: 'button', text: 'Restart' }],
+  });
+  notif.on('action', () => {
+    if (isBusyForReleaseNotice()) {
+      exposeMainWindow();
+      return;
+    }
+    isQuitting = true;
+    installingUpdate = true;
+    autoUpdater.quitAndInstall(false, true);
+  });
+  notif.on('click', () => exposeMainWindow());
+  trackNotificationLifecycle(notif, 'update_ready');
+  notif.show();
+  releaseNotifiedVersion = version;
+  try {
+    releaseCheck.updateNoticeState(dir, { notifiedVersion: normalized || version });
   } catch (error) {
     sendDebugLog(`Could not save release notice state: ${error.message}`);
   }
@@ -11354,6 +11445,7 @@ ipcMain.handle('get-update-status', async () => {
     success: true,
     downloadedVersion: pendingUpdateVersion,
     downloadPercent: pendingDownloadPercent,
+    downloadingVersion: pendingDownloadPercent === null ? null : pendingDownloadVersion,
     downloadError: pendingUpdateError,
   };
 });

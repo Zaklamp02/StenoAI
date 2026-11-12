@@ -6,7 +6,9 @@ const path = require('path');
 // This build's releases, not the original StenoAI project's: its DMG would
 // install the stock app over this one. The list (not /releases/latest) is read
 // because tester releases are published as pre-releases, which /latest skips.
-const RELEASES_URL = 'https://api.github.com/repos/Zaklamp02/StenoAI/releases?per_page=30';
+const RELEASE_OWNER = 'Zaklamp02';
+const RELEASE_REPO = 'StenoAI';
+const RELEASES_URL = `https://api.github.com/repos/${RELEASE_OWNER}/${RELEASE_REPO}/releases?per_page=30`;
 
 // First check shortly after launch, then a few times a day so a Mac that stays
 // open for weeks still hears about a release.
@@ -121,6 +123,8 @@ function releaseNoticeFor(result, state) {
 }
 
 module.exports = {
+  RELEASE_OWNER,
+  RELEASE_REPO,
   RELEASES_URL,
   FIRST_CHECK_DELAY_MS,
   CHECK_INTERVAL_MS,

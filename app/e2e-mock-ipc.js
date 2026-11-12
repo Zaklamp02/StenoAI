@@ -1526,10 +1526,12 @@ function install({ ipcMain }) {
         }
       : null;
 
-  // Only the FIRST get-update-status is delayed, so the About tab's mount-time
+  // Only the About tab's FIRST get-update-status is delayed, so its mount-time
   // request is still in flight when the check that settles the error completes,
   // and its stale reply lands last. Delaying every call would let the check's
   // own re-read arrive after it and paper over the bug being guarded against.
+  // The update pill reads the same status when the app opens, so calls from
+  // any other page do not count.
   let slowUpdateStatusCallsLeft = process.env.STENOAI_E2E_SLOW_UPDATE_STATUS === '1' ? 1 : 0;
 
   const DEFAULTS = {
@@ -1604,13 +1606,14 @@ function install({ ipcMain }) {
     // so the About tab's mount-time rehydration (settings-about.t1) can assert
     // the failure is restored on navigation, not just from the live one-shot
     // 'update-error' event.
-    'get-update-status': async () => {
+    'get-update-status': async (event) => {
       // Answer with the state as of the REQUEST, not as of the reply. That is
       // what main.js does (it reads pendingUpdateError when the handler runs),
       // and it is what makes STENOAI_E2E_SLOW_UPDATE_STATUS a real race rather
       // than a sleep.
       const snapshot = seededUpdateError;
-      if (slowUpdateStatusCallsLeft > 0) {
+      const fromAboutTab = String(event?.sender?.getURL?.() ?? '').includes('tab=about');
+      if (slowUpdateStatusCallsLeft > 0 && fromAboutTab) {
         slowUpdateStatusCallsLeft -= 1;
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }

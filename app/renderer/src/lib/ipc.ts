@@ -899,6 +899,8 @@ export type CheckForUpdatesResponse = Result<{
 export type GetUpdateStatusResponse = Result<{
   downloadedVersion: string | null;
   downloadPercent: number | null;
+  /** The version being downloaded; null unless downloadPercent is. */
+  downloadingVersion?: string | null;
   // The last surfaced auto-updater error, so a freshly-mounted About tab can
   // rehydrate a failed background update instead of only reacting to the
   // one-shot 'update-error' event. Null when the last cycle didn't fail.
