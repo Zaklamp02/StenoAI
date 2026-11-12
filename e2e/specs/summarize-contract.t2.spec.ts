@@ -156,3 +156,68 @@ test('@contract reprocess fires the summary-complete event (Windows CRLF complet
     await ollama.close();
   }
 });
+
+// What a small local model (gemma4 e2b) really wrote: decisions as labelled
+// Key Points bullets, and owners on their own bullet with the task on the next
+// line or nested under it. The backend must keep the decision and join each
+// owner with its task before the note is saved.
+const SMALL_MODEL_REPLY = [
+  '## Summary',
+  'Alice and Bob agreed to ship on Friday.',
+  '',
+  '## Key Points',
+  '- Decision: ship on Friday',
+  '- Open question: who signs off on the budget',
+  '',
+  '## Action Items',
+  '- [Alice]',
+  '  - Finalize the release',
+  '- Speaker 2',
+  '- Confirm the budget',
+  '- [Not specified] - Book the demo room',
+  '',
+].join('\n');
+
+test('@contract the summary prompt asks for a concrete note and owner-only action items are repaired', async ({
+  launchApp,
+  userDataDir,
+}) => {
+  writeUserConfig(userDataDir, { ai_provider: 'local' });
+  const summaryFile = writeMeetingSummary(userDataDir, 'repair', {
+    name: 'Repair Meeting',
+    summary: 'stale',
+    transcript: TRANSCRIPT,
+  });
+
+  const ollama = await startMockOllama({ chatReply: SMALL_MODEL_REPLY });
+  try {
+    const { page } = await launchApp();
+    const res = await page.evaluate(
+      (f) => (window as StenoWindow).stenoai.meetings.reprocess(f, false, 'Repair Meeting'),
+      summaryFile,
+    );
+    expect(res.success).toBe(true);
+    await expect
+      .poll(() => readSummary(summaryFile).summary, { timeout: 30_000 })
+      .toBe('Alice and Bob agreed to ship on Friday.');
+
+    const updated = readSummary(summaryFile);
+    expect(updated.key_points).toEqual([
+      'Decision: ship on Friday',
+      'Open question: who signs off on the budget',
+    ]);
+    expect(updated.action_items).toEqual([
+      'Alice: Finalize the release',
+      'Speaker 2: Confirm the budget',
+      'Book the demo room',
+    ]);
+
+    const prompt = ollama.lastChatPrompt();
+    expect(prompt).toContain('WRITING RULES');
+    expect(prompt).toContain('- Decision:');
+    expect(prompt).toContain('- Open question:');
+    expect(prompt).toContain('## Action Items');
+  } finally {
+    await ollama.close();
+  }
+});
