@@ -88,7 +88,7 @@ const { registerAppleCalendar } = require('./apple-calendar');
 const { registerObsidianIpc } = require('./obsidian-ipc');
 const { isSafeToAutoInstall } = require('./update-idle-gate');
 const releaseCheck = require('./release-check');
-const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError } = require('./update-error-copy');
+const { describeUpdateError, updateErrorPhase, isMissingUpdateFeedError, PHASE_DOWNLOAD } = require('./update-error-copy');
 const { isOSUpdateEligible, MIN_MACOS_FOR_AUTOUPDATE } = require('./update-os-gate');
 const processingLog = require('./processing-log');
 const { isMeetingApp, allowsDeviceLevelFallback, isMacos14Plus } = require('./meeting-detect');
@@ -7568,6 +7568,13 @@ function startAutoUpdater() {
     // is not spelled out inline any more.
     if (isMissingUpdateFeedError(msg)) {
       updateFeedMissing = true;
+      // Quiet for a background check, but a download someone is watching
+      // must end visibly (the pill falls back to Download).
+      if (phase === PHASE_DOWNLOAD && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-error', {
+          message: 'This version cannot be installed in the app yet. Download it from GitHub instead.',
+        });
+      }
       sendDebugLog('Auto-updater: no update feed published for this release yet — skipping.');
       return;
     }
@@ -9246,7 +9253,14 @@ ipcMain.handle('pull-parakeet-model', async (event, modelId) => {
 // behavior are identical to the inline handlers this replaces. Settings-shaped
 // handlers coupled to another domain (telemetry, models, mic-monitor, calendar,
 // tray) deliberately stay in main.js until that domain's own extraction.
-registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog });
+registerSettingsIpc({
+  ipcMain,
+  runPythonScript,
+  sendDebugLog,
+  onAutoInstallWhenIdleChanged: () => {
+    if (autoUpdateEnabled) applyUpdateMode();
+  },
+});
 registerPersonSampleIpc({ ipcMain, runPythonScript });
 // Speaker-review feedback is a second opt-in on top of usage analytics
 // (Settings -> Advanced). Read from config.json at send time so a change in
@@ -11520,7 +11534,15 @@ ipcMain.handle('download-update', async () => {
   if (!autoUpdateEnabled || !autoUpdateOSEligible()) {
     return { success: false, error: 'This install cannot update itself.' };
   }
-  if (pendingUpdateVersion || pendingDownloadPercent !== null) return { success: true };
+  // Already downloaded: say so again, so a caller showing progress lands on
+  // Restart instead of waiting for events that will not come.
+  if (pendingUpdateVersion) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-downloaded', { version: pendingUpdateVersion });
+    }
+    return { success: true };
+  }
+  if (pendingDownloadPercent !== null) return { success: true };
   try {
     const result = await checkForUpdatesNow();
     if (!result || result.isUpdateAvailable === false) {

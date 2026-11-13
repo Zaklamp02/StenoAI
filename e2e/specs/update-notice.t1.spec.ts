@@ -216,3 +216,20 @@ test('Check for Updates offers Update when the release can be fetched in the app
   await expect.poll(() => downloadRequests(app)).toBe(1);
   await expect(about.getByText('Downloading update…')).toBeVisible();
 });
+
+test('a downloaded update stays dismissed for the session, not offered again', async ({ launchApp }) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_RELEASE_NOTICE: 'in-app' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  await page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' }).getByRole('button', { name: 'Update' }).click();
+  await sendUpdaterEvent(app, 'update-downloaded', { version: '2099.1.1' });
+  const ready = page.getByRole('status').filter({ hasText: 'Update v2099.1.1 ready' });
+  await ready.getByRole('button', { name: 'Dismiss update notification' }).click();
+  await expect(ready).toHaveCount(0);
+  // Not back as "available" with an Update button that would stall at 0%.
+  await expect(page.getByRole('status')).toHaveCount(0);
+});

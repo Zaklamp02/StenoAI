@@ -133,8 +133,9 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
     );
   }
 
-  // Already on its way in; nothing to download by hand.
-  if (!release || download?.version === release.version) return null;
+  // Already on its way in or downloaded (its Restart pill was dismissed for
+  // now); nothing to fetch again.
+  if (!release || download?.version === release.version || pendingVersion === release.version) return null;
 
   const dismissRelease = () => {
     dismissedReleaseRef.current = release.version;
