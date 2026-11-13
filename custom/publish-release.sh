@@ -28,16 +28,21 @@ grep -qx "version: ${TAG#v}" "$OUT/latest-mac.yml" \
 
 size_of() { stat -f %z "$1"; }
 
-RID="$(gh api "repos/$REPO/releases" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)"
+git ls-remote --exit-code --tags "https://github.com/$REPO.git" "refs/tags/$TAG" >/dev/null \
+  || { echo "Tag $TAG is not on GitHub; push it first." >&2; exit 1; }
+RID="$(gh api "repos/$REPO/releases" --paginate --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)"
 if [ -z "$RID" ]; then
   echo "==> Creating draft release $TAG"
-  gh release create "$TAG" --repo "$REPO" --verify-tag --draft --title "StenoAI $TAG" --notes-file "$NOTES" >/dev/null
-  RID="$(gh api "repos/$REPO/releases" --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -1)"
+  # The ID comes from the create call: a new draft can take a moment to show
+  # up in the release list.
+  RID="$(gh api -X POST "repos/$REPO/releases" -f tag_name="$TAG" -f name="StenoAI $TAG" \
+    -F body=@"$NOTES" -F draft=true -F prerelease=false --jq .id)"
 else
   [ "$(gh api "repos/$REPO/releases/$RID" --jq .draft)" = "true" ] \
     || { echo "$TAG is already published; not touching it." >&2; exit 1; }
   echo "==> Resuming draft release $TAG"
 fi
+[[ "$RID" =~ ^[0-9]+$ ]] || { echo "Could not find or create the release for $TAG (got '$RID')." >&2; exit 1; }
 
 remote_size() {
   gh api "repos/$REPO/releases/$RID/assets" --paginate \

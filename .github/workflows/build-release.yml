@@ -56,6 +56,11 @@ jobs:
 
   build-macos:
     needs: gate-smoke
+    # Signed + notarized upstream builds only. This fork's releases are built
+    # locally (custom/release.sh) and published with custom/publish-release.sh;
+    # here the signing step can only fail, and `release` (which needs this
+    # job) then skips.
+    if: github.repository == 'stenolabs/stenoai'
     # Apple-Silicon only as of v0.4.0. macOS 26 (Tahoe) drops Intel and
     # our headline transcription engine (Parakeet TDT v3 via MLX) is
     # Apple-Silicon only, so the Intel build was shipping a degraded
