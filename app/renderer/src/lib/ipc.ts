@@ -888,6 +888,8 @@ export type CheckForUpdatesResponse = Result<{
   // an available update can't be auto-installed and the About tab explains that
   // instead of offering a broken Restart (#432). Absent/true elsewhere.
   osUpdateEligible?: boolean;
+  /** This install can fetch and install the release itself. */
+  canUpdateInApp?: boolean;
 }>;
 
 // downloadedVersion is null until a download finishes (or after one already
@@ -1088,6 +1090,8 @@ export interface LiveTranscriptErrorEvent {
 }
 export interface UpdateAvailableEvent {
   version: string;
+  /** False when "ask first" found a version that waits for an Update click. */
+  downloading?: boolean;
 }
 export interface UpdateProgressEvent {
   percent: number;
@@ -1112,6 +1116,8 @@ export interface ReleaseNotice {
   downloadUrl: string | null;
   /** Announced for download only; the in-app updater reads full releases. */
   prerelease?: boolean;
+  /** The pill's button fetches the release in the app instead of the DMG. */
+  canUpdateInApp?: boolean;
 }
 export interface UpdateErrorEvent {
   message: string;
@@ -1608,6 +1614,8 @@ export interface StenoaiBridge {
     getReleaseNotice: RequestFn<[], Result<{ notice: ReleaseNotice | null }>>;
     dismissReleaseNotice: RequestFn<[version: string], Result<Record<string, never>>>;
     install: SendFn<[]>;
+    /** Fetch the release in the app (the Update button). */
+    download: RequestFn<[], Result<Record<string, never>>>;
   };
 
   shortcuts: {

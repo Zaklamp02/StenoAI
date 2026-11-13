@@ -22,7 +22,7 @@
  *   - sendDebugLog     the debug-panel log sink (debug-log seam)
  */
 
-function registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog }) {
+function registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog, onAutoInstallWhenIdleChanged = () => {} }) {
   ipcMain.handle('get-keep-recordings', async () => {
     try {
       const result = await runPythonScript('simple_recorder.py', ['get-keep-recordings'], true);
@@ -67,6 +67,9 @@ function registerSettingsIpc({ ipcMain, runPythonScript, sendDebugLog }) {
     try {
       const result = await runPythonScript('simple_recorder.py', ['set-auto-install-when-idle', enabled.toString()]);
       const jsonData = JSON.parse(result.trim());
+      // The updater's download/install-on-quit mode follows this setting now,
+      // not at its next check (update-mode.js).
+      onAutoInstallWhenIdleChanged();
       return { success: true, ...jsonData };
     } catch (e) { return { success: false, error: e.message }; }
   });

@@ -198,8 +198,11 @@ Signing", so:
   the Download pill.
 - Keep the certificate. A new one cannot update existing installs: update the
   pin, and every tester reinstalls from the DMG once.
-- Settings → General → *Install updates automatically* controls the idle
-  install; downloading happens either way, and Restart or quitting installs.
+- Settings → Preferences → *Install updates automatically* picks the mode
+  (`app/update-mode.js`). On (default): releases download in the background
+  and install on Restart, on quit, or when idle. Off ("ask first"): the pill
+  says a version is available with **Update**; nothing downloads until that
+  click, and the download installs only on Restart, not on quit.
 
 ## New official release
 

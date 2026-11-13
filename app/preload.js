@@ -426,6 +426,7 @@ const stenoai = {
     getReleaseNotice: () => invoke('get-release-notice'),
     dismissReleaseNotice: (version) => invoke('dismiss-release-notice', version),
     install: () => send('install-update'),
+    download: () => invoke('download-update'),
   },
 
   shortcuts: {
