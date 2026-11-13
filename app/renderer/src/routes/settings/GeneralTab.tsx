@@ -337,7 +337,7 @@ export function GeneralTab() {
 
       <SettingRow
         label="Install updates automatically"
-        description="When the app is idle and not recording, download and install updates in the background, then restart. You'll still be notified when an update is available."
+        description="On: new versions download in the background and install when you restart, quit, or step away. Off: you're told when a version is out and choose when to update."
       >
         <Switch
           checked={autoInstallWhenIdle.data ?? true}

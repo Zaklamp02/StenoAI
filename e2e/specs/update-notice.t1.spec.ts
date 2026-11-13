@@ -146,3 +146,73 @@ test('a dismissed download comes back as Download if it fails, and names the ver
   const fallback = page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' });
   await expect(fallback.getByRole('button', { name: 'Download' })).toBeVisible();
 });
+
+const downloadRequests = (app: ElectronApplication) =>
+  app.evaluate(() => (globalThis as unknown as { __downloadUpdateRequests?: number }).__downloadUpdateRequests ?? 0);
+
+test('with automatic installs off, Update fetches the release in the app, then Restart', async ({ launchApp }) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_RELEASE_NOTICE: 'in-app' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  const pill = page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' });
+  await expect(pill.getByRole('button', { name: 'Update' })).toBeVisible();
+  await expect(pill.getByRole('button', { name: 'Download' })).toHaveCount(0);
+
+  // A periodic check that only found the version starts nothing.
+  await sendUpdaterEvent(app, 'update-available', { version: '2099.1.1', downloading: false });
+  await expect(pill.getByRole('button', { name: 'Update' })).toBeVisible();
+
+  await pill.getByRole('button', { name: 'Update' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Downloading version 2099.1.1 · 0%' })).toBeVisible();
+  await expect.poll(() => downloadRequests(app)).toBe(1);
+  // Opening the GitHub page is not part of it.
+  expect(await releasePages(app)).toEqual([]);
+
+  await sendUpdaterEvent(app, 'update-available', { version: '2099.1.1', downloading: true });
+  await sendUpdaterEvent(app, 'update-download-progress', { percent: 60 });
+  await expect(page.getByRole('status').filter({ hasText: 'Downloading version 2099.1.1 · 60%' })).toBeVisible();
+  await sendUpdaterEvent(app, 'update-downloaded', { version: '2099.1.1' });
+  const ready = page.getByRole('status').filter({ hasText: 'Update v2099.1.1 ready' });
+  await ready.getByRole('button', { name: 'Restart' }).click();
+  await expect
+    .poll(() =>
+      app.evaluate(() => (globalThis as unknown as { __installUpdateRequested?: boolean }).__installUpdateRequested ?? false),
+    )
+    .toBe(true);
+});
+
+test('an Update that cannot run falls back to the GitHub download', async ({ launchApp }) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_RELEASE_NOTICE: 'in-app', STENOAI_E2E_DOWNLOAD_UPDATE_FAILS: '1' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  const pill = page.getByRole('status').filter({ hasText: 'Version 2099.1.1 available' });
+  await pill.getByRole('button', { name: 'Update' }).click();
+  await expect(pill.getByRole('button', { name: 'Download' })).toBeVisible();
+  await pill.getByRole('button', { name: 'Download' }).click();
+  await expect.poll(() => releasePages(app)).toEqual([
+    'https://github.com/Zaklamp02/StenoAI/releases/download/v2099.1.1/StenoAI-v2099.1.1-arm64.dmg',
+  ]);
+});
+
+test('Check for Updates offers Update when the release can be fetched in the app', async ({ launchApp }) => {
+  const { app, page } = await launchApp({
+    mockIpc: true,
+    env: { STENOAI_E2E_SEED_UPDATE_AVAILABLE: 'in-app' },
+  });
+  await page.evaluate(() => {
+    window.location.hash = '#/settings?tab=about';
+  });
+  const about = page.locator('[data-settings-tab="about"]');
+  await about.getByRole('button', { name: 'Check for Updates' }).click();
+  await about.getByRole('button', { name: 'Update', exact: true }).click();
+  await expect.poll(() => downloadRequests(app)).toBe(1);
+  await expect(about.getByText('Downloading update…')).toBeVisible();
+});

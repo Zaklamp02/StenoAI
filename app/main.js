@@ -213,6 +213,7 @@ const { resolvePosthogConfig } = require('./telemetry-config');
 const { initMain } = require('electron-audio-loopback');
 const { autoUpdater } = require('electron-updater');
 const updateSigning = require('./update-signing');
+const updateMode = require('./update-mode');
 
 // E2E test-harness hooks. Set via env vars; production sees none of these.
 //   STENOAI_USER_DATA_DIR — per-test temp userData dir (must be set before app.whenReady)
@@ -7381,6 +7382,35 @@ function setupAutoUpdater() {
     .catch((error) => sendDebugLog(`Auto-updater: signature check failed: ${error.message}`));
 }
 
+// Apply "Install updates automatically" (update-mode.js) right before the
+// updater acts, so flipping the setting takes effect without a restart.
+function applyUpdateMode() {
+  const options = updateMode.updaterOptionsFor(loadAutoInstallWhenIdleEnabled());
+  autoUpdater.autoDownload = options.autoDownload;
+  autoUpdater.autoInstallOnAppQuit = options.autoInstallOnAppQuit;
+  return options;
+}
+
+function checkForUpdatesNow() {
+  applyUpdateMode();
+  return autoUpdater.checkForUpdates();
+}
+
+// The release notice as the renderer sees it: whether its Update button can
+// fetch the release in the app, judged now rather than when it was found.
+function releaseNoticeForRenderer() {
+  if (!releaseNotice) return null;
+  return {
+    ...releaseNotice,
+    canUpdateInApp: updateMode.canUpdateInApp({
+      autoUpdateEnabled,
+      prerelease: releaseNotice.prerelease,
+      updateError: pendingUpdateError,
+      feedMissing: updateFeedMissing,
+    }),
+  };
+}
+
 function startAutoUpdater() {
   // This repository's releases, not the stock app's feed. Only full releases:
   // tester pre-releases carry no update manifest (see custom/README.md).
@@ -7401,8 +7431,7 @@ function startAutoUpdater() {
   autoUpdateEnabled = true;
   sendDebugLog(`Auto-updater: enabled (${releaseCheck.RELEASE_OWNER}/${releaseCheck.RELEASE_REPO} releases)`);
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  applyUpdateMode();
 
   // Drop a stale non-sticky failure AND tell a mounted About tab, so the banner
   // never outlives the state it describes. Sticky ones are left alone: a full
@@ -7433,11 +7462,15 @@ function startAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     sendDebugLog(`Auto-updater: update available (v${info.version})`);
-    // Matches the renderer's own `setDownloadPercent((p) => p ?? 0)` — marks
-    // a download as started before the first real progress tick arrives.
-    if (pendingDownloadPercent === null) pendingDownloadPercent = 0;
-    pendingDownloadVersion = info.version;
     updateFeedMissing = false;
+    // In "ask first" mode a found version waits for the user's Update click
+    // (download-update); only an automatic download starts here. Marks it as
+    // started before the first real progress tick arrives.
+    const downloading = autoUpdater.autoDownload || pendingDownloadPercent !== null;
+    if (downloading) {
+      if (pendingDownloadPercent === null) pendingDownloadPercent = 0;
+      pendingDownloadVersion = info.version;
+    }
     // Only the non-sticky ones. This event says a version was FOUND, i.e. the
     // feed was readable — it does not say a single byte was written, so it
     // cannot disprove a full disk or a permission problem. Those clear one
@@ -7449,7 +7482,7 @@ function startAutoUpdater() {
     // it covers a failure that arrived between the two events.
     clearNonStickyUpdateError();
     if (mainWindow) {
-      mainWindow.webContents.send('update-available', { version: info.version });
+      mainWindow.webContents.send('update-available', { version: info.version, downloading });
     }
   });
 
@@ -7556,12 +7589,12 @@ function startAutoUpdater() {
 
   // Check on launch (after a short delay to not block startup)
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    checkForUpdatesNow().catch(() => {});
   }, 10000);
 
   // Re-check every 30 minutes
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
+    checkForUpdatesNow().catch(() => {});
   }, 30 * 60 * 1000);
 }
 
@@ -11320,7 +11353,7 @@ ipcMain.handle('check-for-updates', async () => {
   // setupAutoUpdater(): no-op (and network-free) in e2e/dev, and never on a
   // Mac below the launch floor, which must not download a build it can't run (#432).
   if (!IS_E2E && autoUpdateEnabled && app.isPackaged && osEligible) {
-    autoUpdater.checkForUpdates().catch(() => {});
+    checkForUpdatesNow().catch(() => {});
   }
   // A check that just succeeded and found nothing settles an earlier FAILED
   // check — otherwise a stale banner sits under a fresh "You're on the latest
@@ -11338,7 +11371,18 @@ ipcMain.handle('check-for-updates', async () => {
   // Surface eligibility so the About tab can explain why an "update available"
   // won't auto-install on an under-floor Mac, rather than offering a broken
   // Restart. (Display-only; the safety is the gated kick above.)
-  return { ...result, osUpdateEligible: osEligible };
+  return {
+    ...result,
+    osUpdateEligible: osEligible,
+    canUpdateInApp:
+      osEligible &&
+      updateMode.canUpdateInApp({
+        autoUpdateEnabled,
+        prerelease: result.prerelease,
+        updateError: pendingUpdateError,
+        feedMissing: updateFeedMissing,
+      }),
+  };
 });
 
 // ── New-release notice ──────────────────────────────────────────────────────
@@ -11367,14 +11411,15 @@ async function runReleaseCheck() {
   const dir = getUserDataDir();
   releaseNotice = releaseCheck.releaseNoticeFor(result, releaseCheck.readNoticeState(dir));
   if (!releaseNotice) return;
+  const inApp = releaseNoticeForRenderer().canUpdateInApp;
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('release-available', releaseNotice);
+    mainWindow.webContents.send('release-available', releaseNoticeForRenderer());
   }
-  if (autoUpdateEnabled && !releaseNotice.prerelease && !pendingUpdateError && !updateFeedMissing) {
+  if (inApp && loadAutoInstallWhenIdleEnabled()) {
     // Start fetching now rather than at the updater's next 30-minute check;
     // the pill and notification follow the download from here.
     if (!pendingUpdateVersion && pendingDownloadPercent === null) {
-      autoUpdater.checkForUpdates().catch(() => {});
+      checkForUpdatesNow().catch(() => {});
     }
     return;
   }
@@ -11386,14 +11431,18 @@ async function runReleaseCheck() {
   // Re-read after the await: a dismissal (or an earlier run) may have landed meanwhile.
   const state = releaseCheck.readNoticeState(dir);
   if (state.dismissedVersion === notice.version || state.notifiedVersion === notice.version) return;
+  // "Ask first" on an install that updates itself: the window's pill offers
+  // Update. Otherwise the DMG on GitHub.
   const notif = new Notification({
     title: `StenoAI ${notice.version} is available`,
-    body: 'Download it from GitHub and drag it to Applications.',
-    actions: [{ type: 'button', text: 'Download' }],
+    body: inApp ? 'Open StenoAI to update.' : 'Download it from GitHub and drag it to Applications.',
+    actions: [{ type: 'button', text: inApp ? 'Open' : 'Download' }],
   });
-  const download = () => void shell.openExternal(notice.downloadUrl || notice.releaseUrl);
-  notif.on('action', download);
-  notif.on('click', download);
+  const respond = inApp
+    ? () => exposeMainWindow()
+    : () => void shell.openExternal(notice.downloadUrl || notice.releaseUrl);
+  notif.on('action', respond);
+  notif.on('click', respond);
   trackNotificationLifecycle(notif, 'release_available');
   notif.show();
   // Also kept in memory, so a release-notice.json that cannot be written
@@ -11462,7 +11511,36 @@ function scheduleReleaseChecks() {
   setInterval(run, releaseCheck.CHECK_INTERVAL_MS);
 }
 
-ipcMain.handle('get-release-notice', async () => ({ success: true, notice: releaseNotice }));
+ipcMain.handle('get-release-notice', async () => ({ success: true, notice: releaseNoticeForRenderer() }));
+
+// The pill's (or About's) Update button: fetch the release in the app. Used in
+// "ask first" mode; harmless in automatic mode, where it is usually already
+// downloading. Progress, errors and "ready" arrive on the usual update-* events.
+ipcMain.handle('download-update', async () => {
+  if (!autoUpdateEnabled || !autoUpdateOSEligible()) {
+    return { success: false, error: 'This install cannot update itself.' };
+  }
+  if (pendingUpdateVersion || pendingDownloadPercent !== null) return { success: true };
+  try {
+    const result = await checkForUpdatesNow();
+    if (!result || result.isUpdateAvailable === false) {
+      return { success: false, error: 'No update is available.' };
+    }
+    // An automatic check may have started the download already.
+    if (pendingDownloadPercent === null && !pendingUpdateVersion) {
+      pendingDownloadPercent = 0;
+      pendingDownloadVersion = result.updateInfo.version;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-available', { version: result.updateInfo.version, downloading: true });
+      }
+      // Failures reach the 'error' listener, which resets this state.
+      autoUpdater.downloadUpdate().catch(() => {});
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
 
 ipcMain.handle('dismiss-release-notice', async (_event, rawVersion) => {
   const version = releaseCheck.normalizeVersion(rawVersion);

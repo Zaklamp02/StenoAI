@@ -7,6 +7,7 @@ const RELEASE_NOTICE_COPY = {
   available: (version: string) => `Version ${version} available`,
   downloading: (version: string) => `Downloading version ${version}`,
   download: 'Download',
+  update: 'Update',
   dismiss: 'Dismiss new version notice',
 };
 
@@ -20,7 +21,9 @@ const RELEASE_NOTICE_COPY = {
  *   itself): the pill shows its version and progress. Dismissing hides it for
  *   the session; a failure brings back the "Download" pill below.
  * - The background release check found a newer release on GitHub that is not
- *   downloading: "Download" opens the DMG in the browser. Dismissing
+ *   downloading. When this install can update itself (and "Install updates
+ *   automatically" is off, so nothing fetched it yet), "Update" fetches it in
+ *   the app; otherwise "Download" opens the DMG in the browser. Dismissing
  *   remembers the version, so each release is announced once.
  * The last two are hidden while recording or processing.
  */
@@ -39,6 +42,8 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
 
   React.useEffect(() => {
     const offAvailable = ipc().on.updateAvailable((evt) => {
+      // "Ask first" found it; nothing is downloading until Update is clicked.
+      if (evt.downloading === false) return;
       updaterEventSeenRef.current = true;
       setDownload((d) => (d && d.version === evt.version ? d : { version: evt.version, percent: 0 }));
     });
@@ -137,14 +142,33 @@ export function UpdateToast({ recordingStatus }: { recordingStatus: RecordingSta
     setRelease(null);
   };
 
+  const downloadRelease = () =>
+    void ipc().updates.openReleasePage(release.downloadUrl ?? release.releaseUrl);
+
+  // Show progress at once; the updater's events take over from here. If it
+  // cannot fetch the release, the button becomes Download.
+  const updateInApp = () => {
+    setDownload({ version: release.version, percent: 0 });
+    setDownloadDismissed(false);
+    void ipc()
+      .updates.download()
+      .then((res) => {
+        if (res.success) return;
+        setDownload(null);
+        setRelease((r) => (r ? { ...r, canUpdateInApp: false } : r));
+      })
+      .catch(() => {
+        setDownload(null);
+        setRelease((r) => (r ? { ...r, canUpdateInApp: false } : r));
+      });
+  };
+
   return (
     <ToastPill>
       <ArrowDownToLine size={13} style={{ color: 'var(--fg-2)' }} />
       <span className="tabular-nums">{RELEASE_NOTICE_COPY.available(release.version)}</span>
-      <PrimaryButton
-        onClick={() => void ipc().updates.openReleasePage(release.downloadUrl ?? release.releaseUrl)}
-      >
-        {RELEASE_NOTICE_COPY.download}
+      <PrimaryButton onClick={release.canUpdateInApp ? updateInApp : downloadRelease}>
+        {release.canUpdateInApp ? RELEASE_NOTICE_COPY.update : RELEASE_NOTICE_COPY.download}
       </PrimaryButton>
       <DismissButton label={RELEASE_NOTICE_COPY.dismiss} onClick={dismissRelease} />
     </ToastPill>

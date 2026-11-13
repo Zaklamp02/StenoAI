@@ -1517,12 +1517,17 @@ function install({ ipcMain }) {
       ? "Steno couldn't reach the update server. Check your connection — it will try again later."
       : null;
 
+  // '1': an install that downloads the DMG; 'in-app': one that updates itself
+  // with "Install updates automatically" off, so the pill offers Update.
+  const releaseNoticeSeed = process.env.STENOAI_E2E_SEED_RELEASE_NOTICE;
   let seededReleaseNotice =
-    process.env.STENOAI_E2E_SEED_RELEASE_NOTICE === '1'
+    releaseNoticeSeed === '1' || releaseNoticeSeed === 'in-app'
       ? {
           version: '2099.1.1',
           releaseUrl: 'https://github.com/Zaklamp02/StenoAI/releases/tag/v2099.1.1',
           downloadUrl: 'https://github.com/Zaklamp02/StenoAI/releases/download/v2099.1.1/StenoAI-v2099.1.1-arm64.dmg',
+          prerelease: false,
+          canUpdateInApp: releaseNoticeSeed === 'in-app',
         }
       : null;
 
@@ -1554,6 +1559,14 @@ function install({ ipcMain }) {
       return { success: true };
     },
     'get-release-notice': () => ({ success: true, notice: seededReleaseNotice }),
+    // The Update button (update-notice.t1). STENOAI_E2E_DOWNLOAD_UPDATE_FAILS=1
+    // answers like an install that cannot fetch it, so the pill falls back.
+    'download-update': () => {
+      global.__downloadUpdateRequests = (global.__downloadUpdateRequests || 0) + 1;
+      return process.env.STENOAI_E2E_DOWNLOAD_UPDATE_FAILS === '1'
+        ? { success: false, error: 'This install cannot update itself.' }
+        : { success: true };
+    },
     'dismiss-release-notice': (_event, version) => {
       global.__dismissedReleaseVersions = [...(global.__dismissedReleaseVersions || []), version];
       if (seededReleaseNotice?.version === version) seededReleaseNotice = null;
@@ -1582,7 +1595,7 @@ function install({ ipcMain }) {
       }
       // STENOAI_E2E_SEED_UPDATE_AVAILABLE=1: a newer release on this repo, so
       // the About tab offers "View release" (update-notice.t1).
-      if (process.env.STENOAI_E2E_SEED_UPDATE_AVAILABLE === '1') {
+      if (process.env.STENOAI_E2E_SEED_UPDATE_AVAILABLE === '1' || process.env.STENOAI_E2E_SEED_UPDATE_AVAILABLE === 'in-app') {
         return {
           success: true,
           updateAvailable: true,
@@ -1592,6 +1605,7 @@ function install({ ipcMain }) {
           releaseName: 'Version 2099.1.1',
           downloadUrl: null,
           osUpdateEligible: true,
+          canUpdateInApp: process.env.STENOAI_E2E_SEED_UPDATE_AVAILABLE === 'in-app',
         };
       }
       // Up to date, and that settles a previously failed check — main.js

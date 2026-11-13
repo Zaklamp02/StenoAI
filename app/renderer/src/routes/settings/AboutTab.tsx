@@ -34,12 +34,14 @@ const REPORT_PROBLEM_COPY = {
 const TERMS_URL = 'https://stenoai.co/terms.html';
 const PRIVACY_URL = 'https://stenoai.co/privacy.html';
 
+const UPDATE_ACTION_LABEL = 'Update';
+
 type CheckState =
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'error'; message: string }
   | { kind: 'up-to-date' }
-  | { kind: 'update-available'; version: string; releaseUrl: string }
+  | { kind: 'update-available'; version: string; releaseUrl: string; canUpdateInApp: boolean }
   // An update exists on GitHub but this Mac is below the 14.4 launch floor, so
   // it can't be installed here (#432). We explain it rather than offer a broken
   // "View release" download nudge.
@@ -69,7 +71,9 @@ export function AboutTab() {
   const errorSeqRef = React.useRef(0);
 
   React.useEffect(() => {
-    const offAvailable = ipc().on.updateAvailable(() => {
+    const offAvailable = ipc().on.updateAvailable((evt) => {
+      // "Install updates automatically" is off: found, not downloading yet.
+      if (evt.downloading === false) return;
       // Confirms the real background updater has started fetching this
       // version — the progress bar below is about to start moving.
       //
@@ -176,6 +180,7 @@ export function AboutTab() {
           kind: 'update-available',
           version: result.latestVersion,
           releaseUrl: result.releaseUrl,
+          canUpdateInApp: result.canUpdateInApp === true,
         });
       } else {
         setCheckState({ kind: 'up-to-date' });
@@ -231,6 +236,29 @@ export function AboutTab() {
     <section data-settings-tab="about">
       <SettingRow label="Steno" description={checkDescription}>
         <div className="flex items-center gap-2">
+          {checkState.kind === 'update-available' &&
+            checkState.canUpdateInApp &&
+            downloadPercent === null &&
+            !downloadedVersion && (
+              <Button
+                size="sm"
+                className={COMPACT_BTN}
+                onClick={() => {
+                  setDownloadPercent(0);
+                  void ipc()
+                    .updates.download()
+                    .then((res) => {
+                      if (!res.success) {
+                        setDownloadPercent(null);
+                        setDownloadError(res.error);
+                      }
+                    })
+                    .catch(() => setDownloadPercent(null));
+                }}
+              >
+                {UPDATE_ACTION_LABEL}
+              </Button>
+            )}
           {checkState.kind === 'update-available' && (
             <Button
               variant="ghost"
