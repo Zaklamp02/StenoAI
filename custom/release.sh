@@ -34,7 +34,16 @@ else
 fi
 UPDATE_VERSION="${UPDATE_VERSION:-}"
 IDENTITY="${STENOAI_SIGNING_IDENTITY:-StenoAI Local Signing}"
-PYTHON311="${PYTHON311:-/opt/homebrew/bin/python3.11}"
+chmod +x "$ROOT/custom/fetch-release-python.sh"
+PYTHON311="${PYTHON311:-$("$ROOT/custom/fetch-release-python.sh")}"
+# The bundled Python must load on the app's macOS floor. A Homebrew bottle is
+# built for the release Mac's own macOS and does not (custom/fetch-release-python.sh).
+"$PYTHON311" -c '
+import sys, sysconfig
+target = sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET") or "99"
+if tuple(map(int, target.split("."))) > (14, 4):
+    sys.exit(f"{sys.executable} is built for macOS {target}; the app supports 14.4. "
+             "Unset PYTHON311 to use custom/fetch-release-python.sh.")'
 # A Python installed under the home folder (Anaconda, pyenv) writes that path,
 # and with it the builder's username, into the bundled libraries.
 case "$("$PYTHON311" -c 'import sys; print(sys.base_prefix)')" in
@@ -62,6 +71,9 @@ echo "==> Building $TAG from a clean checkout"
 (cd "$WORK" && PYTHON311="$PYTHON311" custom/bootstrap.sh "$OFFICIAL")
 APP="$WORK/app/dist/mac-arm64/StenoAI.app"
 codesign --verify --deep --strict "$APP"
+
+# Refuse an app with binaries that need a newer macOS than it claims to support.
+"$PYTHON311" -I "$ROOT/custom/check-macos-floor.py" "$APP"
 
 # Refuse to publish an app that carries the builder's username or home path.
 if grep -rlaiF "$(id -un)" "$APP" >/dev/null 2>&1; then

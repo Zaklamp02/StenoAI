@@ -173,6 +173,14 @@ git tag -a v2026.11.1 -m "StenoAI 2026.11.1" && git push zaklamp02 v2026.11.1
 custom/release.sh v2026.11.1   # refuses a tag whose package.json version differs
 ```
 
+Release builds must run on every Mac the app claims to support (macOS 14.4+),
+not only on the Mac that built them. `release.sh` therefore builds with the
+pinned python-build-standalone 3.11 from `custom/fetch-release-python.sh`
+(kept in `/Users/Shared/stenoai-build/`), never a Homebrew bottle, which is
+built for the release Mac's own macOS. `build.sh` installs the `macosx_14_0`
+MLX wheels for the same reason, and `custom/check-macos-floor.py` refuses the
+app if any binary in it needs a newer macOS than `LSMinimumSystemVersion`.
+
 `release.sh` writes four files to `.local/release/`: the DMG and its `.sha256`
 for new installs, and `StenoAI-<tag>-arm64-mac.zip` plus `latest-mac.yml` for
 in-app updates. It ends by printing the `gh release create` command that

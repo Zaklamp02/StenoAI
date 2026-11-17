@@ -29,6 +29,17 @@ if [ ! -x .venv/bin/python ]; then
   .venv/bin/python -m pip install -q --upgrade pip
 fi
 .venv/bin/pip install -q -r requirements.txt -c custom/constraints.txt pyinstaller
+# pip takes the wheel for the newest macOS it can, so on a macOS 26+ Mac mlx
+# comes as a macosx_26_0 build that will not load on the app's 14.4 floor.
+# Swap in the macosx_14_0 build of the same version (custom/check-macos-floor.py
+# is the release gate that catches anything else like it).
+MLX_PINS="$(.venv/bin/python -c 'from importlib.metadata import version as v; print(" ".join(p + "==" + v(p) for p in ("mlx", "mlx-metal")))')"
+MLX_WHEELS="$(mktemp -d)"
+# shellcheck disable=SC2086
+.venv/bin/pip download -q --no-deps --only-binary=:all: --platform macosx_14_0_arm64 \
+  --python-version 3.11 --implementation cp --abi cp311 --abi none -d "$MLX_WHEELS" $MLX_PINS
+.venv/bin/pip install -q --no-deps --force-reinstall "$MLX_WHEELS"/*.whl
+rm -rf "$MLX_WHEELS"
 
 echo "==> Backend (PyInstaller)"
 rm -rf build dist
