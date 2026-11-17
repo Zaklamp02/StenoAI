@@ -175,8 +175,10 @@ custom/release.sh v2026.11.1   # refuses a tag whose package.json version differ
 
 `release.sh` writes four files to `.local/release/`: the DMG and its `.sha256`
 for new installs, and `StenoAI-<tag>-arm64-mac.zip` plus `latest-mac.yml` for
-in-app updates. It ends by printing the `gh release create` command that
-uploads all four. Publish it as a **full release, not a pre-release**: installed
+in-app updates. `custom/publish-release.sh <tag> notes.md` then uploads all four
+to a draft, retrying large uploads (GitHub drops slow ones with HTTP 408) and
+checking each size, and publishes it only when complete; rerun it to resume.
+It is a **full release, not a pre-release**: installed
 apps update from the newest full release (GitHub's "latest"). A pre-release is
 still announced with a Download pill, but no app installs it in place. Tags that
 are not versions (the older `test-…` ones) are ignored, and must stay
