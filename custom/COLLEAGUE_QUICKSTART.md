@@ -35,7 +35,7 @@ is ready (or installs it the next time you quit).
 
 Maintainers create the DMG with `custom/release.sh v<YYYY.M.N>`, which builds the tag
 from a clean checkout, refuses to package anything containing the builder's
-username, and writes the DMG, checksum and in-app update files to
+username or any binary that needs a newer macOS than 14.4, and writes the DMG, checksum and in-app update files to
 `.local/release/` for upload to a full GitHub Release (never commit them).
 
 ## Build from source
