@@ -93,3 +93,28 @@ test('pre-meeting notification is suppressed for the meeting being recorded (nam
 
   expect(fileSig(realUserDataDir())).toBe(realDirBefore);
 });
+
+test('the at-start toast stays up past the 15s heads-up window (60s) and passes the same gates', async ({
+  launchApp,
+}) => {
+  test.setTimeout(60_000);
+  const { app, page } = await launchApp();
+  const showStart = (event: { id: string; title?: string }) =>
+    page.evaluate(
+      (e) =>
+        (window as StenoWindow).stenoai.settings.showPremeetingNotification({ event: e, stage: 'start' }),
+      event,
+    );
+  const toastWindow = () => app.windows().find((w) => w.url().includes('#/notification'));
+
+  expect((await showStart(EVT)).shown).toBe(true);
+  await expect.poll(() => Boolean(toastWindow())).toBe(true);
+
+  // A heads-up would have closed itself by now; the start toast is still there.
+  await page.waitForTimeout(17_000);
+  expect(toastWindow()).toBeTruthy();
+
+  // Same gate as the heads-up: the Scheduled meetings toggle turns it off.
+  await page.evaluate(() => (window as StenoWindow).stenoai.settings.setPremeetingNotifications(false));
+  expect((await showStart(EVT)).shown).toBe(false);
+});
