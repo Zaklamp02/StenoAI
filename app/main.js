@@ -463,6 +463,10 @@ class Notification extends EventEmitter {
       })),
     };
     if (options.iconType) this.payload.iconType = options.iconType;
+    // How long the toast stays up before closing itself.
+    this.autoCloseMs = Number.isFinite(options.autoCloseMs) && options.autoCloseMs > 0
+      ? options.autoCloseMs
+      : 15000;
   }
 
   show() {
@@ -552,10 +556,11 @@ class Notification extends EventEmitter {
       win.setVisibleOnAllWorkspaces(true, TOAST_WORKSPACE_OPTIONS);
       win.setAlwaysOnTop(true, 'screen-saver', 1);
 
-      // Keep the 15s auto-close (matches the pre-existing pre-meeting toast).
+      // Auto-close after 15s by default (the pre-meeting heads-up); a caller can
+      // ask for longer via autoCloseMs.
       autoCloseTimer = setTimeout(() => {
         if (!win.isDestroyed()) win.close();
-      }, 15000);
+      }, this.autoCloseMs);
 
       win.webContents.send('show-notification', this.payload);
     });
@@ -12980,15 +12985,23 @@ async function getCalendarEventForNow(timeoutMs = 1500) {
 }
 
 // ── Pre-meeting notification ────────────────────────────────────────────
-// ~2 min before a scheduled calendar meeting, fire a heads-up notification;
-// clicking it focuses Steno. INDEPENDENT of auto-detect (which is mic-based and
+// Two reminders per meeting: a brief heads-up ~2 min before the start (15s) and
+// a "starting now" one at the scheduled start (60s), because people usually join
+// at the start or a minute late, by which time the heads-up is long gone. The
+// start reminder is still armed for PREMEETING_START_GRACE_MS after the start so
+// a re-poll or app launch just after the start still gets it. Clicking a toast
+// focuses Steno. INDEPENDENT of auto-detect (which is mic-based and
 // prompts to record): this is calendar-time based and only focuses — never
 // records — so there's no recording conflict. Suppressed for a meeting we're
 // already recording (matched by calendar event id).
 const PREMEETING_LEAD_MS = 2 * 60 * 1000;          // fire this long before start
 const PREMEETING_RESCHEDULE_MS = 10 * 60 * 1000;   // re-poll the calendar this often
-const premeetingTimers = new Map();                // eventId -> setTimeout handle
-const premeetingFiredIds = new Set();              // ids already fired this app session
+const PREMEETING_LEAD_TOAST_MS = 15 * 1000;        // heads-up toast stays this long
+const PREMEETING_START_TOAST_MS = 60 * 1000;       // at-start toast stays this long
+const PREMEETING_START_GRACE_MS = 5 * 60 * 1000;   // still fire the start toast this long after start
+const premeetingTimers = new Map();                // `${stage}:${eventId}` -> setTimeout handle
+const premeetingFiredIds = new Set();              // ids whose heads-up fired this app session
+const premeetingStartFiredIds = new Set();         // ids whose at-start toast fired this session
 let premeetingRescheduleTimer = null;
 
 // Fetch upcoming events from whichever provider is connected (mirrors
@@ -13085,24 +13098,28 @@ function maybeTrackCalendarSnapshot(events, now = new Date()) {
 }
 
 // Mirrors the per-event predicates of Home.tsx's `upcomingToday` (timed/
-// not-all-day, not declined, start in the future) — but deliberately WITHOUT
-// Home's start-of-tomorrow upper bound: a 2-min-before reminder should arm for
-// any upcoming meeting in the fetch window, not just today's.
-function isPremeetingEligible(e, nowMs) {
-  if (!e || typeof e.start !== 'string') return false;
-  if (!e.start.includes('T')) return false;      // all-day events are date-only
-  if (e.is_all_day === true) return false;
-  if (e.response_status === 'declined') return false;
+// not-all-day, not declined) — but deliberately WITHOUT Home's start-of-tomorrow
+// upper bound: a reminder should arm for any upcoming meeting in the fetch
+// window, not just today's. Returns the start time, or null if ineligible.
+function premeetingStartMs(e) {
+  if (!e || typeof e.start !== 'string') return null;
+  if (!e.start.includes('T')) return null;       // all-day events are date-only
+  if (e.is_all_day === true) return null;
+  if (e.response_status === 'declined') return null;
   const startMs = new Date(e.start).getTime();
-  return isFinite(startMs) && startMs > nowMs;
+  return isFinite(startMs) ? startMs : null;
 }
+
+
 
 // The single fire path, shared by the armed timer and the
 // show-premeeting-notification test seam. Returns whether the banner was shown.
 // No internal firedIds dedupe (the scheduler owns that, skipping already-fired
 // ids on re-poll) so the seam can drive it repeatedly in tests.
-async function firePreMeetingNotification(event) {
-  premeetingTimers.delete(event.id);
+// `stage` is 'lead' (the heads-up before the start) or 'start' (at the start).
+async function firePreMeetingNotification(event, stage = 'lead') {
+  const isStart = stage === 'start';
+  premeetingTimers.delete(`${isStart ? 'start' : 'lead'}:${event.id}`);
   // Gate: the dedicated "Scheduled meetings" toggle — independent of the
   // "Post meeting notifications" master switch (see premeetingNotificationsEnabled).
   if (!(await premeetingNotificationsEnabled())) return false;
@@ -13123,7 +13140,10 @@ async function firePreMeetingNotification(event) {
     return false;
   }
 
-  const notif = new Notification({ title: event.title || 'Meeting starting' });
+  const notif = new Notification({
+    title: event.title || 'Meeting starting',
+    autoCloseMs: isStart ? PREMEETING_START_TOAST_MS : PREMEETING_LEAD_TOAST_MS,
+  });
   // The pre-meeting toast carries a richer payload (time / meeting URL /
   // attendees) and keeps its legacy renderer-side handlers (Join & take notes,
   // focus-on-body-tap) plus its own click/dismiss analytics. `premeeting: true`
@@ -13159,7 +13179,7 @@ async function firePreMeetingNotification(event) {
 
   // Mark fired only after we've actually shown it, so an unshowable notif
   // (no OS support) isn't permanently skipped by the scheduler's dedupe.
-  premeetingFiredIds.add(event.id);
+  (isStart ? premeetingStartFiredIds : premeetingFiredIds).add(event.id);
   return true;
 }
 
@@ -13258,19 +13278,34 @@ async function schedulePreMeetingNotificationsImpl() {
   // re-firing in the pre-start gap is already prevented by the delay<=0 guard
   // below). Keeps the Set bounded across a long-running session.
   const startById = new Map(events.map((e) => [e.id, new Date(e.start).getTime()]));
-  for (const id of premeetingFiredIds) {
-    const startMs = startById.get(id);
-    if (startMs === undefined || (isFinite(startMs) && startMs > nowMs)) {
-      premeetingFiredIds.delete(id);
+  for (const fired of [premeetingFiredIds, premeetingStartFiredIds]) {
+    for (const id of fired) {
+      const startMs = startById.get(id);
+      if (startMs === undefined || (isFinite(startMs) && startMs > nowMs)) {
+        fired.delete(id);
+      }
     }
   }
   clearPreMeetingTimers();
   for (const e of events) {
-    if (!isPremeetingEligible(e, nowMs)) continue;
-    if (premeetingFiredIds.has(e.id)) continue;
-    const delay = new Date(e.start).getTime() - PREMEETING_LEAD_MS - nowMs;
-    if (delay <= 0) continue; // already within the lead window — don't backfire
-    premeetingTimers.set(e.id, setTimeout(() => { void firePreMeetingNotification(e); }, delay));
+    const startMs = premeetingStartMs(e);
+    if (startMs === null) continue;
+    if (startMs > nowMs && !premeetingFiredIds.has(e.id)) {
+      const delay = startMs - PREMEETING_LEAD_MS - nowMs;
+      // delay <= 0: already within the lead window — don't backfire the heads-up.
+      if (delay > 0) {
+        premeetingTimers.set(`lead:${e.id}`, setTimeout(() => { void firePreMeetingNotification(e, 'lead'); }, delay));
+      }
+    }
+    if (premeetingStartFiredIds.has(e.id)) continue;
+    // At the start; or, if we're already past it (a re-poll or app launch just
+    // after the start), right away while still inside the grace window.
+    const startDelay = startMs - nowMs;
+    if (startDelay > 0) {
+      premeetingTimers.set(`start:${e.id}`, setTimeout(() => { void firePreMeetingNotification(e, 'start'); }, startDelay));
+    } else if (-startDelay <= PREMEETING_START_GRACE_MS) {
+      premeetingTimers.set(`start:${e.id}`, setTimeout(() => { void firePreMeetingNotification(e, 'start'); }, 0));
+    }
   }
   sendDebugLog(`[premeeting] armed ${premeetingTimers.size} notification(s)`);
 }
@@ -13293,7 +13328,7 @@ ipcMain.handle('show-premeeting-notification', async (_event, payload) => {
   try {
     const event = payload && payload.event;
     if (!event || !event.id) return { success: false, error: 'event with id required' };
-    const shown = await firePreMeetingNotification(event);
+    const shown = await firePreMeetingNotification(event, payload.stage === 'start' ? 'start' : 'lead');
     return { success: true, shown };
   } catch (e) {
     sendDebugLog(`Failed to show pre-meeting notification: ${e.message}`);

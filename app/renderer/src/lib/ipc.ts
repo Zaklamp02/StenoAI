@@ -1540,7 +1540,7 @@ export interface StenoaiBridge {
     /** Design-for-test seam for the pre-meeting notification (production fire
      *  path is the main-side scheduler). Returns `shown` for the gate/suppression. */
     showPremeetingNotification: RequestFn<
-      [payload: { event: { id: string; title?: string } }],
+      [payload: { event: { id: string; title?: string }; stage?: 'lead' | 'start' }],
       Result<{ shown?: boolean }>
     >;
     getLanguage: RequestFn<[], GetLanguageResponse>;
