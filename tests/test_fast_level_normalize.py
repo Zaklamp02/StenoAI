@@ -1,11 +1,13 @@
+import sys
 import tempfile
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
-from src.transcriber import FAST_LEVEL_TARGET_DBFS, _fast_level_normalize
+from src.transcriber import FAST_LEVEL_TARGET_DBFS, WhisperTranscriber, _fast_level_normalize
 
 
 def _write(path, samples, channels=1, rate=16000):
@@ -45,6 +47,20 @@ class FastLevelNormalizeTests(unittest.TestCase):
     def test_stereo_input_is_left_to_loudnorm(self):
         _write(self.dir / 'in.wav', np.zeros(3200), channels=2)
         self.assertFalse(_fast_level_normalize(self.dir / 'in.wav', self.dir / 'out.wav'))
+
+    def test_only_the_onnx_parakeet_path_skips_loudnorm_for_local_asr(self):
+        _write(self.dir / 'in.wav', np.zeros(3200))
+        transcriber = WhisperTranscriber.__new__(WhisperTranscriber)
+        transcriber.backend = "parakeet-tdt-v3"
+        for platform, levelled in (("linux", True), ("win32", True), ("darwin", False)):
+            with patch.object(sys, "platform", platform), \
+                    patch("src.transcriber._resolve_ffmpeg", return_value="ffmpeg"), \
+                    patch("src.transcriber._fast_level_normalize", return_value=True) as fast, \
+                    patch("src.transcriber.subprocess.run", side_effect=OSError("no ffmpeg in this test")):
+                path, is_temp = transcriber._preprocess_audio(self.dir / 'in.wav', include_highpass=False)
+            self.assertEqual(fast.called, levelled, platform)
+            if is_temp:
+                path.unlink()
 
 
 if __name__ == '__main__':

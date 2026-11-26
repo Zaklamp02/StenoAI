@@ -109,12 +109,14 @@ test('@long-meeting long WAV runs the chunking path to completion; real dir unto
     const heartbeats = await page.evaluate(() => (window as StenoWindow).__hb ?? []);
     expect(heartbeats.some((l) => l.includes('HEARTBEAT:transcribe'))).toBe(true);
 
-    // Witness the multi-WINDOW chunking path specifically on the onnx backend —
-    // the path that runs in the nightly (Windows/Linux CPU). Its chunked loop
-    // emits `HEARTBEAT:transcribe:<done>/<total>` per window where <total> is the
-    // window count, so a real <total> >= 2 proves the long file split into
-    // multiple windows (the bare :start beat above would pass even without
-    // chunking — exactly the weak-assertion gap this guards). The pinned
+    // Witness the long-file path specifically on the onnx backend — the path
+    // that runs in the nightly (Windows/Linux CPU). It scans the file for
+    // speech and decodes only that, emitting
+    // `HEARTBEAT:transcribe:<done>/<total>` with <total> the file's length in
+    // seconds, about once per scanned minute and once per decoded span. A
+    // real <total> >= 2 proves the backend walked the long file (the bare
+    // :start beat above would pass without it). The sine WAV has no speech,
+    // so nothing is decoded here; window cutting is unit-tested. The pinned
     // parakeet-mlx build (local macOS) doesn't surface per-window beats, so the
     // strong check is gated to the backend that emits them; local is dev-only and
     // still asserts completion + liveness above.

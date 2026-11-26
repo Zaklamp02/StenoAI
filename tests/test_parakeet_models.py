@@ -80,6 +80,64 @@ class IsInstalledTests(unittest.TestCase):
             self.assertFalse(parakeet_models.is_installed(model_id))
 
 
+class MainRefRepairTests(unittest.TestCase):
+    """A download pinned to a commit hash leaves no refs/main, and an offline
+    load resolves main only through it."""
+
+    MODEL = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+
+    def setUp(self):
+        self._cache = TemporaryDirectory()
+        env = patch.dict(os.environ, {"HF_HUB_CACHE": self._cache.name})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(self._cache.cleanup)
+        self.repo = parakeet_models._hf_cache_dir_for(self.MODEL)
+        self.ref = self.repo / "refs" / "main"
+
+    def _snapshot(self, revision: str, complete: bool = True) -> Path:
+        snapshot = self.repo / "snapshots" / revision
+        snapshot.mkdir(parents=True)
+        files = parakeet_models._REQUIRED_SNAPSHOT_FILES[self.MODEL]
+        for name in files if complete else files[:1]:
+            (snapshot / name).write_bytes(b"present")
+        return snapshot
+
+    def test_writes_missing_ref_for_the_complete_snapshot(self):
+        self._snapshot("aaa", complete=False)
+        self._snapshot("bbb")
+        parakeet_models._repair_main_ref(self.MODEL)
+        self.assertEqual(self.ref.read_text(), "bbb")
+
+    def test_offline_mode_repairs_the_ref_before_loading(self):
+        self._snapshot("bbb")
+        with patch.dict(os.environ, {}, clear=False):
+            self.assertTrue(parakeet_models.maybe_enable_offline(self.MODEL))
+        self.assertEqual(self.ref.read_text(), "bbb")
+
+    def test_keeps_an_existing_ref(self):
+        self._snapshot("bbb")
+        self.ref.parent.mkdir(parents=True)
+        self.ref.write_text("ccc")
+        parakeet_models._repair_main_ref(self.MODEL)
+        self.assertEqual(self.ref.read_text(), "ccc")
+
+    def test_no_ref_without_a_complete_snapshot(self):
+        self._snapshot("aaa", complete=False)
+        parakeet_models._repair_main_ref(self.MODEL)
+        self.assertFalse(self.ref.exists())
+
+    def test_mlx_model_gets_its_ref_too(self):
+        model = "mlx-community/parakeet-tdt-0.6b-v3"
+        snapshot = parakeet_models._hf_cache_dir_for(model) / "snapshots" / "ddd"
+        snapshot.mkdir(parents=True)
+        for name in parakeet_models._REQUIRED_SNAPSHOT_FILES[model]:
+            (snapshot / name).write_bytes(b"present")
+        parakeet_models._repair_main_ref(model)
+        ref = parakeet_models._hf_cache_dir_for(model) / "refs" / "main"
+        self.assertEqual(ref.read_text(), "ddd")
+
+
 class MaybeEnableOfflineTests(unittest.TestCase):
     def setUp(self):
         # Snapshot the two env vars we touch so each test runs from a known

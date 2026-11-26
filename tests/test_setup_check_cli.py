@@ -95,19 +95,20 @@ class SetupCheckJsonTests(unittest.TestCase):
         self.assertEqual(speaker["status"], "warn")
         self.assertTrue(speaker["ok"])
 
-    def test_non_macos_setup_omits_the_speaker_model_check(self):
+    def test_non_macos_setup_includes_the_speaker_model_check(self):
         with patch("simple_recorder.sys.platform", "linux"), patch(
             "simple_recorder._run_speaker_model_command",
+            return_value={"success": True, "ready": True},
         ) as run_speaker_check:
             res = CliRunner().invoke(simple_recorder.setup_check, ["--json"])
 
         self.assertEqual(res.exit_code, 0, res.output)
         data = _only_json(res.output)
-        self.assertNotIn(
+        self.assertIn(
             "speaker-diarization-model",
             {check["name"] for check in data["checks"]},
         )
-        run_speaker_check.assert_not_called()
+        run_speaker_check.assert_called_once_with("model-status", timeout=15)
 
 
 if __name__ == "__main__":

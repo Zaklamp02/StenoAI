@@ -13,6 +13,7 @@ import unittest
 import wave
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -89,6 +90,11 @@ class TimestampShapeNormalisationTests(unittest.TestCase):
     """The helpers tolerate three timestamp shapes (tuple/list, dict, object)
     so a minor onnx-asr API shift doesn't crash the live path. These cover
     each branch."""
+
+    def test_float_shape(self):
+        # onnx-asr 0.12: a bare token start time.
+        self.assertAlmostEqual(onnx_backend._ts_start(1.5), 1.5)
+        self.assertAlmostEqual(onnx_backend._ts_end(1.5), 1.5)
 
     def test_tuple_shape(self):
         self.assertAlmostEqual(onnx_backend._ts_start((1.5, 2.5)), 1.5)
@@ -191,6 +197,93 @@ class _FakeTsModel:
             tokens=list(tokens),
             timestamps=list(timestamps),
         )
+
+
+class _FakeVad:
+    """Reads the speech probability straight out of the chunk's first sample,
+    so a test writes its VAD track into the audio itself."""
+
+    def predict(self, chunk):
+        return float(chunk[0])
+
+
+def _audio_with_speech(seconds, speech, level=0.9):
+    samples = np.zeros(int(seconds * onnx_backend._SAMPLE_RATE), dtype=np.float32)
+    for start, end in speech:
+        samples[int(start * 16000):int(end * 16000)] = level
+    return samples
+
+
+class SpeechSpanTests(unittest.TestCase):
+    """Speech-gated decoding: which audio reaches the model."""
+
+    def _spans(self, samples):
+        with patch("src.silero_vad.SileroVAD", _FakeVad):
+            return [(a / 16000, b / 16000) for a, b in onnx_backend._speech_spans(samples)]
+
+    def test_pads_speech_and_skips_silence(self):
+        spans = self._spans(_audio_with_speech(90, [(10, 12), (30, 31)]))
+        self.assertEqual(len(spans), 2)
+        for (start, end), (speech_start, speech_end) in zip(spans, [(10, 12), (30, 31)]):
+            self.assertAlmostEqual(start, speech_start - onnx_backend.SPEECH_PAD_S, delta=0.1)
+            self.assertAlmostEqual(end, speech_end + onnx_backend.SPEECH_PAD_S, delta=0.1)
+
+    def test_short_pause_stays_inside_one_span(self):
+        spans = self._spans(_audio_with_speech(90, [(10, 12), (13.5, 15)]))
+        self.assertEqual(len(spans), 1)
+        self.assertLess(spans[0][0], 10)
+        self.assertGreater(spans[0][1], 15)
+
+    def test_blip_is_not_speech(self):
+        self.assertEqual(self._spans(_audio_with_speech(90, [(10, 10.1)])), [])
+
+    def test_long_speech_is_cut_at_its_quietest_point(self):
+        samples = _audio_with_speech(150, [(0, 150)])
+        samples[int(50 * 16000):int(50.2 * 16000)] = 0.25  # a breath, still speech
+        spans = self._spans(samples)
+        self.assertTrue(all(end - start <= onnx_backend.PARAKEET_CHUNK_DURATION_S for start, end in spans))
+        self.assertAlmostEqual(spans[0][1], 50.0, delta=0.25)
+        # Contiguous: no audio lost and none decoded twice.
+        for (_, end), (start, _) in zip(spans, spans[1:]):
+            self.assertEqual(end, start)
+        self.assertEqual(spans[-1][1], 150)
+
+    def test_vad_failure_falls_back_to_whole_file(self):
+        with patch("src.silero_vad.SileroVAD", side_effect=RuntimeError("no model")):
+            self.assertIsNone(onnx_backend._speech_spans(np.zeros(16000, dtype=np.float32)))
+
+
+class TranscribeSpansTests(unittest.TestCase):
+    SPANS = [(10 * 16000, 20 * 16000), (40 * 16000, 45 * 16000)]
+
+    def _samples(self):
+        return np.zeros(60 * 16000, dtype=np.float32)
+
+    def test_offsets_timestamps_by_span_start(self):
+        model = _FakeTsModel([
+            ([" Hello", " world."], [1.0, 2.0]),
+            (["Bye."], [0.5]),
+        ])
+        merged = onnx_backend._transcribe_spans(model, self._samples(), self.SPANS)
+        self.assertEqual(merged.text, "Hello world. Bye.")
+        self.assertEqual([ts[0] for ts in merged.timestamps], [11.0, 12.0, 40.5])
+        self.assertEqual(merged.covered_seconds, merged.total_seconds)
+
+    def test_failed_span_is_a_gap_not_a_failure(self):
+        model = _FakeTsModel([RuntimeError("boom"), ([" Bye."], [0.5])])
+        merged = onnx_backend._transcribe_spans(model, self._samples(), self.SPANS)
+        self.assertEqual(merged.text, "Bye.")
+        self.assertEqual(merged.total_seconds - merged.covered_seconds, 10.0)
+
+    def test_every_span_failing_raises(self):
+        model = _FakeTsModel([RuntimeError("boom"), RuntimeError("boom")])
+        with self.assertRaises(RuntimeError):
+            onnx_backend._transcribe_spans(model, self._samples(), self.SPANS)
+
+    def test_silence_is_fully_covered_and_empty(self):
+        merged = onnx_backend._transcribe_spans(_FakeTsModel([]), self._samples(), [])
+        self.assertEqual(merged.text, "")
+        self.assertEqual(merged.covered_seconds, merged.total_seconds)
 
 
 class TranscribeWindowsMergeTests(unittest.TestCase):

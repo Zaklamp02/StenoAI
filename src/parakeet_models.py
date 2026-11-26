@@ -96,13 +96,19 @@ def is_installed(model_id: str = DEFAULT_MODEL_ID) -> bool:
     ``maybe_enable_offline`` must set its environment before the hub is first
     imported.
     """
+    return bool(_complete_snapshots(model_id))
+
+
+def _complete_snapshots(model_id: str) -> list[Path]:
+    """Snapshot folders holding every file the selected runtime opens."""
     required_files = _REQUIRED_SNAPSHOT_FILES.get(model_id)
     if required_files is None:
-        return False
+        return []
 
     snapshots = _hf_cache_dir_for(model_id) / "snapshots"
     if not snapshots.is_dir():
-        return False
+        return []
+    complete = []
     try:
         for snapshot in snapshots.iterdir():
             if not snapshot.is_dir():
@@ -113,12 +119,36 @@ def is_installed(model_id: str = DEFAULT_MODEL_ID) -> bool:
                     and (snapshot / name).stat().st_size > 0
                     for name in required_files
                 ):
-                    return True
+                    complete.append(snapshot)
             except OSError:
                 continue
     except OSError:
-        return False
-    return False
+        return complete
+    return complete
+
+
+def _repair_main_ref(model_id: str) -> None:
+    """Point ``refs/main`` at the downloaded snapshot when it is missing.
+
+    ``_download_snapshot`` pins the commit hash, and the hub writes no ref for
+    a download requested by hash. An offline load resolves ``main`` through
+    that ref only (onnx-asr's snapshot_download and parakeet-mlx's
+    hf_hub_download alike), so without it a complete download never loads,
+    and a retry skips the download since the files are there.
+    """
+    ref =_hf_cache_dir_for(model_id) / "refs" / "main"
+    try:
+        if ref.is_file():
+            return
+        snapshots = _complete_snapshots(model_id)
+        if not snapshots:
+            return
+        newest = max(snapshots, key=lambda snapshot: snapshot.stat().st_mtime)
+        ref.parent.mkdir(parents=True, exist_ok=True)
+        ref.write_text(newest.name, encoding="ascii")
+        logger.info("Wrote missing HuggingFace ref main -> %s for %s", newest.name, model_id)
+    except OSError as e:
+        logger.warning("Could not write the HuggingFace ref for %s: %s", model_id, e)
 
 
 def maybe_enable_offline(model_id: str = DEFAULT_MODEL_ID) -> bool:
@@ -140,6 +170,7 @@ def maybe_enable_offline(model_id: str = DEFAULT_MODEL_ID) -> bool:
     """
     if not is_installed(model_id):
         return False
+    _repair_main_ref(model_id)
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
     return True
@@ -278,7 +309,8 @@ def _download_snapshot(model_id: str, emit: Callable[[dict], None]) -> None:
 
         kwargs = {"tqdm_class": DownloadProgress} if supports_progress else {}
         cached = hf_hub_download(model_id, filename, revision=revision, token=False, **kwargs)
-        # The first file resolves main and writes its cache ref. Pin subsequent
+        # Unpinned, the first file resolves main and writes its cache ref (a
+        # pinned download writes none; see _repair_main_ref). Pin subsequent
         # files to that same snapshot so an upstream update cannot mix weights.
         if revision is None:
             revision = Path(cached).parent.name

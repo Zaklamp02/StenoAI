@@ -2276,7 +2276,7 @@ class TagChannelSegmentsTests(unittest.TestCase):
         diar_segments = [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_0"}]
         embeddings = {"SPEAKER_0": [0.7, 0.1]}
 
-        def _fake_run_steno_diarize(channel_path, timeout, progress_sink=None):
+        def _fake_run_steno_diarize(channel_path, timeout, progress_sink=None, **_sherpa_options):
             if progress_sink:
                 progress_sink(1, 2)
                 progress_sink(2, 2)

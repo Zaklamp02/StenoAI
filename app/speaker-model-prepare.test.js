@@ -13,11 +13,10 @@ const READY = JSON.stringify({
   missing_models: [],
 });
 
-function setup(platform = 'darwin') {
+function setup() {
   const procs = [];
   const progress = [];
   const prepare = createSpeakerModelPreparer({
-    platform,
     makeLineReader,
     getBackendPath: () => '/synthetic/backend',
     getBackendCwd: () => '/synthetic',
@@ -127,10 +126,4 @@ test('a different engine waits for the running download instead of racing it', a
   procs[1].emit('close', 1);
   assert.equal(await nemotron, await nemotronAgain);
   assert.equal((await nemotron).success, false);
-});
-
-test('non-macOS never spawns the backend', async () => {
-  const { prepare, procs } = setup('win32');
-  assert.equal((await prepare()).success, false);
-  assert.equal(procs.length, 0);
 });

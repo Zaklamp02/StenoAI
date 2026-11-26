@@ -42,7 +42,7 @@ The Electron build pulls the bundled backend from `../dist/stenoai` via `extraRe
 
 For setup from a clean checkout, see `CONTRIBUTING.md` and `README.md`.
 
-### Speaker diarization (macOS only)
+### Speaker diarization
 Per-channel acoustic speaker diarization (splitting multiple speakers sharing
 one side of a call — e.g. two people around one mic, or multiple remote
 participants on system audio) runs through `bin/steno-diarize`, a Swift/
@@ -80,8 +80,32 @@ pyinstaller stenoai.spec --noconfirm
 
 `stenoai.spec` requires the diarization sidecar on macOS. Build it first or use
 `custom/bootstrap.sh` to stage the verified upstream helpers. A failed individual
-analysis can still fall back to channel labels. Windows/Linux do not bundle the
-macOS acoustic diarizer.
+analysis can still fall back to channel labels.
+
+Windows/Linux use `src/sherpa_diarize.py` instead: the same CLI contract
+(`diarize`, `model-status`, `prepare-models`), run by the frozen backend as
+the hidden `stenoai diarize-sidecar` command. `_resolve_steno_diarize()`
+returns the `SHERPA_DIARIZE` sentinel there and `_steno_diarize_argv()` turns
+it into that command, so every caller stays unchanged. It runs pyannote
+segmentation 3.0 (onnxruntime) + WeSpeaker ResNet34 (sherpa-onnx; 256-dim, so
+voiceprints keep their dimension) on the CPU as a pyannote-3.1-style
+pipeline: overlapping 10 s windows, one embedding per local speaker,
+centroid-linkage clustering, then one timeline rebuilt from the windows.
+There is one engine (no picker; the `STENOAI_DIARIZE_ENGINE` setting is
+ignored). Models (~32 MB, sha256-pinned) download to
+`<user data>/models/speaker-diarization/sherpa-onnx`. Clustering parameters
+were tuned on AMI test meetings (see the constants in the module);
+`STENOAI_DIARIZE_CLUSTER_THRESHOLD` overrides the threshold for tuning.
+`src.transcriber` passes the transcript's speech regions in
+`STENOAI_DIARIZE_REGIONS`, so only audio that can receive a label is
+diarized.
+
+Batch transcription on Windows/Linux (`src/_parakeet_onnx.py`) is
+speech-gated the same way: Silero VAD finds the speech in each channel and
+only those spans are decoded, cut at pauses rather than in overlapping fixed
+windows. Split channels are levelled in-process (`_fast_level_normalize`)
+instead of with ffmpeg's loudnorm. macOS (MLX) keeps fixed windows and
+loudnorm.
 
 FluidAudio models are prepared explicitly during macOS onboarding with
 `prepare-speaker-models` and checked without writes via `speaker-model-status`.

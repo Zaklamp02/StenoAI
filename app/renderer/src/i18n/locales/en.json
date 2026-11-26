@@ -56,7 +56,7 @@
   "settings.ai.speakers.installed": "Installed",
   "settings.ai.speakers.retry": "Try again",
   "settings.ai.speakers.failed": "Download failed. Check your connection and try again.",
-  "settings.ai.speakers.unavailable": "Not available on this Mac.",
+  "settings.ai.speakers.unavailable": "Not available on this computer.",
   "downloads.ollama.ariaLabel": "Summarization model download progress",
   "meeting.preparingAudio": "Preparing audio…",
   "meeting.identifyingMicSpeakers": "Identifying speakers: microphone…",

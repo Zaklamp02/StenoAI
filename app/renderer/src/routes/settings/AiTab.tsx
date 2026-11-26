@@ -87,13 +87,9 @@ export function AiTab() {
       <SectionHeading>{t('settings.ai.stages.speech')}</SectionHeading>
       <TranscriptionSection />
 
-      {isMac && (
-        <>
-          <SectionHeading>{t('settings.ai.stages.speakers')}</SectionHeading>
-          <SpeakerSeparationSetting />
-          <SpeakerIdentificationSetting noBorder />
-        </>
-      )}
+      <SectionHeading>{t('settings.ai.stages.speakers')}</SectionHeading>
+      <SpeakerSeparationSetting />
+      <SpeakerIdentificationSetting noBorder />
 
       <SectionHeading>{t('settings.ai.stages.notes')}</SectionHeading>
       <p
@@ -347,7 +343,8 @@ export function SpeakerSeparationSetting() {
       >
         <div className="flex items-center gap-2">
           {control}
-          {!unavailable && (
+          {/* Windows/Linux run a single sherpa-onnx engine: nothing to pick. */}
+          {isMac && !unavailable && (
             <Select
               value={value}
               onValueChange={(v) => {

@@ -62,6 +62,15 @@ test('the newest version tag wins, including pre-releases, skipping drafts and o
   assert.equal(result.downloadUrl, 'https://github.com/dl/v2026.11.9.dmg');
 });
 
+test('Windows and Linux get the release page, never a macOS DMG', () => {
+  for (const platform of ['win32', 'linux']) {
+    const result = summarizeReleases([release('v2026.11.9')], '2026.11.2', 'x64', platform);
+    assert.equal(result.updateAvailable, true);
+    assert.equal(result.downloadUrl, null);
+    assert.equal(result.releaseUrl, 'https://github.com/Zaklamp02/StenoAI/releases/tag/v2026.11.9');
+  }
+});
+
 test('no update when on the newest version or when no release has a version tag', () => {
   assert.equal(summarizeReleases([release('v2026.11.2')], '2026.11.2', 'arm64').updateAvailable, false);
   const none = summarizeReleases([release('test-2026-11-06b')], '0.8.0', 'arm64');

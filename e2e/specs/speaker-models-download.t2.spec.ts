@@ -11,7 +11,8 @@ import path from 'node:path';
  * STENO_PROGRESS stderr lines arrive in the renderer as validated
  * speaker-models-progress events (stderr noise and malformed lines dropped),
  * and that the status flips to ready once the files are on disk.
- * macOS-only: main.js reports speaker models unavailable elsewhere.
+ * The first test also runs on Linux (the sherpa-onnx sidecar speaks the same
+ * contract); the engine and upgrade tests are about the macOS engines.
  */
 
 type Status = { success: boolean; ready: boolean; error?: string };
@@ -28,7 +29,7 @@ type StenoWindow = Window & {
 };
 
 test('speaker model download relays sidecar progress and ends ready', async ({ launchApp, userDataDir }) => {
-  test.skip(process.platform !== 'darwin', 'speaker diarization models are macOS-only');
+  test.skip(process.platform === 'win32', 'the fixture sidecar is a shell script');
 
   const marker = path.join(userDataDir, 'models', 'speaker-diarization', 'fixture-ready');
   const status = (ready: boolean) => JSON.stringify({

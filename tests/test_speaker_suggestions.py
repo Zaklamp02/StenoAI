@@ -198,6 +198,8 @@ class ScoreCandidatesTests(unittest.TestCase):
         self.assertFalse(candidates[0].hard_negative_conflict)
         self.assertAlmostEqual(candidates[0].negative_distance, 0.3, places=2)
 
+    # Fixture distances are on the macOS scale; Linux/Windows use a tighter one.
+    @mock.patch("src.speaker_suggestions.HARD_NEGATIVE_DISTANCE_THRESHOLD", 0.40)
     def test_conflict_when_negative_within_margin_of_positive(self):
         # Positive at ~0.25, negative at ~0.3: the negative evidence rivals
         # the positive (within SUGGESTION_CONFIDENCE_MARGIN), so suppress.
@@ -1699,6 +1701,17 @@ class SidecarDurabilityTests(unittest.TestCase):
             # different inodes. Only unique write-temporary files are leaks.
             leftovers = [p.name for p in output_dir.iterdir() if p.suffix == ".tmp"]
             self.assertEqual(leftovers, [], f"temp file left behind: {leftovers}")
+
+
+class SherpaScaleTests(unittest.TestCase):
+    @unittest.skipIf(__import__("sys").platform == "darwin", "sherpa-onnx scale is Linux/Windows only")
+    def test_other_people_in_the_meeting_are_not_offered_as_the_confirmed_one(self):
+        # Real sherpa-onnx distances: different people ~0.38, same person ~0.1.
+        profiles = [_profile("p1", "Person Gamma", prototypes=[_prototype([1.0, 0.0])])]
+        other = suggest_speaker([0.62, 0.7846], _stable_context(), profiles)
+        same = suggest_speaker([0.9, 0.4359], _stable_context(), profiles)
+        self.assertEqual(other.status, "none")
+        self.assertEqual(same.suggested_name, "Person Gamma")
 
 
 if __name__ == "__main__":
