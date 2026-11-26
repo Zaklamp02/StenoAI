@@ -34,6 +34,10 @@ mlx==0.31.2; sys_platform == 'darwin'
 # no PyTorch, no full NeMo toolkit. The [cpu] extra pins onnxruntime,
 # [hub] pulls huggingface_hub so model snapshots download on first use.
 onnx-asr[cpu,hub]>=0.11.0; sys_platform != 'darwin'
+# sherpa-onnx runs speaker diarization on Windows/Linux (src/sherpa_diarize.py:
+# pyannote segmentation + WeSpeaker embeddings), standing in for the macOS-only
+# Swift/CoreML steno-diarize sidecar.
+sherpa-onnx>=2.0.1; sys_platform != 'darwin'
 # Silero VAD runs via onnxruntime directly (we ship the .onnx file in
 # src/data/). The official silero-vad pip package would pull in torch
 # and torchaudio (~1 GB), which would balloon the DMG — onnxruntime

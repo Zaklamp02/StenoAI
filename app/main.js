@@ -7100,13 +7100,6 @@ function isDiarizationEngine(value) {
 // `engine` (optional) targets that engine's models instead of the saved
 // setting -- Settings prepares a choice before persisting it.
 async function runSpeakerModelCommand(command, engine) {
-  if (process.platform !== 'darwin') {
-    return {
-      success: false,
-      ready: false,
-      error: 'Speaker diarization is unavailable on this system',
-    };
-  }
   const args = [command];
   if (engine !== undefined && engine !== null) {
     if (!isDiarizationEngine(engine)) {
@@ -7139,7 +7132,6 @@ const prepareSpeakerModels = createSpeakerModelPreparer({
   getBackendCwd,
   makeLineReader,
   onLog: sendDebugLog,
-  platform: process.platform,
   onProgress: (progress) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('speaker-models-progress', progress);

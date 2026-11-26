@@ -289,7 +289,7 @@ def _diarization_models_ready(engine: str) -> bool:
         return False
     try:
         result = subprocess.run(
-            [binary, "model-status"],
+            _steno_diarize_argv(binary, "model-status"),
             capture_output=True,
             timeout=15,
             check=False,
@@ -640,8 +640,9 @@ def _resolve_ffmpeg() -> Optional[str]:
         return None
 
 
-# Resolve the bundled steno-diarize binary (macOS-only Swift/CoreML speaker
-# diarization sidecar, built by scripts/build-diarize-sidecar.sh). Mirrors
+# Resolve the steno-diarize speaker diarization sidecar. macOS: the bundled
+# Swift/CoreML binary (built by scripts/build-diarize-sidecar.sh); elsewhere
+# the sherpa-onnx sidecar (see SHERPA_DIARIZE below). Mirrors
 # _resolve_ffmpeg()'s bundle-then-fallback lookup, but checks executability
 # instead of running a cheap probe invocation — there's no equivalent to
 # `ffmpeg -version` for this binary, so a bad binary still fails safely at
@@ -649,11 +650,56 @@ def _resolve_ffmpeg() -> Optional[str]:
 _STENO_DIARIZE_PATH_CACHE: Optional[str] = None
 _STENO_DIARIZE_PATH_LOCK = threading.Lock()
 
+# Windows/Linux: _resolve_steno_diarize returns this sentinel instead of a
+# path; _steno_diarize_argv turns it into the sherpa-onnx sidecar
+# (src/sherpa_diarize.py), which speaks the same CLI contract.
+SHERPA_DIARIZE = "sherpa-onnx"
+
+
+def _steno_diarize_argv(binary: str, *args: str) -> list[str]:
+    if binary != SHERPA_DIARIZE:
+        return [binary, *args]
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, "diarize-sidecar", *args]
+    repo_root = Path(__file__).resolve().parent.parent
+    return [sys.executable, str(repo_root / "simple_recorder.py"), "diarize-sidecar", *args]
+
+
+# Padding around each transcript segment handed to the sherpa sidecar, and
+# the pause below which two segments are diarized as one stretch.
+DIARIZE_REGION_PAD_S = 0.5
+DIARIZE_REGION_MAX_GAP_S = 2.0
+
+
+def _speech_regions_option(asr_segments: list[dict]) -> dict:
+    """``extra_env`` telling the sherpa sidecar (Windows/Linux) where this
+    channel's transcript has speech, so it diarizes only that. Empty on
+    macOS: the Swift sidecar call is unchanged."""
+    if sys.platform == "darwin":
+        return {}
+    regions: list[list[float]] = []
+    for segment in sorted(asr_segments, key=lambda s: float(s.get("start") or 0.0)):
+        start = max(0.0, float(segment.get("start") or 0.0) - DIARIZE_REGION_PAD_S)
+        end = float(segment.get("end") or 0.0) + DIARIZE_REGION_PAD_S
+        if regions and start - regions[-1][1] <= DIARIZE_REGION_MAX_GAP_S:
+            regions[-1][1] = max(regions[-1][1], end)
+        else:
+            regions.append([start, end])
+    payload = json.dumps([[round(a, 2), round(b, 2)] for a, b in regions], separators=(",", ":"))
+    # Windows caps the whole environment block at 32,767 characters; a very
+    # long meeting diarizes the whole channel rather than fail to spawn.
+    return {"extra_env": {"STENOAI_DIARIZE_REGIONS": payload}} if len(payload) < 20000 else {}
+
 
 def _resolve_steno_diarize() -> Optional[str]:
     global _STENO_DIARIZE_PATH_CACHE
     if sys.platform != "darwin":
-        return None
+        # A T2 e2e spec can stand a fixture script in for the sidecar here too.
+        override = os.environ.get("STENOAI_DIARIZE_SIDECAR_PATH")
+        if override and os.access(override, os.X_OK):
+            return override
+        import importlib.util
+        return SHERPA_DIARIZE if importlib.util.find_spec("sherpa_onnx") else None
     if _STENO_DIARIZE_PATH_CACHE is not None:
         return _STENO_DIARIZE_PATH_CACHE
     with _STENO_DIARIZE_PATH_LOCK:
@@ -1311,7 +1357,7 @@ def _run_steno_diarize(
             else {"start_new_session": True}
         )
         proc = subprocess.Popen(
-            [binary, "diarize", str(channel_path)],
+            _steno_diarize_argv(binary, "diarize", str(channel_path)),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=_steno_diarize_env(extra_env, fallback_when_missing=True),
             **process_group_options,
@@ -1558,7 +1604,9 @@ def _cluster_channel_labels(diar_segments: list[dict], legacy_label: str) -> Opt
 # through in real-recording testing (a distance-only check would have
 # accepted several unrelated cross-recording speakers as "matches").
 # Requiring the best candidate to clearly beat the runner-up rejects those.
-VOICEPRINT_DISTANCE_THRESHOLD = 0.40
+# sherpa-onnx embeddings (Linux/Windows) need the tighter value, see
+# src.speaker_suggestions.SHERPA_DISTANCE_THRESHOLD.
+VOICEPRINT_DISTANCE_THRESHOLD = 0.40 if sys.platform == "darwin" else 0.25
 VOICEPRINT_CONFIDENCE_MARGIN = 0.10
 
 
@@ -1910,7 +1958,10 @@ def _tag_channel_segments(
                 print(f"PROGRESS:diarize:{_label}:embedding:{i}/{n}", flush=True)
 
             with _heartbeat_while_waiting(f"diarize:{legacy_label}"):
-                diarize_result = _run_steno_diarize(channel_path, timeout, progress_sink=_progress_sink)
+                diarize_result = _run_steno_diarize(
+                    channel_path, timeout, progress_sink=_progress_sink,
+                    **_speech_regions_option(asr_segments),
+                )
             if diarize_result:
                 diar_segments, speaker_embeddings = diarize_result
                 cluster_labels, eligible_speaker_ids = _cluster_channel_label_plan(
@@ -2889,7 +2940,13 @@ class WhisperTranscriber:
             logger.warning("Could not create pre-processing temp file; using original audio: %s", e)
             return audio_filepath, False
         temp_path = Path(temp_name)
-        if self.backend == "openai-asr" and not include_highpass:
+        fast_level = self.backend == "openai-asr" or (
+            # The ONNX Parakeet path decodes speech span by span and its
+            # features are normalised per span, so loudnorm's ~40 s per
+            # channel buys nothing there. MLX and whisper.cpp keep loudnorm.
+            self.backend == "parakeet-tdt-v3" and sys.platform != "darwin"
+        )
+        if fast_level and not include_highpass:
             # Channel files from the diarised split are already high-passed
             # 16 kHz mono PCM: level them in-process instead of loudnorm.
             try:

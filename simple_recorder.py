@@ -2156,7 +2156,7 @@ def onnx_selftest_cmd():
         # package metadata copied into the bundle (copy_metadata in the spec).
         if sys.platform != "darwin":
             import onnx_asr  # noqa: F401
-
+            import sherpa_onnx  # noqa: F401
         # Long-file windowing self-check. The actual ASR weights (670 MB)
         # aren't in CI, so we can't recognise real audio here — but we CAN
         # prove the manual windowing in _parakeet_onnx.transcribe_file slices
@@ -4873,7 +4873,7 @@ def _run_speaker_model_command(
     same engine meeting processing will run.
     """
     import subprocess
-    from src.transcriber import _resolve_steno_diarize, _steno_diarize_env
+    from src.transcriber import _resolve_steno_diarize, _steno_diarize_argv, _steno_diarize_env
 
     binary = _resolve_steno_diarize()
     if not binary:
@@ -4882,11 +4882,12 @@ def _run_speaker_model_command(
             "ready": False,
             "error": "Speaker diarization is unavailable on this system",
         }
+    argv = _steno_diarize_argv(binary, command)
     try:
         env = _steno_diarize_env(engine=engine)
         if on_progress is None:
             result = subprocess.run(
-                [binary, command],
+                argv,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -4894,7 +4895,7 @@ def _run_speaker_model_command(
                 env=env,
             )
         else:
-            result = _run_sidecar_with_progress([binary, command], timeout, on_progress, env=env)
+            result = _run_sidecar_with_progress(argv, timeout, on_progress, env=env)
     except (OSError, subprocess.TimeoutExpired):
         logger.warning("Speaker diarization model command could not complete")
         return {
@@ -4959,7 +4960,7 @@ def speaker_model_status(engine: Optional[str]):
 @cli.command(name="prepare-speaker-models")
 @_DIARIZATION_ENGINE_OPTION
 def prepare_speaker_models(engine: Optional[str]):
-    """Download and compile the macOS speaker-diarization models.
+    """Download (and on macOS compile) the speaker-diarization models.
 
     Prints ``SPEAKER_MODELS_PROGRESS:{"percent": n, "phase": ...}`` lines while
     it runs (main.js relays them to the UI), then the JSON status last.
@@ -4973,6 +4974,18 @@ def prepare_speaker_models(engine: Optional[str]):
     print(json.dumps(payload))
     if not payload.get("success") or not payload.get("ready"):
         sys.exit(1)
+
+
+@cli.command(
+    name="diarize-sidecar",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True},
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def diarize_sidecar(args):
+    """sherpa-onnx speaker diarization (Windows/Linux steno-diarize)."""
+    from src.sherpa_diarize import main as sherpa_main
+    sys.exit(sherpa_main(list(args)))
 
 
 @cli.command()
@@ -5070,17 +5083,17 @@ def setup_check(as_json):
     except Exception as e:
         checks.append(("❌ ffmpeg", f"Error: {e}"))
 
-    # Acoustic speaker diarization ships only on macOS. Its model-status
-    # command is read-only: a missing cache routes the user through onboarding
-    # instead of silently downloading models during their first meeting.
-    if sys.platform == "darwin":
-        speaker_models = _run_speaker_model_command("model-status", timeout=15)
-        if speaker_models.get("success") and speaker_models.get("ready"):
-            checks.append(("✅ speaker-diarization-model", "ready"))
-        elif speaker_models.get("success"):
-            checks.append(("⚠️ speaker-diarization-model", "not installed (optional)"))
-        else:
-            checks.append(("⚠️ speaker-diarization-model", "unavailable (optional)"))
+    # Acoustic speaker diarization: CoreML sidecar on macOS, sherpa-onnx
+    # elsewhere. Its model-status command is read-only: a missing cache routes
+    # the user through onboarding instead of silently downloading models
+    # during their first meeting.
+    speaker_models = _run_speaker_model_command("model-status", timeout=15)
+    if speaker_models.get("success") and speaker_models.get("ready"):
+        checks.append(("✅ speaker-diarization-model", "ready"))
+    elif speaker_models.get("success"):
+        checks.append(("⚠️ speaker-diarization-model", "not installed (optional)"))
+    else:
+        checks.append(("⚠️ speaker-diarization-model", "unavailable (optional)"))
     
     # Skip Ollama model check during setup - service starts automatically when needed
     # Just verify Ollama binary is installed

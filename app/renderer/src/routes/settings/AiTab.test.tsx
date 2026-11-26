@@ -29,6 +29,15 @@ const diarization = vi.hoisted(() => ({
   },
 }));
 
+const platform = vi.hoisted(() => ({ isMac: true }));
+
+vi.mock('@/lib/utils', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/utils')>()),
+  get isMac() {
+    return platform.isMac;
+  },
+}));
+
 vi.mock('@/hooks/useSettings', () => ({
   useIdentityMatchingEnabledSetting: () => ({ data: false }),
   useSetIdentityMatchingEnabled: () => ({ mutate: vi.fn() }),
@@ -63,6 +72,7 @@ describe('Recognise people setting', () => {
 
 describe('Separate voices row with the engine picker', () => {
   beforeEach(() => {
+    platform.isMac = true;
     diarization.engine = { data: 'sortformer', isError: false, refetch: vi.fn() };
     diarization.models = { data: 'ready' };
     diarization.mutation = idleMutation();
@@ -77,6 +87,14 @@ describe('Separate voices row with the engine picker', () => {
     );
     return trigger as HTMLButtonElement;
   }
+
+  test('Windows and Linux have one engine, so no picker', () => {
+    platform.isMac = false;
+    render(<SpeakerSeparationSetting />);
+
+    expect(screen.getByText('Installed')).toBeTruthy();
+    expect(screen.queryByRole('combobox', { name: 'Speaker detection' })).toBeNull();
+  });
 
   test('installed models show Installed next to the saved engine', () => {
     render(<SpeakerSeparationSetting />);
@@ -108,7 +126,7 @@ describe('Separate voices row with the engine picker', () => {
     diarization.models = { data: 'unavailable' };
     render(<SpeakerSeparationSetting />);
 
-    expect(screen.getByText('Not available on this Mac.')).toBeTruthy();
+    expect(screen.getByText('Not available on this computer.')).toBeTruthy();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Download' })).toBeNull();
   });

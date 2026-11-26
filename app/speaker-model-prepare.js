@@ -21,19 +21,12 @@ function isProgress(value) {
  * call for a different engine waits for it to finish.
  */
 function createSpeakerModelPreparer({
-  spawn, getBackendPath, getBackendCwd, makeLineReader, onProgress, onLog = () => {}, platform,
+  spawn, getBackendPath, getBackendCwd, makeLineReader, onProgress, onLog = () => {},
 }) {
   const inFlight = new Map();
   let queue = null;
 
   function run(engine) {
-    if (platform !== 'darwin') {
-      return Promise.resolve({
-        success: false,
-        ready: false,
-        error: 'Speaker diarization is unavailable on this system',
-      });
-    }
     return new Promise((resolve) => {
       const args = engine ? ['prepare-speaker-models', '--engine', engine] : ['prepare-speaker-models'];
       const proc = spawn(getBackendPath(), args, { stdio: 'pipe', cwd: getBackendCwd() });

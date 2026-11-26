@@ -68,6 +68,19 @@ _SAMPLE_RATE = 16000
 PARAKEET_CHUNK_DURATION_S = 60.0
 PARAKEET_CHUNK_OVERLAP_S = 15.0
 
+# Speech-gated batch decoding. A call recording is two channels that are each
+# silent most of the time, and the encoder costs the same per second of
+# silence as of speech. Silero VAD (already bundled for the live path) finds
+# the speech; only that is decoded. Pauses up to SPEECH_MAX_GAP_S stay inside
+# a span, so a sentence is never decoded without its neighbours, and a span
+# longer than one window is cut at its quietest instant instead of being
+# decoded twice across an overlap.
+SPEECH_ONSET_PROB = 0.35
+SPEECH_OFFSET_PROB = 0.20
+SPEECH_MIN_S = 0.25
+SPEECH_PAD_S = 0.4
+SPEECH_MAX_GAP_S = 2.0
+
 # When deduping the overlap region between adjacent windows, a token whose
 # global start lands within this epsilon of the last committed token's end is
 # treated as the same token re-emitted in the overlap, not a new one.
@@ -194,7 +207,11 @@ def transcribe_file(
         result = ts_model.recognize(samples, sample_rate=_SAMPLE_RATE)
         return _result_to_dict(result, language)
 
-    merged = _transcribe_windows(ts_model, samples)
+    spans = _speech_spans(samples)
+    if spans is None:
+        merged = _transcribe_windows(ts_model, samples)
+    else:
+        merged = _transcribe_spans(ts_model, samples, spans)
     return _result_to_dict(merged, language)
 
 
@@ -306,10 +323,12 @@ def _result_to_dict(result: Any, language: Optional[str]) -> dict:
 def _ts_start(ts: Any) -> float:
     """Normalise a single timestamp entry to a float start time.
 
-    onnx-asr timestamps come through as ``(start, end)`` tuples in
-    current releases; tolerate dict or object shapes too in case the
-    API tightens later.
+    onnx-asr 0.12 emits each token's start time as a plain float; older
+    releases used ``(start, end)`` tuples. Tolerate dict or object shapes
+    too in case the API changes again.
     """
+    if isinstance(ts, (int, float)):
+        return float(ts)
     if isinstance(ts, (tuple, list)) and len(ts) >= 1:
         return float(ts[0] or 0.0)
     if isinstance(ts, dict):
@@ -318,6 +337,8 @@ def _ts_start(ts: Any) -> float:
 
 
 def _ts_end(ts: Any) -> float:
+    if isinstance(ts, (int, float)):
+        return float(ts)
     if isinstance(ts, (tuple, list)) and len(ts) >= 2:
         return float(ts[1] or 0.0)
     if isinstance(ts, dict):
@@ -461,6 +482,135 @@ def _load_wav_16k_mono(audio_path: Path):
         # Interleaved frames → average channels down to mono.
         samples = samples.reshape(-1, n_channels).mean(axis=1)
     return samples
+
+
+def _speech_spans(samples) -> Optional[list[tuple[int, int]]]:
+    """Sample ranges that contain speech, each at most one window long.
+
+    Returns ``None`` when the VAD cannot run, so the caller decodes the whole
+    file in overlapping windows as before.
+    """
+    import numpy as np
+
+    try:
+        from src.silero_vad import VAD_CHUNK_SAMPLES, SileroVAD
+        vad = SileroVAD()
+        frames = len(samples) // VAD_CHUNK_SAMPLES
+        probs = np.empty(frames, dtype=np.float32)
+        total_seconds = len(samples) // _SAMPLE_RATE
+        for i in range(frames):
+            probs[i] = vad.predict(samples[i * VAD_CHUNK_SAMPLES:(i + 1) * VAD_CHUNK_SAMPLES])
+            if i % 2000 == 1999:
+                # Still alive, nothing decoded yet (about once per audio minute).
+                _emit_heartbeat(0, total_seconds)
+    except Exception as e:
+        logger.warning("Speech detection unavailable; decoding the whole file: %s", e)
+        return None
+
+    per_second = _SAMPLE_RATE / VAD_CHUNK_SAMPLES
+    pad = int(SPEECH_PAD_S * per_second)
+    regions: list[list[int]] = []  # [first frame, end frame), padded
+    start = None
+    for i, prob in enumerate(probs):
+        if start is None and prob >= SPEECH_ONSET_PROB:
+            start = i
+        elif start is not None and prob < SPEECH_OFFSET_PROB:
+            if i - start >= SPEECH_MIN_S * per_second:
+                regions.append([max(0, start - pad), min(frames, i + pad)])
+            start = None
+    if start is not None:
+        regions.append([max(0, start - pad), frames])
+
+    merged: list[list[int]] = []
+    for region in regions:
+        if merged and region[0] - merged[-1][1] <= SPEECH_MAX_GAP_S * per_second:
+            merged[-1][1] = max(merged[-1][1], region[1])
+        else:
+            merged.append(region)
+
+    window = int(PARAKEET_CHUNK_DURATION_S * per_second)
+    spans: list[tuple[int, int]] = []
+    for first, end in merged:
+        while end - first > window:
+            # Cut where speech is least likely in the second half of the window.
+            cut = first + window // 2 + int(np.argmin(probs[first + window // 2:first + window]))
+            spans.append((first * VAD_CHUNK_SAMPLES, cut * VAD_CHUNK_SAMPLES))
+            first = cut
+        # The last frame may be partial; run the final span to the true end.
+        last = len(samples) if end == frames else end * VAD_CHUNK_SAMPLES
+        spans.append((first * VAD_CHUNK_SAMPLES, last))
+    return spans
+
+
+def _transcribe_spans(ts_model: Any, samples, spans: list[tuple[int, int]]) -> _SimpleResult:
+    """Recognise each speech span and merge the tokens with global timestamps.
+
+    Same failure contract as ``_transcribe_windows``: one failing span is a
+    logged gap, every span failing raises. Audio outside the spans is silence
+    that was read and found empty, so it counts as covered.
+    """
+    merged_tokens: list = []
+    merged_timestamps: list = []
+    total_samples = sum(end - start for start, end in spans)
+    lost_samples = 0
+    recognized = 0
+    last_error: Optional[Exception] = None
+
+    for start, end in spans:
+        offset_s = start / _SAMPLE_RATE
+        tokens: list = []
+        timestamps: list = []
+        try:
+            result = ts_model.recognize(samples[start:end], sample_rate=_SAMPLE_RATE)
+            tokens = list(getattr(result, "tokens", None) or [])
+            timestamps = list(getattr(result, "timestamps", None) or [])
+            usable = len(tokens) == len(timestamps)
+            if not usable:
+                logger.warning(
+                    "ONNX span at %.1fs had %d tokens / %d timestamps, skipping",
+                    offset_s, len(tokens), len(timestamps),
+                )
+        except Exception as e:
+            last_error = e
+            usable = False
+            logger.warning("ONNX span at %.1fs failed, skipping: %s", offset_s, e)
+        # Position in the file, in seconds: spans vary from a word to a
+        # full window, and skipped silence is progress too.
+        _emit_heartbeat(end // _SAMPLE_RATE, max(1, len(samples) // _SAMPLE_RATE))
+        if not usable:
+            lost_samples += end - start
+            continue
+        recognized += 1
+        if tokens and merged_tokens and not str(tokens[0]).startswith(" "):
+            tokens[0] = f" {tokens[0]}"
+        merged_tokens.extend(tokens)
+        merged_timestamps.extend(
+            (_ts_start(ts) + offset_s, _ts_end(ts) + offset_s) for ts in timestamps
+        )
+
+    if spans and recognized == 0:
+        raise RuntimeError(f"all {len(spans)} ONNX transcription spans failed") from last_error
+
+    total_seconds = len(samples) / _SAMPLE_RATE
+    covered_seconds = (len(samples) - lost_samples) / _SAMPLE_RATE
+    if lost_samples:
+        logger.warning(
+            "ONNX transcription lost %.0fs of speech (%d of %d spans usable)",
+            lost_samples / _SAMPLE_RATE, recognized, len(spans),
+        )
+    logger.info(
+        "Decoded %.0fs of speech in %d spans (%.0fs of audio)",
+        total_samples / _SAMPLE_RATE, len(spans), total_seconds,
+    )
+    return _SimpleResult(
+        text="".join(str(tok) for tok in merged_tokens).strip(),
+        tokens=merged_tokens,
+        timestamps=merged_timestamps,
+        windows_attempted=len(spans),
+        windows_recognized=recognized,
+        total_seconds=total_seconds,
+        covered_seconds=covered_seconds,
+    )
 
 
 def _transcribe_windows(ts_model: Any, samples) -> _SimpleResult:

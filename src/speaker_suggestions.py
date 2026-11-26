@@ -44,6 +44,7 @@ import math
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -62,7 +63,13 @@ logger = logging.getLogger(__name__)
 # (best_score > 0.75 similarity ~= distance < 0.25) but kept conservative at
 # parity with the existing self-match threshold pending real-data re-tuning
 # via the Phase 3 backfill CLI report — see the plan doc's Phase 3 section.
-SUGGESTION_DISTANCE_THRESHOLD = 0.40
+#
+# The sherpa-onnx sidecar (Linux/Windows) produces embeddings on a tighter
+# scale than the Swift one: on real recordings different people sit at
+# 0.28-0.54 and the same person across meetings at 0.04-0.19, so 0.40 there
+# offers every known person for every voice.
+SHERPA_DISTANCE_THRESHOLD = 0.25
+SUGGESTION_DISTANCE_THRESHOLD = 0.40 if sys.platform == "darwin" else SHERPA_DISTANCE_THRESHOLD
 # The best candidate must beat the runner-up by at least this much distance,
 # or the suggestion is withheld even if the best candidate clears the
 # threshold on its own — same rationale as VOICEPRINT_CONFIDENCE_MARGIN.
@@ -78,7 +85,7 @@ SUGGESTION_CONFIDENCE_MARGIN = 0.10
 # some negative sat at 0.39 — which punished exactly the people confirmed
 # most often, since every confirmation of a colleague adds negatives that
 # sit at ordinary cross-speaker distances (~0.4) from everyone else.
-HARD_NEGATIVE_DISTANCE_THRESHOLD = 0.40
+HARD_NEGATIVE_DISTANCE_THRESHOLD = SUGGESTION_DISTANCE_THRESHOLD
 # Stability gate: a cluster must clear all three before a suggestion is
 # trusted enough to auto-fill as "confirmed" rather than a soft "might be X".
 SUGGESTION_MIN_DURATION_SECONDS = 20.0

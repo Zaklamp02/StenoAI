@@ -127,6 +127,9 @@ else:
         'onnx_asr',
         'onnxruntime',
         'onnxruntime.capi',
+        # sherpa-onnx speaker diarization (src/sherpa_diarize.py), the
+        # Windows/Linux stand-in for the macOS steno-diarize sidecar.
+        'sherpa_onnx',
     ]
 
 # Collect submodules — parakeet-mlx + mlx + huggingface_hub all have
@@ -143,6 +146,7 @@ if _IS_DARWIN:
 else:
     hiddenimports += collect_submodules('onnx_asr')
     hiddenimports += collect_submodules('onnxruntime')
+    hiddenimports += collect_submodules('sherpa_onnx')
 
 # Collect data files
 datas = []
@@ -208,7 +212,9 @@ _DYLIB_PKGS = ['pywhispercpp']
 if _IS_DARWIN:
     _DYLIB_PKGS += ['mlx', 'parakeet_mlx']
 else:
-    _DYLIB_PKGS += ['onnxruntime']
+    # sherpa_onnx ships its own libonnxruntime.so next to its extension
+    # module (found via $ORIGIN), so it must stay in sherpa_onnx/lib.
+    _DYLIB_PKGS += ['onnxruntime', 'sherpa_onnx']
 for pkg in _DYLIB_PKGS:
     try:
         binaries += collect_dynamic_libs(pkg)

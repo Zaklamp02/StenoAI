@@ -85,6 +85,9 @@ function getDefaultSinkName() {
 function startLoopbackCapture({ sinkName, sampleRate = 48000, channels = 2, onError } = {}) {
   const target = sinkName || getDefaultSinkName();
   const proc = spawn('pw-record', [
+    // Without this a capture stream aimed at a sink is linked to the default
+    // SOURCE (the mic) by WirePlumber instead of the sink's monitor ports.
+    '-P', '{ stream.capture.sink=true }',
     `--target=${target}`,
     '--format=s16',
     `--rate=${sampleRate}`,

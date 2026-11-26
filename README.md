@@ -43,7 +43,7 @@ The most recent features inherited from the StenoAI v0.8.0 starting point. Chang
 
 - **Privacy-first**: local AI processes your recordings, transcripts, and summaries on your device. External AI providers are optional.
 - **Live speaker labels** — Real-time on-screen text as you speak via Parakeet TDT v3 on Apple Silicon (MLX). Granola-style chat-bubble view with `[You]` vs `[Others]` attribution live during the recording.
-- **Individual speakers (macOS)** — Once the recording stops, StenographAI separates the voices sharing each channel, so the saved transcript reads `Speaker 2` / `Speaker 3` rather than one merged `[Others]`. Name a speaker once and StenographAI can suggest them in later meetings — that part is off by default, and the voice profiles never leave your Mac.
+- **Individual speakers** — Once the recording stops, StenographAI separates the voices sharing each channel, so the saved transcript reads `Speaker 2` / `Speaker 3` rather than one merged `[Others]`. Name a speaker once and StenographAI can suggest them in later meetings — that part is off by default, and the voice profiles never leave your computer.
 - **Auto start/stop meetings** — StenographAI notices when a meeting starts and offers to take notes, then offers to summarise when it ends. Granola-style frictionless capture.
 - **System audio capture** — Record both sides of virtual meetings. Native Core Audio Tap on macOS 14.4+, Windows loopback capture, and PipeWire capture on Linux, with selectable microphone input.
 - **Recording that coexists** — A compact transcription pill docks beside the app instead of taking over; Stop lands you on the note instantly and you can resume recording into an existing note (it appends and re-generates on demand).

@@ -176,7 +176,7 @@ export function Setup() {
   // unless the user has already flipped the switch themselves, since the
   // status check can take a few seconds to answer.
   const speakerStatus = useSpeakerModelsStatus();
-  const speakersInstalled = isMac && speakerStatus.data?.success === true && speakerStatus.data.ready;
+  const speakersInstalled = speakerStatus.data?.success === true && speakerStatus.data.ready;
   const speakerSwitchTouched = React.useRef(false);
   React.useEffect(() => {
     if (speakersInstalled && !speakerSwitchTouched.current) setIncludeSpeakers(true);
@@ -392,7 +392,7 @@ export function Setup() {
         }
       }
 
-      if (isMac && includeSpeakers && snapshot.speakers !== 'done') {
+      if (includeSpeakers && snapshot.speakers !== 'done') {
         setStatus('speakers', 'running', 'Checking speaker models...');
         try {
           const status = await ipc().setup.speakerModelsStatus();
@@ -533,7 +533,7 @@ export function Setup() {
     },
   ];
 
-  if (isMac && includeSpeakers) {
+  if (includeSpeakers) {
     steps.splice(2, 0, {
       id: 'speakers',
       title: t('settings.ai.speakers.label'),
@@ -795,29 +795,27 @@ export function Setup() {
           </div>
         )}
 
-        {isMac && (
-          <div
-            className="mt-3 flex items-start gap-4 rounded-md border border-border p-4"
-            data-setup-speakers-opt-in
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-foreground">
-                {t('setup.speakers.optInTitle')}
-              </div>
-              <Muted className="mt-0.5">{t('setup.speakers.optInDescription')}</Muted>
+        <div
+          className="mt-3 flex items-start gap-4 rounded-md border border-border p-4"
+          data-setup-speakers-opt-in
+        >
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium text-foreground">
+              {t('setup.speakers.optInTitle')}
             </div>
-            <Switch
-              checked={includeSpeakers}
-              onCheckedChange={(on) => {
-                speakerSwitchTouched.current = true;
-                setIncludeSpeakers(on);
-              }}
-              // Fixed once setup has run: Settings -> AI handles it from there.
-              disabled={running || done || statuses.speakers === 'done'}
-              aria-label={t('setup.speakers.optInTitle')}
-            />
+            <Muted className="mt-0.5">{t('setup.speakers.optInDescription')}</Muted>
           </div>
-        )}
+          <Switch
+            checked={includeSpeakers}
+            onCheckedChange={(on) => {
+              speakerSwitchTouched.current = true;
+              setIncludeSpeakers(on);
+            }}
+            // Fixed once setup has run: Settings -> AI handles it from there.
+            disabled={running || done || statuses.speakers === 'done'}
+            aria-label={t('setup.speakers.optInTitle')}
+          />
+        </div>
 
         <div className="mt-3 flex items-start gap-4 rounded-md border border-border p-4">
           <div className="min-w-0 flex-1">
