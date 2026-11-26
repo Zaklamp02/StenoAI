@@ -94,8 +94,10 @@ function pickLatestRelease(releases) {
   return latest;
 }
 
-// The check-for-updates result for a GitHub releases list.
-function summarizeReleases(releases, currentVersion, arch) {
+// The check-for-updates result for a GitHub releases list. Releases carry
+// macOS DMGs only, so other platforms get no download link and the notice
+// opens the release page instead.
+function summarizeReleases(releases, currentVersion, arch, platform = 'darwin') {
   if (!Array.isArray(releases)) throw new Error('Unexpected releases response');
   const latest = pickLatestRelease(releases);
   if (!latest) {
@@ -115,7 +117,7 @@ function summarizeReleases(releases, currentVersion, arch) {
     latestVersion,
     releaseUrl: latest.html_url,
     releaseName: latest.name || `Version ${latestVersion}`,
-    downloadUrl: pickDmgAsset(latest.assets, arch),
+    downloadUrl: platform === 'darwin' ? pickDmgAsset(latest.assets, arch) : null,
     // In-app updates read full releases only, so a pre-release is always
     // announced for download.
     prerelease: Boolean(latest.prerelease),

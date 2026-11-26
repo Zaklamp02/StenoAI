@@ -11318,7 +11318,8 @@ async function checkForUpdates() {
             const summary = releaseCheck.summarizeReleases(
               JSON.parse(data),
               app.getVersion(),
-              process.arch
+              process.arch,
+              process.platform
             );
             console.log(`Current version: ${summary.currentVersion}, Latest version: ${summary.latestVersion}`);
             resolve({ success: true, ...summary });
